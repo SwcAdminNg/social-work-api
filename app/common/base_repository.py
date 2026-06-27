@@ -54,6 +54,10 @@ class BaseRepository(Generic[ModelType]):
 
     async def update(self, entity: ModelType) -> ModelType:
         await self.session.flush()
+        # updated_at is generated server-side (onupdate=func.now()); refresh so the
+        # in-memory entity reflects the real value instead of triggering a lazy
+        # (sync) reload the next time it's accessed.
+        await self.session.refresh(entity)
         return entity
 
     async def soft_delete(self, entity: ModelType, actor_id: uuid.UUID | None = None) -> ModelType:

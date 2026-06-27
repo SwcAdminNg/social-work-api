@@ -14,7 +14,9 @@
       "Bash(netstat -ano)",
       "Bash(powershell -Command \"Stop-Process -Id 18688 -Force\")",
       "Bash(powershell -Command \"Get-Process -Id 18688 -ErrorAction SilentlyContinue\")",
-      "Bash(./venv/Scripts/python.exe -c ' *)"
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\Activate.ps1)",
+      "PowerShell(python \"C:\\\\Users\\\\nyqui\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-nyqui-Work-social-workers-api\\\\d88cce88-979b-4d57-906a-479d0cdabd4e\\\\scratchpad\\\\test_reset_flow.py\")"
     ]
   }
 }

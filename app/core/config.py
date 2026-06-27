@@ -17,6 +17,25 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_db: str
 
+    # JWT / tokens
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 30
+    password_reset_token_expire_minutes: int = 30
+
+    # Frontend
+    frontend_reset_password_url: str = "http://localhost:3000/reset-password"
+
+    # SMTP (Gmail)
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str
+    smtp_password: str
+    smtp_from_email: str
+    smtp_from_name: str = "Social Workers"
+    smtp_use_tls: bool = True
+
     @property
     def database_url(self) -> str:
         return (

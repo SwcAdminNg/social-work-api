@@ -1,10 +1,12 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.common.responses import ApiErrorResponse
 from app.core.config import settings
+from app.modules.auth.router import router as auth_router
 from app.modules.health.router import router as health_router
+from app.modules.user.router import router as user_router
 
 app = FastAPI(
     title=settings.app_name,
@@ -27,4 +29,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ApiErrorResponse(message=str(exc.detail)).model_dump(),
+        headers=exc.headers,
+    )
+
+
 app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(user_router)

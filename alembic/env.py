@@ -9,7 +9,9 @@ from app.core.database import Base
 import app.models  # noqa: F401  ensures every entity is registered on Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.sync_database_url)
+# configparser treats "%" as an interpolation char, so escape it before storing
+# (a URL-encoded password like "%40" would otherwise raise a parsing error).
+config.set_main_option("sqlalchemy.url", settings.sync_database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
