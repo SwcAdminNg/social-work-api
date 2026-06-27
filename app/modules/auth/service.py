@@ -80,6 +80,7 @@ class AuthService:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been deactivated")
 
         user.last_login_at = datetime.now(timezone.utc)
+        await self.users.update(user)
         await self.session.commit()
 
         tokens = await self._issue_token_pair(user)
