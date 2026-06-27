@@ -8,7 +8,7 @@ from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_admin_user
-from app.modules.contact_us.dto import ContactUsCreateDTO, ContactUsReadDTO
+from app.modules.contact_us.dto import ContactUsCreateDTO, ContactUsFilterParams, ContactUsReadDTO
 from app.modules.contact_us.service import ContactUsService
 from app.modules.user.entity import User
 
@@ -38,10 +38,11 @@ async def submit_contact_us(
 )
 async def list_contact_us(
     pagination: PaginationParams = Depends(),
+    filters: ContactUsFilterParams = Depends(),
     current_admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[ContactUsReadDTO]:
-    items, total = await ContactUsService(db).list(pagination)
+    items, total = await ContactUsService(db).list(pagination, filters)
     return PaginatedResponse.create(
         items=[ContactUsReadDTO.model_validate(item) for item in items],
         total_items=total,

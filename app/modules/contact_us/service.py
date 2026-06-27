@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
-from app.modules.contact_us.dto import ContactUsCreateDTO
+from app.modules.contact_us.dto import ContactUsCreateDTO, ContactUsFilterParams
 from app.modules.contact_us.entity import ContactUsMessage
 from app.modules.contact_us.repository import ContactUsRepository
 
@@ -21,8 +21,10 @@ class ContactUsService:
         await self.session.commit()
         return message
 
-    async def list(self, pagination: PaginationParams) -> tuple[Sequence[ContactUsMessage], int]:
-        return await self.repository.list(pagination)
+    async def list(
+        self, pagination: PaginationParams, filters: ContactUsFilterParams | None = None
+    ) -> tuple[Sequence[ContactUsMessage], int]:
+        return await self.repository.list(pagination, filters)
 
     async def get_by_id(self, id: uuid.UUID) -> ContactUsMessage:
         message = await self.repository.get_by_id(id)

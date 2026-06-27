@@ -28,7 +28,12 @@
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m alembic revision --autogenerate -m \"create contact us messages table\")",
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m alembic upgrade head)",
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -c \"from app.main import app; print\\([r.path for r in app.routes if 'contact' in r.path]\\)\")",
-      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m uvicorn app.main:app --port 8123)"
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m uvicorn app.main:app --port 8123)",
+      "Bash(python -m alembic current)",
+      "Bash(alembic current *)",
+      "Bash(./venv/Scripts/python.exe -m alembic current)",
+      "Bash(./venv/Scripts/python.exe -m alembic revision -m \"add platform to contact us messages\")",
+      "Bash(./venv/Scripts/python.exe -c \"from app.main import app; print\\('ok'\\)\")"
     ]
   }
 }
