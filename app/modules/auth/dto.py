@@ -4,7 +4,7 @@ from pydantic import EmailStr, Field, model_validator
 
 from app.common.base_dto import BaseDTO, CreateDTO
 from app.modules.user.dto import UserReadDTO
-from app.modules.user.entity import PlatformEnum
+from app.modules.user.entity import PlatformEnum, UserTypeEnum
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9_.]{3,30}$")
 
@@ -16,6 +16,7 @@ class SignUpRequestDTO(CreateDTO):
     email: EmailStr
     phone_number: str | None = Field(default=None, max_length=20)
     platform: PlatformEnum
+    user_type: UserTypeEnum = UserTypeEnum.USER
     password: str = Field(min_length=8, max_length=128)
     confirm_password: str = Field(min_length=8, max_length=128)
 

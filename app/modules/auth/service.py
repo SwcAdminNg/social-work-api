@@ -56,6 +56,7 @@ class AuthService:
             username=payload.username,
             phone_number=payload.phone_number,
             platform=payload.platform,
+            user_type=payload.user_type,
             hashed_password=hash_password(payload.password),
         )
 
