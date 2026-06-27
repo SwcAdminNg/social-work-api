@@ -1,6 +1,9 @@
+from typing import Sequence
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.user.dto import UserUpdateDTO
+from app.common.pagination import PaginationParams
+from app.modules.user.dto import UserFilterParams, UserUpdateDTO
 from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
 
@@ -18,3 +21,8 @@ class UserService:
         await self.repository.update(user)
         await self.session.commit()
         return user
+
+    async def list(
+        self, pagination: PaginationParams, filters: UserFilterParams | None = None
+    ) -> tuple[Sequence[User], int]:
+        return await self.repository.list(pagination, filters)

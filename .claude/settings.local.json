@@ -33,7 +33,8 @@
       "Bash(alembic current *)",
       "Bash(./venv/Scripts/python.exe -m alembic current)",
       "Bash(./venv/Scripts/python.exe -m alembic revision -m \"add platform to contact us messages\")",
-      "Bash(./venv/Scripts/python.exe -c \"from app.main import app; print\\('ok'\\)\")"
+      "Bash(./venv/Scripts/python.exe -c \"from app.main import app; print\\('ok'\\)\")",
+      "Bash(./venv/Scripts/python.exe -m alembic revision -m \"add last login at to users\")"
     ]
   }
 }

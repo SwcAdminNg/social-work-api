@@ -79,6 +79,9 @@ class AuthService:
         if not user.is_active:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been deactivated")
 
+        user.last_login_at = datetime.now(timezone.utc)
+        await self.session.commit()
+
         tokens = await self._issue_token_pair(user)
         return AuthSessionDTO(user=UserReadDTO.model_validate(user), tokens=tokens)
 
