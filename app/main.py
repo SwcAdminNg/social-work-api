@@ -15,6 +15,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    swagger_ui_parameters={
+        "defaultModelsExpandDepth": -1,  # hide the "Schemas" section
+        "docExpansion": "none",  # collapse all tags/endpoints by default
+    },
 )
 
 
