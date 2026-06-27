@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"c:\\\\Users\\\\nyqui\\\\Work\\\\social-workers\\\\api\\\\venv\\\\Scripts\\\\python.exe\" --version)",
+      "Bash(./venv/Scripts/python.exe -m pip install -q --upgrade pip)",
+      "Bash(./venv/Scripts/python.exe -m pip install -q -r requirements.txt)",
+      "Bash(./venv/Scripts/python.exe -c \"from app.main import app; print\\('app loaded OK'\\); print\\([r.path for r in app.routes]\\)\")",
+      "Bash(docker --version)",
+      "Bash(./venv/Scripts/python.exe -m uvicorn app.main:app --port 8000)",
+      "Bash(curl -s http://127.0.0.1:8000/health)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8000/docs)",
+      "Bash(kill %1)",
+      "Read(//tmp/**)",
+      "Bash(netstat -ano)",
+      "Bash(powershell -Command \"Stop-Process -Id 18688 -Force\")",
+      "Bash(powershell -Command \"Get-Process -Id 18688 -ErrorAction SilentlyContinue\")",
+      "Bash(./venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}
