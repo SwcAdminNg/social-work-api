@@ -197,6 +197,21 @@ async def create_section(
 
 
 @router.patch(
+    "/{course_id}/sections/reorder",
+    response_model=ApiResponse[None],
+    summary="Reorder sections within a course (admin or owning instructor)",
+)
+async def reorder_sections(
+    course_id: uuid.UUID,
+    payload: CourseSectionReorderDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseContentService(db).reorder_sections(course_id, payload, current_user)
+    return ApiResponse(message="Sections reordered successfully")
+
+
+@router.patch(
     "/{course_id}/sections/{section_id}",
     response_model=ApiResponse[CourseSectionManageReadDTO],
     summary="Update a section (admin or owning instructor)",
@@ -216,21 +231,6 @@ async def update_section(
             title=section.title, order_index=section.order_index, items=[],
         ),
     )
-
-
-@router.patch(
-    "/{course_id}/sections/reorder",
-    response_model=ApiResponse[None],
-    summary="Reorder sections within a course (admin or owning instructor)",
-)
-async def reorder_sections(
-    course_id: uuid.UUID,
-    payload: CourseSectionReorderDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[None]:
-    await CourseContentService(db).reorder_sections(course_id, payload, current_user)
-    return ApiResponse(message="Sections reordered successfully")
 
 
 @router.delete(
