@@ -35,6 +35,8 @@ from app.modules.course.dto import (
     CourseFilterParams,
     CourseManageFilterParams,
     CourseReadDTO,
+    CourseThumbnailUploadRequest,
+    CourseThumbnailUploadResponse,
     CourseUpdateDTO,
 )
 from app.modules.course.service import CourseService
@@ -61,6 +63,21 @@ async def create_course(
 ) -> ApiResponse[CourseReadDTO]:
     course = await CourseService(db).create(payload, current_user)
     return ApiResponse(message="Course created successfully", data=CourseReadDTO.model_validate(course))
+
+
+@router.post(
+    "/manage/{course_id}/thumbnail-upload-url",
+    response_model=ApiResponse[CourseThumbnailUploadResponse],
+    summary="Get a pre-signed URL to upload a course thumbnail (admin or owning instructor)",
+)
+async def get_thumbnail_upload_url(
+    course_id: uuid.UUID,
+    payload: CourseThumbnailUploadRequest,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CourseThumbnailUploadResponse]:
+    data = await CourseService(db).generate_thumbnail_upload_url(course_id, payload, current_user)
+    return ApiResponse(message="Thumbnail upload URL generated successfully", data=data)
 
 
 @router.get(

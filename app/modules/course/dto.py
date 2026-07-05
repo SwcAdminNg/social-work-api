@@ -82,3 +82,13 @@ class CourseManageFilterParams(CourseFilterParams):
     ) -> None:
         super().__init__(category=category, level=level, is_free=is_free, search=search)
         self.is_published = is_published
+
+
+class CourseThumbnailUploadRequest(CreateDTO):
+    file_name: str
+    content_type: str
+
+
+class CourseThumbnailUploadResponse(CreateDTO):
+    upload_url: str
+    thumbnail_url: str

@@ -1,5 +1,6 @@
 import uuid
 from functools import lru_cache
+from urllib.parse import quote
 
 import boto3
 
@@ -23,6 +24,9 @@ class R2Client:
     def build_document_key(self, course_id: uuid.UUID, file_name: str) -> str:
         return f"courses/{course_id}/documents/{uuid.uuid4()}-{file_name}"
 
+    def build_thumbnail_key(self, course_id: uuid.UUID, file_name: str) -> str:
+        return f"courses/{course_id}/thumbnails/{uuid.uuid4()}-{file_name}"
+
     def generate_upload_url(self, key: str, content_type: str | None = None) -> str:
         params = {"Bucket": settings.r2_bucket_name, "Key": key}
         if content_type:
@@ -37,6 +41,9 @@ class R2Client:
             Params={"Bucket": settings.r2_bucket_name, "Key": key},
             ExpiresIn=settings.presigned_url_expire_seconds,
         )
+
+    def get_public_url(self, key: str) -> str:
+        return f"{settings.r2_public_url.rstrip('/')}/{quote(key, safe=':/')}"
 
 
 @lru_cache

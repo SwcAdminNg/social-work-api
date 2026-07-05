@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_bucket_name: str = ""
+    r2_public_url: str = ""
     presigned_url_expire_seconds: int = 600
 
     # Bunny.net Stream (course videos)

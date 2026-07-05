@@ -7,10 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.common.slug import ensure_unique_slug, slugify
+from app.core.storage import get_r2_client
 from app.modules.course.dto import (
     CourseCreateDTO,
     CourseFilterParams,
     CourseManageFilterParams,
+    CourseThumbnailUploadRequest,
+    CourseThumbnailUploadResponse,
     CourseUpdateDTO,
 )
 from app.modules.course.entity import Course, CourseItem, CourseSection
@@ -90,3 +93,18 @@ class CourseService:
         course = await self.get_for_manage(id, current_user)
         await self.repository.soft_delete(course, current_user.id)
         await self.session.commit()
+
+    async def generate_thumbnail_upload_url(
+        self, course_id: uuid.UUID, payload: CourseThumbnailUploadRequest, current_user: User
+    ) -> CourseThumbnailUploadResponse:
+        course = await self.get_for_manage(course_id, current_user)
+        r2_client = get_r2_client()
+        thumbnail_key = r2_client.build_thumbnail_key(course.id, payload.file_name)
+        upload_url = r2_client.generate_upload_url(thumbnail_key, payload.content_type)
+        
+        public_url = r2_client.get_public_url(thumbnail_key)
+        course.thumbnail_url = public_url
+        await self.repository.update(course)
+        await self.session.commit()
+        
+        return CourseThumbnailUploadResponse(upload_url=upload_url, thumbnail_url=public_url)
