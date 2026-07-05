@@ -43,6 +43,20 @@ async def update_my_profile(
     return ApiResponse(message="Profile updated successfully", data=UserReadDTO.model_validate(updated_user))
 
 
+@router.get("/{user_id}", response_model=ApiResponse[UserReadDTO], summary="Get user details by ID (admin only)")
+async def get_user(
+    user_id: str,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[UserReadDTO]:
+    service = UserService(db)
+    user = await service.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        
+    return ApiResponse(message="User details retrieved successfully", data=UserReadDTO.model_validate(user))
+
+
 @router.post("/{user_id}/suspend", response_model=ApiResponse[UserReadDTO], summary="Suspend a user (admin only)")
 async def suspend_user(
     user_id: str,
