@@ -18,6 +18,10 @@ class PaymentRepository:
         stmt = select(SubscriptionPlan).where(SubscriptionPlan.is_active.is_(True))
         return (await self.session.execute(stmt)).scalars().all()
 
+    async def list_all_plans(self) -> Sequence[SubscriptionPlan]:
+        stmt = select(SubscriptionPlan)
+        return (await self.session.execute(stmt)).scalars().all()
+
     async def get_transaction_by_reference(self, reference: str) -> Transaction | None:
         stmt = select(Transaction).where(Transaction.reference == reference)
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -31,26 +35,37 @@ class PaymentRepository:
 
     async def list_transactions(
         self, pagination
-    ) -> tuple[Sequence[Transaction], int]:
+    ) -> tuple[Sequence[tuple[Transaction, "User"]], int]:
         from sqlalchemy import func
-        stmt = select(Transaction).order_by(Transaction.created_at.desc())
+        from app.modules.user.entity import User
+        stmt = (
+            select(Transaction, User)
+            .join(User, Transaction.user_id == User.id)
+            .order_by(Transaction.created_at.desc())
+        )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
-        items = (await self.session.execute(stmt)).scalars().all()
+        items = (await self.session.execute(stmt)).all()
         return items, total
 
     async def list_user_transactions(
         self, user_id: uuid.UUID, pagination
-    ) -> tuple[Sequence[Transaction], int]:
+    ) -> tuple[Sequence[tuple[Transaction, "User"]], int]:
         from sqlalchemy import func
-        stmt = select(Transaction).where(Transaction.user_id == user_id).order_by(Transaction.created_at.desc())
+        from app.modules.user.entity import User
+        stmt = (
+            select(Transaction, User)
+            .join(User, Transaction.user_id == User.id)
+            .where(Transaction.user_id == user_id)
+            .order_by(Transaction.created_at.desc())
+        )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
-        items = (await self.session.execute(stmt)).scalars().all()
+        items = (await self.session.execute(stmt)).all()
         return items, total
 
     async def list_course_transactions_with_users(

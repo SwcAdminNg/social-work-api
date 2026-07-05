@@ -31,8 +31,17 @@ async def get_user_transactions(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[TransactionReadDTO]:
     items, total = await PaymentRepository(db).list_user_transactions(user_id, pagination)
+    
+    result_items = []
+    for transaction, user in items:
+        dto = TransactionReadDTO(
+            **TransactionReadDTO.model_validate(transaction, from_attributes=True).model_dump(exclude={'user'}),
+            user=UserReadDTO.model_validate(user, from_attributes=True)
+        )
+        result_items.append(dto)
+        
     return PaginatedResponse.create(
-        items=[TransactionReadDTO.model_validate(item, from_attributes=True) for item in items],
+        items=result_items,
         total_items=total,
         params=pagination,
     )

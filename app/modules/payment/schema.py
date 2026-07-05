@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.modules.payment.entity import PaymentGatewayEnum, TransactionStatusEnum, TransactionTypeEnum
+from app.modules.user.dto import UserReadDTO
 
 
 class InitializePaymentRequest(BaseModel):
@@ -47,6 +48,7 @@ class SubscriptionPlanResponse(BaseModel):
     duration_days: int
     price: float
     is_free_trial: bool
+    is_active: bool
 
 
 class TransactionReadDTO(BaseModel):
@@ -60,6 +62,7 @@ class TransactionReadDTO(BaseModel):
     related_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    user: UserReadDTO | None = None
 
 
 class SubscriptionPlanCreateDTO(BaseModel):

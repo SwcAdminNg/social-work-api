@@ -123,6 +123,20 @@ async def list_plans(
     return ApiResponse(message="Plans retrieved", data=data)
 
 
+@router.get(
+    "/plans/all",
+    response_model=ApiResponse[list[SubscriptionPlanResponse]],
+    summary="List all subscription plans including inactive (Admin only)",
+)
+async def list_all_plans(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[SubscriptionPlanResponse]]:
+    plans = await PaymentRepository(db).list_all_plans()
+    data = [SubscriptionPlanResponse.model_validate(plan, from_attributes=True) for plan in plans]
+    return ApiResponse(message="All plans retrieved", data=data)
+
+
 @router.post(
     "/plans",
     response_model=ApiResponse[SubscriptionPlanResponse],
@@ -178,8 +192,18 @@ async def list_all_transactions(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[TransactionReadDTO]:
     items, total = await PaymentRepository(db).list_transactions(pagination)
+    
+    result_items = []
+    for transaction, user in items:
+        from app.modules.user.dto import UserReadDTO
+        dto = TransactionReadDTO(
+            **TransactionReadDTO.model_validate(transaction, from_attributes=True).model_dump(exclude={'user'}),
+            user=UserReadDTO.model_validate(user, from_attributes=True)
+        )
+        result_items.append(dto)
+        
     return PaginatedResponse.create(
-        items=[TransactionReadDTO.model_validate(item, from_attributes=True) for item in items],
+        items=result_items,
         total_items=total,
         params=pagination,
     )
