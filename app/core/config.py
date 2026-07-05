@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     bunny_stream_library_id: str = ""
     bunny_stream_api_key: str = ""
     bunny_stream_cdn_hostname: str = ""
+    bunny_stream_token_auth_key: str = ""
     bunny_tus_upload_expire_seconds: int = 3600
     bunny_webhook_secret: str = ""
 

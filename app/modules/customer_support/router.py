@@ -104,7 +104,7 @@ async def get_course_transactions(
                 card_type = auth_data.get("card_type")
         
         dto = CourseTransactionReadDTO(
-            **TransactionReadDTO.model_validate(transaction, from_attributes=True).model_dump(),
+            **TransactionReadDTO.model_validate(transaction, from_attributes=True).model_dump(exclude={'user'}),
             user=UserReadDTO.model_validate(user, from_attributes=True),
             card_type=card_type
         )

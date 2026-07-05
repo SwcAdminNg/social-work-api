@@ -458,7 +458,7 @@ class CourseContentService:
         video_dto = None
         if video is not None:
             video_cls = CourseVideoManageDTO if manage else CourseVideoPublicDTO
-            playback_url = video.playback_url if video.status == VideoStatusEnum.READY else None
+            playback_url = self.bunny.build_playback_url(video.bunny_video_guid) if video.status == VideoStatusEnum.READY else None
             extra = {"bunny_video_guid": video.bunny_video_guid} if manage else {}
             video_dto = video_cls(
                 status=video.status,

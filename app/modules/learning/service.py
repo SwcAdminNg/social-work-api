@@ -53,7 +53,7 @@ class LearningService:
             await self.repo.update_user_course_progress(progress, percent, is_completed)
 
     async def enroll_course(self, user_id: uuid.UUID, course_id: uuid.UUID) -> dict:
-        course = await self.course_repo.get(course_id)
+        course = await self.course_repo.get_by_id(course_id)
         if not course:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
 
@@ -150,11 +150,15 @@ class LearningService:
         if item.item_type == CourseItemTypeEnum.VIDEO:
             video = await self.content_repo.get_video_by_item(item_id)
             if video:
-                dto.video_url = video.hls_url or video.mp4_url
+                from app.core.bunny import get_bunny_client
+                bunny = get_bunny_client()
+                dto.video_url = bunny.build_playback_url(video.bunny_video_guid)
         elif item.item_type == CourseItemTypeEnum.DOCUMENT:
             doc = await self.content_repo.get_document_by_item(item_id)
             if doc:
-                dto.document_url = f"/api/v1/courses/items/{item_id}/download" # Assume this endpoint exists
+                from app.core.storage import get_r2_client
+                r2 = get_r2_client()
+                dto.document_url = r2.generate_download_url(doc.storage_key)
         elif item.item_type == CourseItemTypeEnum.QUIZ:
             quiz = await self.content_repo.get_quiz_by_item(item_id)
             if quiz:

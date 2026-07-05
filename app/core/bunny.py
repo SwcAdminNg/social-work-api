@@ -51,7 +51,14 @@ class BunnyStreamClient:
         }
 
     def build_playback_url(self, video_guid: str) -> str:
-        return f"https://{settings.bunny_stream_cdn_hostname}/{video_guid}/playlist.m3u8"
+        url = f"https://{settings.bunny_stream_cdn_hostname}/{video_guid}/playlist.m3u8"
+        if settings.bunny_stream_token_auth_key:
+            expire = int(time.time()) + 3600  # 1 hour expiration
+            signature = hashlib.sha256(
+                f"{settings.bunny_stream_token_auth_key}{video_guid}{expire}".encode()
+            ).hexdigest()
+            url += f"?token={signature}&expires={expire}"
+        return url
 
     def build_thumbnail_url(self, video_guid: str) -> str:
         return f"https://{settings.bunny_stream_cdn_hostname}/{video_guid}/thumbnail.jpg"
