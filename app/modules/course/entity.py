@@ -60,6 +60,7 @@ class Course(BaseEntity):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_exclusive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
 
 class CourseSection(BaseEntity):

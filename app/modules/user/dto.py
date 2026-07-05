@@ -25,6 +25,7 @@ class UserReadDTO(AuditDTO):
 class UserUpdateDTO(UpdateDTO):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    username: str | None = Field(default=None, min_length=3, max_length=50)
     phone_number: str | None = Field(default=None, max_length=20)
     gender: GenderEnum | None = None
     address: str | None = Field(default=None, max_length=500)

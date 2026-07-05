@@ -11,4 +11,6 @@ from app.modules.course.content_entity import (  # noqa: F401
     CourseVideo,
 )
 from app.modules.course.entity import Course, CourseItem, CourseSection  # noqa: F401
+from app.modules.course.access_entity import UserCourseAccess  # noqa: F401
+from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, UserSubscription  # noqa: F401
 from app.modules.user.entity import User  # noqa: F401

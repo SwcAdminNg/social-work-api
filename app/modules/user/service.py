@@ -1,5 +1,6 @@
 from typing import Sequence
 
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
@@ -14,6 +15,13 @@ class UserService:
         self.repository = UserRepository(session)
 
     async def update_profile(self, user: User, payload: UserUpdateDTO) -> User:
+        if payload.username and payload.username.lower() != user.username.lower():
+            if await self.repository.username_exists(payload.username):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, 
+                    detail="Username already taken"
+                )
+                
         updates = payload.model_dump(exclude_unset=True)
         for field, value in updates.items():
             setattr(user, field, value)

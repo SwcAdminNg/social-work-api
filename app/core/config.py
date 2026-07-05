@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     bunny_tus_upload_expire_seconds: int = 3600
     bunny_webhook_secret: str = ""
 
+    # Paystack
+    paystack_secret_key: str = ""
+    paystack_public_key: str = ""
+
+    # Upstash QStash
+    qstash_url: str = "https://qstash-eu-central-1.upstash.io"
+    qstash_token: str = ""
+    qstash_current_signing_key: str = ""
+    qstash_next_signing_key: str = ""
+
     @property
     def database_url(self) -> str:
         return (

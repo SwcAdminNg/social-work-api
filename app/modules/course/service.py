@@ -114,3 +114,31 @@ class CourseService:
         await self.session.commit()
         
         return CourseThumbnailUploadResponse(upload_url=upload_url, thumbnail_url=public_url)
+
+    async def check_course_access(self, course_id: uuid.UUID, user: User) -> bool:
+        from app.modules.course.access_entity import UserCourseAccess
+        from app.modules.payment.entity import UserSubscription
+        from datetime import datetime, timezone
+
+        # 1. Direct access check
+        direct_access_stmt = select(func.count()).select_from(UserCourseAccess).where(
+            UserCourseAccess.user_id == user.id, UserCourseAccess.course_id == course_id
+        )
+        direct_access = (await self.session.execute(direct_access_stmt)).scalar_one()
+        if direct_access > 0:
+            return True
+            
+        course = await self.repository.get_by_id(course_id)
+        if not course or course.is_exclusive:
+            return False
+
+        # 2. Subscription access check
+        now = datetime.now(timezone.utc)
+        sub_stmt = select(func.count()).select_from(UserSubscription).where(
+            UserSubscription.user_id == user.id,
+            UserSubscription.is_active.is_(True),
+            UserSubscription.start_date <= now,
+            UserSubscription.end_date >= now
+        )
+        sub_count = (await self.session.execute(sub_stmt)).scalar_one()
+        return sub_count > 0
