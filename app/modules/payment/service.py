@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.email import email_service
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum, UserCourseAccess
 from app.modules.course.repository import CourseRepository
 from app.modules.payment.entity import (
@@ -249,3 +250,116 @@ class PaymentService:
         )
         self.session.add(card)
         return card
+
+    async def process_daily_subscriptions(self) -> dict:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 1. Notify users whose subscriptions are expiring in 2 days
+        expiring_in_2_days = await self.repo.get_subscriptions_expiring_in_days(2)
+        for subscription, plan, user in expiring_in_2_days:
+            try:
+                await email_service.send_subscription_expiring_soon_email(
+                    to_email=user.email,
+                    first_name=user.first_name,
+                    plan_name=plan.name,
+                    updated_price=float(plan.price),
+                    expiry_date=subscription.end_date.strftime("%Y-%m-%d"),
+                )
+            except Exception as e:
+                logger.error(f"Failed to send expiring email to {user.email}: {e}")
+
+        # 2. Process renewals for subscriptions expiring today or past due
+        expiring_today = await self.repo.get_subscriptions_expiring_today_or_past_due()
+        renewed_count = 0
+        failed_count = 0
+        expired_count = 0
+
+        for subscription, plan, user in expiring_today:
+            # Check for saved card
+            saved_card = await self.repo.get_default_saved_card(user.id)
+            if saved_card:
+                # Try to charge
+                amount = float(plan.price)
+                reference = self._generate_reference()
+                gateway = self._get_gateway(saved_card.gateway)
+
+                metadata = {
+                    "user_id": str(user.id),
+                    "transaction_type": TransactionTypeEnum.SUBSCRIPTION.value,
+                    "related_id": str(plan.id),
+                    "save_card": False,
+                }
+
+                transaction = Transaction(
+                    user_id=user.id,
+                    amount=amount,
+                    reference=reference,
+                    gateway=saved_card.gateway,
+                    status=TransactionStatusEnum.PENDING,
+                    transaction_type=TransactionTypeEnum.SUBSCRIPTION,
+                    related_id=plan.id,
+                )
+                self.session.add(transaction)
+                await self.session.flush()
+
+                try:
+                    charge_result = await gateway.charge_saved_card(
+                        authorization_code=saved_card.authorization_code,
+                        amount=amount,
+                        email=user.email,
+                        reference=reference,
+                        metadata=metadata
+                    )
+                    transaction.status = TransactionStatusEnum(charge_result["status"])
+                    transaction.gateway_response = charge_result.get("full_response")
+
+                    if transaction.status == TransactionStatusEnum.SUCCESS:
+                        # Success
+                        now = datetime.now(timezone.utc)
+                        subscription.end_date = now + timedelta(days=plan.duration_days)
+                        await email_service.send_subscription_renewed_email(
+                            to_email=user.email,
+                            first_name=user.first_name,
+                            plan_name=plan.name,
+                            amount=amount,
+                            next_expiry_date=subscription.end_date.strftime("%Y-%m-%d"),
+                        )
+                        renewed_count += 1
+                    else:
+                        # Failed charge
+                        subscription.is_active = False
+                        await email_service.send_subscription_renewal_failed_email(
+                            to_email=user.email,
+                            first_name=user.first_name,
+                            plan_name=plan.name,
+                        )
+                        failed_count += 1
+                except Exception as e:
+                    logger.error(f"Charge failed for user {user.email}: {e}")
+                    transaction.status = TransactionStatusEnum.FAILED
+                    subscription.is_active = False
+                    await email_service.send_subscription_renewal_failed_email(
+                        to_email=user.email,
+                        first_name=user.first_name,
+                        plan_name=plan.name,
+                    )
+                    failed_count += 1
+            else:
+                # No saved card
+                subscription.is_active = False
+                await email_service.send_subscription_expired_email(
+                    to_email=user.email,
+                    first_name=user.first_name,
+                    plan_name=plan.name,
+                )
+                expired_count += 1
+                
+            await self.session.commit()
+
+        return {
+            "notified_2_days": len(expiring_in_2_days),
+            "renewed": renewed_count,
+            "failed_renewal": failed_count,
+            "expired_no_card": expired_count
+        }

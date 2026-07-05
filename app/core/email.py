@@ -80,5 +80,65 @@ class EmailService:
         """
         await self._send(to_email, subject, html_body)
 
+    async def send_subscription_expiring_soon_email(self, to_email: str, first_name: str, plan_name: str, updated_price: float, expiry_date: str) -> None:
+        subject = f"Your {plan_name} subscription is expiring soon"
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
+          <h2 style="color: #111827;">Your subscription is expiring soon</h2>
+          <p>Hi {first_name},</p>
+          <p>This is a quick reminder that your <strong>{plan_name}</strong> subscription will expire on {expiry_date}.</p>
+          <p>If you have a saved bank card, we will automatically charge it <strong>${updated_price:,.2f}</strong> to renew your subscription. If you do not have a saved card or your card is declined, your subscription will be paused.</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 12px;">
+            Social Workers &mdash; this is an automated message, please don't reply.
+          </p>
+        </div>
+        """
+        await self._send(to_email, subject, html_body)
+
+    async def send_subscription_renewed_email(self, to_email: str, first_name: str, plan_name: str, amount: float, next_expiry_date: str) -> None:
+        subject = f"Your {plan_name} subscription has been renewed"
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
+          <h2 style="color: #111827;">Subscription Renewed Successfully</h2>
+          <p>Hi {first_name},</p>
+          <p>Your <strong>{plan_name}</strong> subscription has been successfully renewed. We have charged your saved card <strong>${amount:,.2f}</strong>.</p>
+          <p>Your new subscription expiry date is {next_expiry_date}.</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 12px;">
+            Social Workers &mdash; this is an automated message, please don't reply.
+          </p>
+        </div>
+        """
+        await self._send(to_email, subject, html_body)
+
+    async def send_subscription_renewal_failed_email(self, to_email: str, first_name: str, plan_name: str) -> None:
+        subject = f"Action Required: {plan_name} renewal failed"
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
+          <h2 style="color: #dc2626;">Subscription Renewal Failed</h2>
+          <p>Hi {first_name},</p>
+          <p>We attempted to automatically renew your <strong>{plan_name}</strong> subscription, but the charge to your saved card was declined.</p>
+          <p>As a result, your subscription has been paused. Please log in and update your payment information to restore access.</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 12px;">
+            Social Workers &mdash; this is an automated message, please don't reply.
+          </p>
+        </div>
+        """
+        await self._send(to_email, subject, html_body)
+
+    async def send_subscription_expired_email(self, to_email: str, first_name: str, plan_name: str) -> None:
+        subject = f"Your {plan_name} subscription has expired"
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
+          <h2 style="color: #111827;">Subscription Expired</h2>
+          <p>Hi {first_name},</p>
+          <p>Your <strong>{plan_name}</strong> subscription has expired.</p>
+          <p>Because you did not have a saved card on file for automatic renewal, your subscription has been paused. Please log in and purchase a new subscription to restore access.</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 12px;">
+            Social Workers &mdash; this is an automated message, please don't reply.
+          </p>
+        </div>
+        """
+        await self._send(to_email, subject, html_body)
+
 
 email_service = EmailService()

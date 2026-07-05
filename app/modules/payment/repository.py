@@ -87,3 +87,56 @@ class PaymentRepository:
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
         items = (await self.session.execute(stmt)).all()
         return items, total
+
+    async def get_subscriptions_expiring_in_days(
+        self, days: int
+    ) -> Sequence[tuple[UserSubscription, SubscriptionPlan, "User"]]:
+        from datetime import datetime, timedelta, timezone
+        from app.modules.user.entity import User
+        from sqlalchemy import and_, cast, Date
+        
+        target_date = (datetime.now(timezone.utc) + timedelta(days=days)).date()
+        
+        stmt = (
+            select(UserSubscription, SubscriptionPlan, User)
+            .join(SubscriptionPlan, UserSubscription.plan_id == SubscriptionPlan.id)
+            .join(User, UserSubscription.user_id == User.id)
+            .where(
+                and_(
+                    UserSubscription.is_active.is_(True),
+                    cast(UserSubscription.end_date, Date) == target_date
+                )
+            )
+        )
+        return (await self.session.execute(stmt)).all()
+
+    async def get_subscriptions_expiring_today_or_past_due(
+        self
+    ) -> Sequence[tuple[UserSubscription, SubscriptionPlan, "User"]]:
+        from datetime import datetime, timezone
+        from app.modules.user.entity import User
+        from sqlalchemy import and_
+        
+        now = datetime.now(timezone.utc)
+        
+        stmt = (
+            select(UserSubscription, SubscriptionPlan, User)
+            .join(SubscriptionPlan, UserSubscription.plan_id == SubscriptionPlan.id)
+            .join(User, UserSubscription.user_id == User.id)
+            .where(
+                and_(
+                    UserSubscription.is_active.is_(True),
+                    UserSubscription.end_date <= now
+                )
+            )
+        )
+        return (await self.session.execute(stmt)).all()
+
+    async def get_default_saved_card(self, user_id: uuid.UUID) -> SavedCard | None:
+        stmt = (
+            select(SavedCard)
+            .where(SavedCard.user_id == user_id)
+            .order_by(SavedCard.created_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()

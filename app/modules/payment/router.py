@@ -207,3 +207,15 @@ async def list_all_transactions(
         total_items=total,
         params=pagination,
     )
+
+@router.post(
+    "/cron/process-subscriptions",
+    summary="Cron endpoint for processing daily subscriptions (via QStash)",
+    include_in_schema=False,
+)
+async def process_subscriptions_cron(
+    raw_body: bytes = Depends(verify_qstash_signature),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await PaymentService(db).process_daily_subscriptions()
+    return {"status": "ok", "data": result}
