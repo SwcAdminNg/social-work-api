@@ -12,6 +12,7 @@ class CourseAccessGrantedViaEnum(str, enum.Enum):
     PURCHASE = "PURCHASE"
     SUBSCRIPTION = "SUBSCRIPTION"
     ADMIN_GRANT = "ADMIN_GRANT"
+    FREE = "FREE"
 
 
 class UserCourseAccess(BaseEntity):
