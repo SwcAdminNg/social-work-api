@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import Query
 from pydantic import Field
 
-from app.common.base_dto import AuditDTO, UpdateDTO
+from app.common.base_dto import AuditDTO, BaseDTO, UpdateDTO
 from app.modules.user.entity import GenderEnum, PlatformEnum, UserTypeEnum
 
 
@@ -18,6 +18,7 @@ class UserReadDTO(AuditDTO):
     user_type: UserTypeEnum
     address: str | None = None
     is_active: bool
+    is_suspended: bool
     last_login_at: datetime | None = None
 
 
@@ -44,3 +45,7 @@ class UserFilterParams:
         self.platform = platform
         self.user_type = user_type
         self.search = search
+
+
+class UserRoleUpdateDTO(BaseDTO):
+    role: UserTypeEnum

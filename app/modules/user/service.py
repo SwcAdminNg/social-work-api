@@ -26,3 +26,18 @@ class UserService:
         self, pagination: PaginationParams, filters: UserFilterParams | None = None
     ) -> tuple[Sequence[User], int]:
         return await self.repository.list(pagination, filters)
+
+    async def get_by_id(self, id: str) -> User | None:
+        return await self.repository.get_by_id(id)
+
+    async def set_suspend_status(self, user: User, is_suspended: bool) -> User:
+        user.is_suspended = is_suspended
+        await self.repository.update(user)
+        await self.session.commit()
+        return user
+
+    async def update_role(self, user: User, role: str) -> User:
+        user.user_type = role
+        await self.repository.update(user)
+        await self.session.commit()
+        return user

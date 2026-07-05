@@ -78,6 +78,8 @@ class AuthService:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
         if not user.is_active:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been deactivated")
+        if user.is_suspended:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been suspended")
 
         user.last_login_at = datetime.now(timezone.utc)
         await self.users.update(user)
@@ -94,7 +96,7 @@ class AuthService:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired refresh token")
 
         user = await self.users.get_by_id(stored_token.user_id)
-        if user is None or not user.is_active:
+        if user is None or not user.is_active or user.is_suspended:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired refresh token")
 
         # Rotate: revoke the used refresh token and issue a brand-new pair.
