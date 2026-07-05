@@ -57,7 +57,7 @@ class AuthService:
             phone_number=payload.phone_number,
             platform=payload.platform,
             user_type=payload.user_type,
-            hashed_password=hash_password(payload.password),
+            hashed_password=await hash_password(payload.password),
         )
 
         try:
@@ -72,7 +72,7 @@ class AuthService:
 
     async def login(self, payload: LoginRequestDTO) -> AuthSessionDTO:
         user = await self.users.get_by_email_or_username(payload.identifier)
-        if user is None or user.hashed_password is None or not verify_password(
+        if user is None or user.hashed_password is None or not await verify_password(
             payload.password, user.hashed_password
         ):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
@@ -134,7 +134,7 @@ class AuthService:
         if user is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired reset token")
 
-        user.hashed_password = hash_password(payload.new_password)
+        user.hashed_password = await hash_password(payload.new_password)
         await self.reset_tokens.mark_used(stored_token)
         await self.refresh_tokens.revoke_all_for_user(user.id)
         await self.session.commit()

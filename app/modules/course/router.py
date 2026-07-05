@@ -97,6 +97,22 @@ async def list_courses(
 
 
 @router.get(
+    "/enrolled",
+    response_model=PaginatedResponse[CourseReadDTO],
+    summary="List courses the current user is enrolled in",
+)
+async def list_enrolled_courses(
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[CourseReadDTO]:
+    items, total = await CourseService(db).list_enrolled(current_user, pagination)
+    return PaginatedResponse.create(
+        items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
+    )
+
+
+@router.get(
     "/manage",
     response_model=PaginatedResponse[CourseReadDTO],
     summary="List manageable courses - own courses for instructors, all for admins",

@@ -45,3 +45,24 @@ async def accept_admin_invite(
         message="Invite accepted successfully",
         data=MessageDTO(message="Your password has been set. You can now log in."),
     )
+
+from app.common.pagination import PaginatedResponse, PaginationParams
+from app.modules.payment.schema import TransactionReadDTO
+from app.modules.payment.repository import PaymentRepository
+
+@router.get(
+    "/payments",
+    response_model=PaginatedResponse[TransactionReadDTO],
+    summary="List all payments/transactions (admin only)",
+)
+async def list_payments(
+    pagination: PaginationParams = Depends(),
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[TransactionReadDTO]:
+    items, total = await PaymentRepository(db).list_transactions(pagination)
+    return PaginatedResponse.create(
+        items=[TransactionReadDTO.model_validate(item, from_attributes=True) for item in items],
+        total_items=total,
+        params=pagination,
+    )

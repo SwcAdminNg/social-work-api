@@ -7,7 +7,6 @@ from app.modules.payment.entity import PaymentGatewayEnum, TransactionStatusEnum
 
 
 class InitializePaymentRequest(BaseModel):
-    amount: float = Field(..., gt=0, description="Amount to be paid in local currency")
     transaction_type: TransactionTypeEnum
     related_id: uuid.UUID | None = Field(None, description="Course ID or SubscriptionPlan ID")
     gateway: PaymentGatewayEnum = Field(default=PaymentGatewayEnum.PAYSTACK)
@@ -22,7 +21,6 @@ class InitializePaymentResponse(BaseModel):
 
 class ChargeSavedCardRequest(BaseModel):
     card_id: uuid.UUID
-    amount: float = Field(..., gt=0)
     transaction_type: TransactionTypeEnum
     related_id: uuid.UUID | None = None
 
@@ -49,3 +47,16 @@ class SubscriptionPlanResponse(BaseModel):
     duration_days: int
     price: float
     is_free_trial: bool
+
+
+class TransactionReadDTO(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    amount: float
+    reference: str
+    gateway: PaymentGatewayEnum
+    status: TransactionStatusEnum
+    transaction_type: TransactionTypeEnum
+    related_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime

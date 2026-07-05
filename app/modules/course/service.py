@@ -42,6 +42,11 @@ class CourseService:
     ) -> tuple[Sequence[Course], int]:
         return await self.repository.list_published(pagination, filters)
 
+    async def list_enrolled(
+        self, current_user: User, pagination: PaginationParams
+    ) -> tuple[Sequence[Course], int]:
+        return await self.repository.list_enrolled(current_user.id, pagination)
+
     async def list_manage(
         self, pagination: PaginationParams, filters: CourseManageFilterParams, current_user: User
     ) -> tuple[Sequence[Course], int]:

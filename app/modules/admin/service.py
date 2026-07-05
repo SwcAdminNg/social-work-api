@@ -72,7 +72,7 @@ class AdminService:
         if user is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired invite token")
 
-        user.hashed_password = hash_password(payload.password)
+        user.hashed_password = await hash_password(payload.password)
         user.is_active = True
         await self.invite_tokens.mark_used(stored_token)
         await self.session.commit()

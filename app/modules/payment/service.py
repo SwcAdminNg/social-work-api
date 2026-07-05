@@ -36,6 +36,7 @@ class PaymentService:
         return f"TXN_{secrets.token_hex(12).upper()}"
 
     async def initialize_payment(self, payload: InitializePaymentRequest, user: User) -> dict:
+        amount = 0.0
         # Validate related ID
         if payload.transaction_type == TransactionTypeEnum.COURSE_PURCHASE:
             if not payload.related_id:
@@ -43,8 +44,9 @@ class PaymentService:
             course = await self.course_repo.get_by_id(payload.related_id)
             if not course:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
-            if course.price is None or payload.amount < course.price:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid amount for this course")
+            if course.price is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Course is free, no payment required")
+            amount = float(course.price)
                 
         elif payload.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             if not payload.related_id:
@@ -52,8 +54,7 @@ class PaymentService:
             plan = await self.repo.get_plan_by_id(payload.related_id)
             if not plan:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found")
-            if payload.amount < plan.price:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid amount for this plan")
+            amount = float(plan.price)
 
         reference = self._generate_reference()
         gateway = self._get_gateway(payload.gateway)
@@ -67,7 +68,7 @@ class PaymentService:
 
         # Call gateway API
         gateway_response = await gateway.initialize_transaction(
-            amount=payload.amount,
+            amount=amount,
             email=user.email,
             reference=reference,
             metadata=metadata
@@ -76,7 +77,7 @@ class PaymentService:
         # Create pending transaction
         transaction = Transaction(
             user_id=user.id,
-            amount=payload.amount,
+            amount=amount,
             reference=reference,
             gateway=payload.gateway,
             status=TransactionStatusEnum.PENDING,
@@ -93,15 +94,18 @@ class PaymentService:
         if not card or card.user_id != user.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Saved card not found")
 
+        amount = 0.0
         # Validate amount and related_id
         if payload.transaction_type == TransactionTypeEnum.COURSE_PURCHASE:
             course = await self.course_repo.get_by_id(payload.related_id)
-            if not course or course.price is None or payload.amount < course.price:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid amount or course")
+            if not course or course.price is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid course or course is free")
+            amount = float(course.price)
         elif payload.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             plan = await self.repo.get_plan_by_id(payload.related_id)
-            if not plan or payload.amount < plan.price:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid amount or plan")
+            if not plan:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid plan")
+            amount = float(plan.price)
 
         reference = self._generate_reference()
         gateway = self._get_gateway(card.gateway)
@@ -116,7 +120,7 @@ class PaymentService:
         # Create pending transaction
         transaction = Transaction(
             user_id=user.id,
-            amount=payload.amount,
+            amount=amount,
             reference=reference,
             gateway=card.gateway,
             status=TransactionStatusEnum.PENDING,
@@ -130,7 +134,7 @@ class PaymentService:
         try:
             charge_result = await gateway.charge_saved_card(
                 authorization_code=card.authorization_code,
-                amount=payload.amount,
+                amount=amount,
                 email=user.email,
                 reference=reference,
                 metadata=metadata

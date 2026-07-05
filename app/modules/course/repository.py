@@ -65,3 +65,20 @@ class CourseRepository(BaseRepository[Course]):
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
+
+    async def list_enrolled(
+        self, user_id: uuid.UUID, pagination: PaginationParams
+    ) -> tuple[Sequence[Course], int]:
+        from app.modules.course.access_entity import UserCourseAccess
+        
+        stmt = (
+            self._base_select()
+            .join(UserCourseAccess, UserCourseAccess.course_id == Course.id)
+            .where(UserCourseAccess.user_id == user_id)
+        )
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        stmt = stmt.offset(pagination.offset).limit(pagination.limit)
+        items = (await self.session.execute(stmt)).scalars().all()
+        return items, total
