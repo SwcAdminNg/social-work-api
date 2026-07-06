@@ -61,7 +61,7 @@ class TransactionReadDTO(BaseModel):
     transaction_type: TransactionTypeEnum
     related_id: uuid.UUID | None
     created_at: datetime
-    updated_at: datetime
+    updated_at: datetime | None = None
     user: UserReadDTO | None = None
 
 
