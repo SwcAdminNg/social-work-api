@@ -80,3 +80,18 @@ class SubscriptionPlanUpdateDTO(BaseModel):
     price: float | None = Field(None, ge=0)
     is_free_trial: bool | None = None
     is_active: bool | None = None
+
+
+class ChangeSubscriptionPlanRequest(BaseModel):
+    new_plan_id: uuid.UUID
+
+
+class CurrentSubscriptionResponse(BaseModel):
+    id: uuid.UUID
+    plan_id: uuid.UUID
+    start_date: datetime
+    end_date: datetime
+    is_active: bool
+    auto_renew: bool
+    pending_plan_id: uuid.UUID | None
+    plan: SubscriptionPlanResponse | None = None

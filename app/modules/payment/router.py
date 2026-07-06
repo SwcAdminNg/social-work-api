@@ -19,6 +19,8 @@ from app.modules.payment.schema import (
     SubscriptionPlanUpdateDTO,
     VerifyPaymentResponse,
     TransactionReadDTO,
+    CurrentSubscriptionResponse,
+    ChangeSubscriptionPlanRequest,
 )
 from app.modules.payment.service import PaymentService
 from app.modules.payment.repository import PaymentRepository
@@ -207,6 +209,62 @@ async def list_all_transactions(
         total_items=total,
         params=pagination,
     )
+
+
+@router.get(
+    "/subscriptions/current",
+    response_model=ApiResponse[CurrentSubscriptionResponse | None],
+    summary="Get user's current subscription",
+)
+async def get_current_subscription(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CurrentSubscriptionResponse | None]:
+    sub = await PaymentService(db).get_current_subscription(current_user.id)
+    if not sub:
+        return ApiResponse(message="No active subscription", data=None)
+        
+    plan = await PaymentRepository(db).get_plan_by_id(sub.plan_id)
+    
+    data = CurrentSubscriptionResponse(
+        id=sub.id,
+        plan_id=sub.plan_id,
+        start_date=sub.start_date,
+        end_date=sub.end_date,
+        is_active=sub.is_active,
+        auto_renew=sub.auto_renew,
+        pending_plan_id=sub.pending_plan_id,
+        plan=SubscriptionPlanResponse.model_validate(plan, from_attributes=True) if plan else None
+    )
+    return ApiResponse(message="Current subscription retrieved", data=data)
+
+
+@router.post(
+    "/subscriptions/cancel",
+    response_model=ApiResponse[dict],
+    summary="Cancel active subscription",
+)
+async def cancel_subscription(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[dict]:
+    result = await PaymentService(db).cancel_subscription(current_user.id)
+    return ApiResponse(message=result["message"], data=result)
+
+
+@router.post(
+    "/subscriptions/change-plan",
+    response_model=ApiResponse[dict],
+    summary="Upgrade or downgrade subscription plan",
+)
+async def change_subscription_plan(
+    payload: ChangeSubscriptionPlanRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[dict]:
+    result = await PaymentService(db).change_subscription_plan(current_user.id, payload.new_plan_id)
+    return ApiResponse(message=result["message"], data=result)
+
 
 @router.post(
     "/cron/process-subscriptions",

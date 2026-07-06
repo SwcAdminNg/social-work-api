@@ -266,6 +266,43 @@ class PaymentService:
         self.session.add(card)
         return card
 
+    async def get_current_subscription(self, user_id: uuid.UUID) -> UserSubscription | None:
+        from sqlalchemy import select
+        now = datetime.now(timezone.utc)
+        stmt = select(UserSubscription).where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.is_active.is_(True),
+            UserSubscription.end_date > now
+        ).order_by(UserSubscription.end_date.desc())
+        
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def cancel_subscription(self, user_id: uuid.UUID) -> dict:
+        sub = await self.get_current_subscription(user_id)
+        if not sub:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "No active subscription found")
+        
+        sub.auto_renew = False
+        await self.session.commit()
+        return {"message": "Subscription cancelled. You will continue to have access until your billing cycle ends."}
+
+    async def change_subscription_plan(self, user_id: uuid.UUID, new_plan_id: uuid.UUID) -> dict:
+        sub = await self.get_current_subscription(user_id)
+        if not sub:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "No active subscription found to upgrade/downgrade")
+            
+        plan = await self.repo.get_plan_by_id(new_plan_id)
+        if not plan or not plan.is_active:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "The requested plan does not exist or is inactive")
+            
+        if sub.plan_id == new_plan_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "You are already subscribed to this plan")
+
+        sub.pending_plan_id = new_plan_id
+        sub.auto_renew = True # Ensure auto-renew is on so the new plan gets charged
+        await self.session.commit()
+        return {"message": f"Your plan will change to {plan.name} at the end of your current billing cycle."}
+
     async def process_daily_subscriptions(self) -> dict:
         import logging
         logger = logging.getLogger(__name__)
@@ -273,6 +310,8 @@ class PaymentService:
         # 1. Notify users whose subscriptions are expiring in 2 days
         expiring_in_2_days = await self.repo.get_subscriptions_expiring_in_days(2)
         for subscription, plan, user in expiring_in_2_days:
+            if not subscription.auto_renew:
+                continue
             try:
                 await email_service.send_subscription_expiring_soon_email(
                     to_email=user.email,
@@ -291,18 +330,39 @@ class PaymentService:
         expired_count = 0
 
         for subscription, plan, user in expiring_today:
+            # Check for auto-renew
+            if not subscription.auto_renew:
+                subscription.is_active = False
+                await email_service.send_subscription_expired_email(
+                    to_email=user.email,
+                    first_name=user.first_name,
+                    plan_name=plan.name,
+                )
+                expired_count += 1
+                await self.session.commit()
+                continue
+                
+            # Handle plan change if pending
+            current_plan = plan
+            if subscription.pending_plan_id:
+                new_plan = await self.repo.get_plan_by_id(subscription.pending_plan_id)
+                if new_plan and new_plan.is_active:
+                    current_plan = new_plan
+                    subscription.plan_id = new_plan.id
+                subscription.pending_plan_id = None
+                
             # Check for saved card
             saved_card = await self.repo.get_default_saved_card(user.id)
             if saved_card:
                 # Try to charge
-                amount = float(plan.price)
+                amount = float(current_plan.price)
                 reference = self._generate_reference()
                 gateway = self._get_gateway(saved_card.gateway)
 
                 metadata = {
                     "user_id": str(user.id),
                     "transaction_type": TransactionTypeEnum.SUBSCRIPTION.value,
-                    "related_id": str(plan.id),
+                    "related_id": str(current_plan.id),
                     "save_card": False,
                 }
 
@@ -313,7 +373,7 @@ class PaymentService:
                     gateway=saved_card.gateway,
                     status=TransactionStatusEnum.PENDING,
                     transaction_type=TransactionTypeEnum.SUBSCRIPTION,
-                    related_id=plan.id,
+                    related_id=current_plan.id,
                 )
                 self.session.add(transaction)
                 await self.session.flush()
@@ -332,11 +392,11 @@ class PaymentService:
                     if transaction.status == TransactionStatusEnum.SUCCESS:
                         # Success
                         now = datetime.now(timezone.utc)
-                        subscription.end_date = now + timedelta(days=plan.duration_days)
+                        subscription.end_date = now + timedelta(days=current_plan.duration_days)
                         await email_service.send_subscription_renewed_email(
                             to_email=user.email,
                             first_name=user.first_name,
-                            plan_name=plan.name,
+                            plan_name=current_plan.name,
                             amount=amount,
                             next_expiry_date=subscription.end_date.strftime("%Y-%m-%d"),
                         )
@@ -347,7 +407,7 @@ class PaymentService:
                         await email_service.send_subscription_renewal_failed_email(
                             to_email=user.email,
                             first_name=user.first_name,
-                            plan_name=plan.name,
+                            plan_name=current_plan.name,
                         )
                         failed_count += 1
                 except Exception as e:
@@ -357,7 +417,7 @@ class PaymentService:
                     await email_service.send_subscription_renewal_failed_email(
                         to_email=user.email,
                         first_name=user.first_name,
-                        plan_name=plan.name,
+                        plan_name=current_plan.name,
                     )
                     failed_count += 1
             else:
@@ -366,7 +426,7 @@ class PaymentService:
                 await email_service.send_subscription_expired_email(
                     to_email=user.email,
                     first_name=user.first_name,
-                    plan_name=plan.name,
+                    plan_name=current_plan.name,
                 )
                 expired_count += 1
                 
