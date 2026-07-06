@@ -11,6 +11,7 @@ from app.modules.course.entity import CourseItemTypeEnum
 class EnrolledCourseDTO(CourseReadDTO):
     progress_percent: int
     is_completed: bool
+    is_enrolled: bool = True
 
 
 class LearningItemDTO(BaseDTO):
@@ -40,6 +41,11 @@ class QuizQuestionDTO(BaseDTO):
     options: list[dict[str, Any]]  # id, text
 
 
+class QuizAttemptDTO(BaseDTO):
+    score: float
+    passed: bool
+    answers: dict[uuid.UUID, list[uuid.UUID]] | None
+
 class LearningItemContentDTO(BaseDTO):
     id: uuid.UUID
     title: str
@@ -50,6 +56,7 @@ class LearningItemContentDTO(BaseDTO):
     video_url: str | None = None
     document_url: str | None = None
     questions: list[QuizQuestionDTO] | None = None
+    previous_attempt: QuizAttemptDTO | None = None
 
 
 class QuizSubmitDTO(BaseModel):

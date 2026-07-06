@@ -67,6 +67,15 @@ class LearningRepository:
         await self.session.flush()
         return attempt
 
+    async def get_latest_quiz_attempt(self, user_id: uuid.UUID, item_id: uuid.UUID) -> QuizAttempt | None:
+        stmt = (
+            select(QuizAttempt)
+            .where(QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id)
+            .order_by(QuizAttempt.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def count_course_items(self, course_id: uuid.UUID) -> int:
         stmt = (
             select(func.count(CourseItem.id))

@@ -79,6 +79,7 @@ class LearningService:
 
         await self.repo.grant_course_access(user_id, course_id, granted_via)
         await self.repo.create_user_course_progress(user_id, course_id)
+        await self.session.commit()
 
         return {"message": "Successfully enrolled"}
 
@@ -89,7 +90,8 @@ class LearningService:
             dto = EnrolledCourseDTO(
                 **course.__dict__,
                 progress_percent=progress.progress_percent,
-                is_completed=progress.is_completed
+                is_completed=progress.is_completed,
+                is_enrolled=True
             )
             result.append(dto)
         return result
@@ -102,6 +104,7 @@ class LearningService:
         progress = await self.repo.get_user_course_progress(user_id, course_id)
         if not progress:
             progress = await self.repo.create_user_course_progress(user_id, course_id)
+            await self.session.commit()
 
         sections = await self.content_repo.list_sections(course_id)
         section_ids = [s.id for s in sections]
@@ -172,6 +175,21 @@ class LearningService:
                     dto.questions.append(
                         QuizQuestionDTO(id=q.id, text=q.text, allow_multiple_answers=q.allow_multiple_answers, options=q_opts)
                     )
+                
+                attempt = await self.repo.get_latest_quiz_attempt(user_id, item_id)
+                if attempt:
+                    # Convert str keys back to UUID
+                    answers_dict = {}
+                    if attempt.answers:
+                        for k, v in attempt.answers.items():
+                            answers_dict[uuid.UUID(k)] = [uuid.UUID(opt_id) for opt_id in v]
+                    
+                    from app.modules.learning.dto import QuizAttemptDTO
+                    dto.previous_attempt = QuizAttemptDTO(
+                        score=float(attempt.score),
+                        passed=attempt.passed,
+                        answers=answers_dict if attempt.answers else None
+                    )
 
         return dto
 
@@ -186,6 +204,7 @@ class LearningService:
 
         await self.repo.mark_item_completed(user_id, item_id)
         await self._recalculate_progress(user_id, course_id)
+        await self.session.commit()
         return {"message": "Item marked as completed"}
 
     async def submit_quiz(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, answers: dict[uuid.UUID, list[uuid.UUID]]) -> QuizResultDTO:
@@ -225,9 +244,9 @@ class LearningService:
         answers_str_keys = {str(k): [str(v) for v in val] for k, val in answers.items()}
         await self.repo.save_quiz_attempt(user_id, item_id, score_percent, passed, answers_str_keys)
 
-        if passed:
-            await self.repo.mark_item_completed(user_id, item_id)
-            await self._recalculate_progress(user_id, course_id)
+        await self.repo.mark_item_completed(user_id, item_id)
+        await self._recalculate_progress(user_id, course_id)
+        await self.session.commit()
 
         return QuizResultDTO(
             score=score_percent,
