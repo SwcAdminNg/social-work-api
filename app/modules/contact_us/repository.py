@@ -22,6 +22,8 @@ class ContactUsRepository(BaseRepository[ContactUsMessage]):
         if filters is not None:
             if filters.platform is not None:
                 stmt = stmt.where(ContactUsMessage.platform == filters.platform)
+            if filters.category is not None:
+                stmt = stmt.where(ContactUsMessage.category == filters.category)
             if filters.search is not None:
                 term = f"%{filters.search}%"
                 stmt = stmt.where(

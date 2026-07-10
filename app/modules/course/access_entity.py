@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Enum, ForeignKey
+from sqlalchemy import Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,7 @@ class CourseAccessGrantedViaEnum(str, enum.Enum):
 
 class UserCourseAccess(BaseEntity):
     __tablename__ = "user_course_access"
+    __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_user_course_access"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True

@@ -5,6 +5,7 @@ from pydantic import EmailStr, Field
 
 from app.common.base_dto import AuditDTO, CreateDTO
 from app.modules.user.entity import PlatformEnum
+from app.modules.contact_us.entity import ContactUsCategoryEnum
 
 
 class ContactUsCreateDTO(CreateDTO):
@@ -14,6 +15,8 @@ class ContactUsCreateDTO(CreateDTO):
     company_name: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1)
     platform: PlatformEnum
+    category: ContactUsCategoryEnum | None = None
+    subject: str | None = Field(default=None, max_length=255)
 
 
 class ContactUsReadDTO(AuditDTO):
@@ -23,6 +26,8 @@ class ContactUsReadDTO(AuditDTO):
     company_name: str
     message: str
     platform: PlatformEnum
+    category: ContactUsCategoryEnum | None = None
+    subject: str | None = None
 
 
 class ContactUsFilterParams:
@@ -32,6 +37,7 @@ class ContactUsFilterParams:
     def __init__(
         self,
         platform: PlatformEnum | None = Query(None, description="Filter by platform"),
+        category: ContactUsCategoryEnum | None = Query(None, description="Filter by category"),
         search: str | None = Query(
             None, description="Search by full name, email or phone number"
         ),
@@ -39,6 +45,7 @@ class ContactUsFilterParams:
         end_date: date | None = Query(None, description="Filter messages created on or before this date"),
     ) -> None:
         self.platform = platform
+        self.category = category
         self.search = search
         self.start_date = start_date
         self.end_date = end_date

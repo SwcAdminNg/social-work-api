@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,7 @@ from app.common.base_entity import BaseEntity
 
 class UserCourseProgress(BaseEntity):
     __tablename__ = "user_course_progress"
+    __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_user_course_progress"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True

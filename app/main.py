@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.common.responses import ApiErrorResponse
 from app.core.config import settings
@@ -14,6 +15,7 @@ from app.modules.payment.router import router as payment_router
 from app.modules.learning.router import router as learning_router
 from app.modules.customer_support.router import router as customer_support_router
 from app.modules.user.router import router as user_router
+from app.modules.home.router import router as home_router
 
 app = FastAPI(
     title=settings.app_name,
@@ -26,6 +28,14 @@ app = FastAPI(
         "defaultModelsExpandDepth": -1,  # hide the "Schemas" section
         "docExpansion": "none",  # collapse all tags/endpoints by default
     },
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -59,3 +69,4 @@ app.include_router(course_webhook_router)
 app.include_router(payment_router)
 app.include_router(learning_router)
 app.include_router(customer_support_router)
+app.include_router(home_router)
