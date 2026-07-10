@@ -15,9 +15,12 @@ from app.modules.course.dto import (
     CourseThumbnailUploadRequest,
     CourseThumbnailUploadResponse,
     CourseUpdateDTO,
+    CourseCatalogCreateDTO,
+    CourseCatalogUpdateDTO,
+    PublicCourseCatalogReadDTO,
 )
-from app.modules.course.entity import Course, CourseItem, CourseSection
-from app.modules.course.repository import CourseRepository
+from app.modules.course.entity import Course, CourseItem, CourseSection, CourseCatalog
+from app.modules.course.repository import CourseRepository, CourseCatalogRepository
 from app.modules.user.entity import User, UserTypeEnum
 
 
@@ -40,7 +43,16 @@ class CourseService:
     async def list_published(
         self, pagination: PaginationParams, filters: CourseFilterParams | None = None
     ) -> tuple[Sequence[Course], int]:
-        return await self.repository.list_published(pagination, filters)
+        catalog_categories = None
+        if filters and hasattr(filters, 'catalog') and filters.catalog:
+            catalog_repo = CourseCatalogRepository(self.session)
+            catalog = await catalog_repo.get_by_slug(filters.catalog)
+            if catalog:
+                catalog_categories = catalog.categories
+            else:
+                return [], 0 # If catalog not found, return empty
+                
+        return await self.repository.list_published(pagination, filters, catalog_categories)
 
     async def list_enrolled(
         self, current_user: User, pagination: PaginationParams
@@ -181,3 +193,56 @@ class CourseService:
             accessible.update((await self.session.execute(stmt)).scalars().all())
         
         return enrolled, accessible
+
+    async def set_featured_courses(self, course_ids: list[uuid.UUID], current_user: User) -> None:
+        if current_user.user_type != UserTypeEnum.ADMIN:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins can set featured courses")
+        await self.repository.set_featured(course_ids)
+        await self.session.commit()
+
+    async def list_featured_courses(self, pagination: PaginationParams) -> tuple[Sequence[Course], int]:
+        return await self.repository.list_featured(pagination)
+
+class CourseCatalogService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.repository = CourseCatalogRepository(session)
+
+    async def create(self, payload: CourseCatalogCreateDTO) -> CourseCatalog:
+        slug = await ensure_unique_slug(self.session, CourseCatalog, slugify(payload.name))
+        catalog = CourseCatalog(
+            name=payload.name, 
+            slug=slug, 
+            categories=payload.categories,
+            icon_name=payload.icon_name,
+            description=payload.description
+        )
+        await self.repository.create(catalog)
+        await self.session.commit()
+        return catalog
+
+    async def list_catalogs_public(self) -> list[PublicCourseCatalogReadDTO]:
+        stmt_catalogs = select(CourseCatalog)
+        catalogs = (await self.session.execute(stmt_catalogs)).scalars().all()
+        
+        stmt = select(Course.category, func.count(Course.id)).where(Course.is_published.is_(True)).group_by(Course.category)
+        counts = (await self.session.execute(stmt)).all()
+        count_map = {row[0].name if hasattr(row[0], 'name') else row[0]: row[1] for row in counts}
+
+        dtos = []
+        for catalog in catalogs:
+            total_courses = sum(count_map.get(cat.name if hasattr(cat, 'name') else cat, 0) for cat in catalog.categories)
+            dtos.append(
+                PublicCourseCatalogReadDTO(
+                    id=catalog.id,
+                    created_at=catalog.created_at,
+                    updated_at=catalog.updated_at,
+                    name=catalog.name,
+                    slug=catalog.slug,
+                    categories=catalog.categories,
+                    icon_name=catalog.icon_name,
+                    description=catalog.description,
+                    total_courses=total_courses
+                )
+            )
+        return dtos

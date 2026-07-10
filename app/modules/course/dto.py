@@ -5,6 +5,7 @@ from pydantic import Field
 
 from app.common.base_dto import AuditDTO, CreateDTO, UpdateDTO
 from app.modules.course.entity import CourseCategoryEnum, CourseLevelEnum
+from pydantic import BaseModel
 
 
 class CourseCreateDTO(CreateDTO):
@@ -53,6 +54,37 @@ class CourseReadDTO(AuditDTO):
     instructor_id: uuid.UUID
     is_published: bool
     is_exclusive: bool
+    is_featured: bool
+    featured_order: int | None
+
+class SetFeaturedCoursesDTO(BaseModel):
+    course_ids: list[uuid.UUID]
+
+
+class CourseCatalogCreateDTO(CreateDTO):
+    name: str = Field(min_length=1, max_length=255)
+    categories: list[CourseCategoryEnum] = Field(default_factory=list)
+    icon_name: str | None = Field(default=None, max_length=255)
+    description: str | None = None
+
+
+class CourseCatalogUpdateDTO(UpdateDTO):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    categories: list[CourseCategoryEnum] | None = None
+    icon_name: str | None = Field(default=None, max_length=255)
+    description: str | None = None
+
+
+class CourseCatalogReadDTO(AuditDTO):
+    name: str
+    slug: str
+    categories: list[CourseCategoryEnum]
+    icon_name: str | None
+    description: str | None
+
+
+class PublicCourseCatalogReadDTO(CourseCatalogReadDTO):
+    total_courses: int = 0
 
 
 class PublicCourseReadDTO(CourseReadDTO):
@@ -70,11 +102,13 @@ class CourseFilterParams:
         level: CourseLevelEnum | None = Query(None, description="Filter by level"),
         is_free: bool | None = Query(None, description="Filter by free/paid"),
         search: str | None = Query(None, description="Search by title or description"),
+        catalog: str | None = Query(None, description="Filter by catalog slug"),
     ) -> None:
         self.category = category
         self.level = level
         self.is_free = is_free
         self.search = search
+        self.catalog = catalog
 
 
 class CourseManageFilterParams(CourseFilterParams):

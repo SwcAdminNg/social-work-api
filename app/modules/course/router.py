@@ -7,7 +7,7 @@ from app.common.api_route import NoNullAPIRoute
 from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
-from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user, get_current_user_optional
+from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user, get_current_user_optional, get_current_admin_user
 from app.modules.course.content_dto import (
     CourseDetailDTO,
     CourseItemCreateDTO,
@@ -40,8 +40,12 @@ from app.modules.course.dto import (
     CourseThumbnailUploadResponse,
     CourseUpdateDTO,
     PublicCourseReadDTO,
+    SetFeaturedCoursesDTO,
+    CourseCatalogCreateDTO,
+    CourseCatalogReadDTO,
+    PublicCourseCatalogReadDTO,
 )
-from app.modules.course.service import CourseService
+from app.modules.course.service import CourseService, CourseCatalogService
 from app.modules.user.entity import User
 
 router = APIRouter(prefix="/courses", tags=["Courses"], route_class=NoNullAPIRoute)
@@ -110,6 +114,76 @@ async def list_courses(
             
     return data
 
+@router.put(
+    "/featured",
+    response_model=ApiResponse[None],
+    summary="Set featured courses (admin only)",
+)
+async def set_featured_courses(
+    payload: SetFeaturedCoursesDTO,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseService(db).set_featured_courses(payload.course_ids, current_admin)
+    return ApiResponse(message="Featured courses updated successfully")
+
+@router.get(
+    "/featured",
+    response_model=PaginatedResponse[PublicCourseReadDTO],
+    summary="List featured courses (public)",
+)
+async def list_featured_courses(
+    pagination: PaginationParams = Depends(),
+    current_user: User | None = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[PublicCourseReadDTO]:
+    service = CourseService(db)
+    items, total = await service.list_featured_courses(pagination)
+    
+    data = PaginatedResponse.create(
+        items=[PublicCourseReadDTO.model_validate(c, from_attributes=True) for c in items],
+        total_items=total,
+        params=pagination,
+    )
+
+    if current_user:
+        enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
+        for item in data.data:
+            item.is_enrolled = item.id in enrolled_ids
+            item.has_access = item.id in access_ids
+            
+    return data
+
+@router.post(
+    "/catalogs",
+    response_model=ApiResponse[CourseCatalogReadDTO],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new course catalog (admin only)",
+)
+async def create_course_catalog(
+    payload: CourseCatalogCreateDTO,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CourseCatalogReadDTO]:
+    catalog = await CourseCatalogService(db).create(payload)
+    return ApiResponse(
+        message="Course catalog created successfully",
+        data=CourseCatalogReadDTO.model_validate(catalog)
+    )
+
+@router.get(
+    "/catalogs",
+    response_model=ApiResponse[list[PublicCourseCatalogReadDTO]],
+    summary="List course catalogs (public)",
+)
+async def list_course_catalogs(
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[PublicCourseCatalogReadDTO]]:
+    catalogs = await CourseCatalogService(db).list_catalogs_public()
+    return ApiResponse(
+        message="Course catalogs retrieved successfully",
+        data=catalogs
+    )
 
 @router.get(
     "/enrolled",

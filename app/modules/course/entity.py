@@ -61,6 +61,18 @@ class Course(BaseEntity):
     )
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_exclusive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    is_featured: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    featured_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class CourseCatalog(BaseEntity):
+    __tablename__ = "course_catalogs"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(280), unique=True, nullable=False, index=True)
+    categories: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    icon_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CourseSection(BaseEntity):
