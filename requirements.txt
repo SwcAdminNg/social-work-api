@@ -17,4 +17,5 @@ aiosmtplib==3.0.2
 
 boto3==1.35.74
 httpx==0.28.1
-qstash
+qstash==3.4.0
+gunicorn==23.0.0
