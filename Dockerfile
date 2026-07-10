@@ -19,5 +19,5 @@ COPY . .
 # Expose port (Railway sets $PORT dynamically)
 EXPOSE 8000
 
-# Run migrations then start the server
-CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Use shell script to run migrations and start server
+CMD ["bash", "start.sh"]
