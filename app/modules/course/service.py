@@ -288,6 +288,7 @@ class CourseCatalogService:
         )
         await self.repository.create(catalog)
         await self.session.commit()
+        await delete_cache("course_catalogs:public")
         return catalog
 
     async def list_catalogs_public(self) -> list[PublicCourseCatalogReadDTO]:

@@ -36,5 +36,5 @@ class HomeService:
             completion_rate_of_course_by_enrolled_users=float(avg_completion)
         )
         
-        await set_cache(cache_key, stats.model_dump(), expire=300)
+        await set_cache(cache_key, stats.model_dump(), expire=7200)
         return stats
