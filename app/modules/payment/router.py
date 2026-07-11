@@ -8,6 +8,7 @@ from app.common.api_route import NoNullAPIRoute
 from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.core.qstash import verify_qstash_signature
+from app.core.cache import get_cache, set_cache, delete_cache
 from app.modules.auth.dependencies import get_current_admin_user, get_current_user
 from app.modules.payment.schema import (
     ChargeSavedCardRequest,
@@ -120,8 +121,18 @@ async def list_saved_cards(
 async def list_plans(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[list[SubscriptionPlanResponse]]:
+    cache_key = "payment:plans:active"
+    cached_data = await get_cache(cache_key)
+    if cached_data:
+        data = [SubscriptionPlanResponse(**plan) for plan in cached_data]
+        return ApiResponse(message="Plans retrieved from cache", data=data)
+
     plans = await PaymentRepository(db).list_active_plans()
     data = [SubscriptionPlanResponse.model_validate(plan, from_attributes=True) for plan in plans]
+    
+    serializable_data = [item.model_dump(mode='json') for item in data]
+    await set_cache(cache_key, serializable_data, expire=3600)
+    
     return ApiResponse(message="Plans retrieved", data=data)
 
 
@@ -151,6 +162,7 @@ async def create_plan(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SubscriptionPlanResponse]:
     plan = await PaymentService(db).create_plan(payload)
+    await delete_cache("payment:plans:active")
     return ApiResponse(message="Plan created successfully", data=SubscriptionPlanResponse.model_validate(plan, from_attributes=True))
 
 
@@ -166,6 +178,7 @@ async def update_plan(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SubscriptionPlanResponse]:
     plan = await PaymentService(db).update_plan(plan_id, payload)
+    await delete_cache("payment:plans:active")
     return ApiResponse(message="Plan updated successfully", data=SubscriptionPlanResponse.model_validate(plan, from_attributes=True))
 
 
@@ -180,6 +193,7 @@ async def delete_plan(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await PaymentService(db).delete_plan(plan_id)
+    await delete_cache("payment:plans:active")
     return ApiResponse(message="Plan deleted successfully")
 
 

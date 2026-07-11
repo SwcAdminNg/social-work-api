@@ -13,6 +13,7 @@ from app.modules.course.service import CourseService
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
 from app.modules.user.entity import User, UserTypeEnum
+from app.core.cache import delete_cache, get_cache, set_cache
 
 
 class CourseReviewService:
@@ -68,6 +69,10 @@ class CourseReviewService:
         
         await self.db.commit()
         
+        await delete_cache(f"course:slug:{course.slug}")
+        await delete_cache("courses:*")
+        await delete_cache(f"reviews:course_{course_id}:*")
+        
         await self.db.refresh(created_review)
         return created_review
 
@@ -97,6 +102,11 @@ class CourseReviewService:
         )
         
         await self.db.commit()
+        
+        await delete_cache(f"course:slug:{course.slug}")
+        await delete_cache("courses:*")
+        await delete_cache(f"reviews:course_{review.course_id}:*")
+        
         await self.db.refresh(review)
         return review
 
@@ -122,6 +132,10 @@ class CourseReviewService:
         )
         
         await self.db.commit()
+        
+        await delete_cache(f"course:slug:{course.slug}")
+        await delete_cache("courses:*")
+        await delete_cache(f"reviews:course_{course_id}:*")
 
     async def list_course_reviews(
         self, course_id: uuid.UUID, pagination: PaginationParams
@@ -165,6 +179,7 @@ class CourseReviewService:
         review.reply_created_at = datetime.now(timezone.utc)
         
         await self.db.commit()
+        await delete_cache(f"reviews:course_{review.course_id}:*")
         await self.db.refresh(review)
         return review
 
@@ -183,5 +198,11 @@ class CourseReviewService:
         
         await self.repo.recalculate_course_rating(review.course_id)
         await self.db.commit()
+        
+        course = await self.course_service.get_by_id(review.course_id)
+        await delete_cache(f"course:slug:{course.slug}")
+        await delete_cache("courses:*")
+        await delete_cache(f"reviews:course_{review.course_id}:*")
+        
         await self.db.refresh(review)
         return review

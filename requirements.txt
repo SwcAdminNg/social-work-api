@@ -19,3 +19,4 @@ boto3==1.35.74
 httpx==0.28.1
 qstash==3.4.0
 gunicorn==23.0.0
+redis==5.2.1

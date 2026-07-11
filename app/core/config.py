@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     qstash_current_signing_key: str = ""
     qstash_next_signing_key: str = ""
 
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
+
     @property
     def database_url(self) -> str:
         return (

@@ -86,14 +86,30 @@ async def list_course_reviews(
     pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[ReviewRead]:
+    cache_key = f"reviews:course_{course_id}:page_{pagination.page}:size_{pagination.page_size}"
+    from app.core.cache import get_cache, set_cache
+    cached_data = await get_cache(cache_key)
+    if cached_data:
+        items = [ReviewRead(**r) for r in cached_data['items']]
+        return PaginatedResponse.create(
+            items=items,
+            total_items=cached_data['total'],
+            params=pagination,
+        )
+
     service = CourseReviewService(db)
     items, total = await service.list_course_reviews(course_id, pagination)
     
-    return PaginatedResponse.create(
+    data = PaginatedResponse.create(
         items=[ReviewRead.model_validate(r) for r in items],
         total_items=total,
         params=pagination,
     )
+    
+    serializable_data = [item.model_dump(mode='json') for item in data.data]
+    await set_cache(cache_key, {'items': serializable_data, 'total': total}, expire=600)
+    
+    return data
 
 
 @router.put(

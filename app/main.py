@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -18,11 +20,19 @@ from app.modules.customer_support.router import router as customer_support_route
 from app.modules.user.router import router as user_router
 from app.modules.user.dashboard_router import router as dashboard_router
 from app.modules.home.router import router as home_router
+from app.core.cache import init_redis, close_redis
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_redis()
+    yield
+    await close_redis()
 
 app = FastAPI(
     title=settings.app_name,
     description="Social Workers API",
     version="0.1.0",
+    lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
