@@ -127,7 +127,8 @@ class CourseService:
         
         await delete_cache(f"course:slug:{course.slug}")
         await delete_cache("courses:*")
-        
+        await delete_cache("course_catalogs:public")
+
         return course
 
     async def set_published(self, id: uuid.UUID, is_published: bool, current_user: User) -> Course:
@@ -300,7 +301,11 @@ class CourseCatalogService:
         stmt_catalogs = select(CourseCatalog)
         catalogs = (await self.session.execute(stmt_catalogs)).scalars().all()
         
-        stmt = select(Course.category, func.count(Course.id)).where(Course.is_published.is_(True)).group_by(Course.category)
+        stmt = (
+            select(Course.category, func.count(Course.id))
+            .where(Course.is_published.is_(True), Course.deleted_at.is_(None))
+            .group_by(Course.category)
+        )
         counts = (await self.session.execute(stmt)).all()
         count_map = {row[0].name if hasattr(row[0], 'name') else row[0]: row[1] for row in counts}
 
