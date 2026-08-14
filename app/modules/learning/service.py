@@ -7,21 +7,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum
 from app.modules.course.entity import CourseItemTypeEnum
+from app.modules.course.content_entity import AssessmentTypeEnum, EssaySubmissionModeEnum, MultiAnswerModeEnum
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.dto import (
     CourseCurriculumDTO,
     EnrolledCourseDTO,
+    EssaySubmissionDTO,
+    EssayUploadUrlResponseDTO,
     LearningItemContentDTO,
     LearningItemDTO,
     LearningSectionDTO,
+    QuizAttemptDTO,
     QuizQuestionDTO,
     QuizResultDTO,
 )
 from app.common.pagination import PaginationParams
+from app.core.storage import get_r2_client
 from app.modules.learning.repository import LearningRepository
 from app.modules.payment.entity import UserSubscription
-from app.modules.learning.entity import UserItemProgress
+from app.modules.learning.entity import EssaySubmission, UserItemProgress
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
 
@@ -33,6 +38,13 @@ class LearningService:
         self.course_repo = CourseRepository(session)
         self.content_repo = CourseContentRepository(session)
         self.activity_service = ActivityService(session)
+        self._r2 = None
+
+    @property
+    def r2(self):
+        if self._r2 is None:
+            self._r2 = get_r2_client()
+        return self._r2
 
     async def _has_active_subscription(self, user_id: uuid.UUID) -> bool:
         stmt = select(UserSubscription).where(
@@ -170,39 +182,87 @@ class LearningService:
         elif item.item_type == CourseItemTypeEnum.DOCUMENT:
             doc = await self.content_repo.get_document_by_item(item_id)
             if doc:
-                from app.core.storage import get_r2_client
-                r2 = get_r2_client()
-                dto.document_url = r2.generate_download_url(doc.storage_key)
-        elif item.item_type == CourseItemTypeEnum.QUIZ:
-            quiz = await self.content_repo.get_quiz_by_item(item_id)
-            if quiz:
-                questions = await self.content_repo.list_questions_for_quizzes([quiz.id])
-                q_ids = [q.id for q in questions]
-                options = await self.content_repo.list_options_for_questions(q_ids)
-                
-                dto.questions = []
-                for q in questions:
-                    q_opts = [{"id": o.id, "text": o.text} for o in options if o.question_id == q.id]
-                    dto.questions.append(
-                        QuizQuestionDTO(id=q.id, text=q.text, allow_multiple_answers=q.allow_multiple_answers, options=q_opts)
-                    )
-                
-                attempt = await self.repo.get_latest_quiz_attempt(user_id, item_id)
-                if attempt:
-                    # Convert str keys back to UUID
-                    answers_dict = {}
-                    if attempt.answers:
-                        for k, v in attempt.answers.items():
-                            answers_dict[uuid.UUID(k)] = [uuid.UUID(opt_id) for opt_id in v]
-                    
-                    from app.modules.learning.dto import QuizAttemptDTO
-                    dto.previous_attempt = QuizAttemptDTO(
-                        score=float(attempt.score),
-                        passed=attempt.passed,
-                        answers=answers_dict if attempt.answers else None
-                    )
+                dto.document_url = self.r2.generate_download_url(doc.storage_key)
+        elif item.item_type == CourseItemTypeEnum.ASSESSMENT:
+            assessment = await self.content_repo.get_assessment_by_item(item_id)
+            if assessment:
+                dto.assessment_type = assessment.assessment_type
+                dto.due_date = assessment.due_date
+
+                if assessment.assessment_type == AssessmentTypeEnum.QUIZ:
+                    await self._fill_quiz_content(dto, user_id, item_id, assessment)
+                elif assessment.assessment_type == AssessmentTypeEnum.ESSAY:
+                    await self._fill_essay_content(dto, user_id, item_id, assessment)
 
         return dto
+
+    async def _fill_quiz_content(self, dto: LearningItemContentDTO, user_id: uuid.UUID, item_id: uuid.UUID, assessment) -> None:
+        settings = await self.content_repo.get_quiz_settings(assessment.id)
+        pass_mark_percentage = settings.pass_mark_percentage if settings else 70
+        show_result_to_student = settings.show_result_to_student if settings else True
+        max_attempts = settings.max_attempts if settings else None
+
+        questions = await self.content_repo.list_questions_for_quizzes([assessment.id])
+        q_ids = [q.id for q in questions]
+        options = await self.content_repo.list_options_for_questions(q_ids)
+
+        dto.questions = []
+        for q in questions:
+            q_opts = [{"id": o.id, "text": o.text} for o in options if o.question_id == q.id]
+            dto.questions.append(
+                QuizQuestionDTO(
+                    id=q.id, text=q.text, allow_multiple_answers=q.allow_multiple_answers,
+                    multi_answer_mode=q.multi_answer_mode, options=q_opts,
+                )
+            )
+
+        attempts_used = await self.repo.count_quiz_attempts(user_id, item_id)
+        dto.max_attempts = max_attempts
+        dto.attempts_used = attempts_used
+        dto.attempts_remaining = None if max_attempts is None else max(max_attempts - attempts_used, 0)
+        dto.pass_mark_percentage = pass_mark_percentage
+        dto.show_result_to_student = show_result_to_student
+
+        attempt = await self.repo.get_latest_quiz_attempt(user_id, item_id)
+        if attempt:
+            answers_dict = {}
+            if attempt.answers:
+                for k, v in attempt.answers.items():
+                    answers_dict[uuid.UUID(k)] = [uuid.UUID(opt_id) for opt_id in v]
+
+            dto.previous_attempt = QuizAttemptDTO(
+                score=float(attempt.score) if show_result_to_student else None,
+                passed=attempt.passed if show_result_to_student else None,
+                answers=(answers_dict if attempt.answers else None) if show_result_to_student else None,
+                result_visible=show_result_to_student,
+            )
+
+    async def _fill_essay_content(self, dto: LearningItemContentDTO, user_id: uuid.UUID, item_id: uuid.UUID, assessment) -> None:
+        essay_settings = await self.content_repo.get_essay_settings(assessment.id)
+        if essay_settings:
+            dto.essay_question = essay_settings.question
+            dto.essay_description = essay_settings.description
+            dto.essay_submission_mode = essay_settings.submission_mode
+
+        submission = await self.repo.get_essay_submission(user_id, item_id)
+        if submission:
+            dto.essay_submission = self._build_essay_submission_dto(submission)
+
+    def _build_essay_submission_dto(self, submission: EssaySubmission) -> EssaySubmissionDTO:
+        document_download_url = None
+        if submission.document_storage_key:
+            document_download_url = self.r2.generate_download_url(submission.document_storage_key)
+        is_graded = submission.score is not None
+        return EssaySubmissionDTO(
+            content_text=submission.content_text,
+            document_file_name=submission.document_file_name,
+            document_download_url=document_download_url,
+            submitted_at=submission.submitted_at,
+            is_graded=is_graded,
+            is_published=submission.is_published,
+            score=float(submission.score) if submission.is_published and submission.score is not None else None,
+            feedback=submission.feedback if submission.is_published else None,
+        )
 
     async def mark_item_completed(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID) -> dict:
         access = await self.repo.get_user_course_access(user_id, course_id)
@@ -210,8 +270,8 @@ class LearningService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
 
         item = await self.content_repo.get_item(item_id)
-        if not item or item.item_type == CourseItemTypeEnum.QUIZ:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot manually complete a quiz item")
+        if not item or item.item_type == CourseItemTypeEnum.ASSESSMENT:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot manually complete an assessment item")
 
         await self.repo.mark_item_completed(user_id, item_id)
         await self._recalculate_progress(user_id, course_id)
@@ -224,32 +284,52 @@ class LearningService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
 
         item = await self.content_repo.get_item(item_id)
-        if not item or item.item_type != CourseItemTypeEnum.QUIZ:
+        if not item or item.item_type != CourseItemTypeEnum.ASSESSMENT:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an assessment")
+
+        assessment = await self.content_repo.get_assessment_by_item(item_id)
+        if not assessment or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not a quiz")
 
-        quiz = await self.content_repo.get_quiz_by_item(item_id)
-        if not quiz:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quiz not found")
+        if assessment.due_date is not None and datetime.now(timezone.utc) > assessment.due_date:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The deadline for this quiz has passed")
 
-        questions = await self.content_repo.list_questions_for_quizzes([quiz.id])
+        settings = await self.content_repo.get_quiz_settings(assessment.id)
+        pass_mark_percentage = settings.pass_mark_percentage if settings else 70
+        show_result_to_student = settings.show_result_to_student if settings else True
+        max_attempts = settings.max_attempts if settings else None
+
+        if max_attempts is not None:
+            attempts_used = await self.repo.count_quiz_attempts(user_id, item_id)
+            if attempts_used >= max_attempts:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Maximum attempts ({max_attempts}) reached for this quiz",
+                )
+
+        questions = await self.content_repo.list_questions_for_quizzes([assessment.id])
         q_ids = [q.id for q in questions]
         options = await self.content_repo.list_options_for_questions(q_ids)
 
         correct_answers = {}
         total_questions = len(questions)
-        correct_count = 0
+        earned_points = 0.0
 
         for q in questions:
-            correct_opts = [o.id for o in options if o.question_id == q.id and o.is_correct]
-            correct_answers[q.id] = correct_opts
-            
-            user_ans = answers.get(q.id, [])
-            if set(user_ans) == set(correct_opts):
-                correct_count += 1
+            correct_opts = {o.id for o in options if o.question_id == q.id and o.is_correct}
+            correct_answers[q.id] = list(correct_opts)
 
-        score_percent = (correct_count / total_questions * 100) if total_questions > 0 else 0
-        passing_score = item.passing_score if item.passing_score is not None else 70
-        passed = score_percent >= passing_score
+            user_ans = set(answers.get(q.id, []))
+
+            if q.allow_multiple_answers and q.multi_answer_mode == MultiAnswerModeEnum.OR:
+                if correct_opts:
+                    earned_points += min(len(user_ans & correct_opts) / len(correct_opts), 1.0)
+            else:
+                if user_ans == correct_opts:
+                    earned_points += 1.0
+
+        score_percent = (earned_points / total_questions * 100) if total_questions > 0 else 0
+        passed = score_percent >= pass_mark_percentage
 
         # Convert UUID keys to strings for JSONB serialization
         answers_str_keys = {str(k): [str(v) for v in val] for k, val in answers.items()}
@@ -257,20 +337,102 @@ class LearningService:
 
         await self.repo.mark_item_completed(user_id, item_id)
         await self._recalculate_progress(user_id, course_id)
-        
+
         course = await self.course_repo.get_by_id(course_id)
         await self.activity_service.log_activity(
             user_id,
             ActivityTypeEnum.QUIZ_COMPLETED,
             {"course_id": str(course_id), "course_title": course.title if course else "Unknown", "item_id": str(item_id), "item_title": item.title, "passed": passed, "score": score_percent}
         )
-        
+
         await self.session.commit()
 
         return QuizResultDTO(
-            score=score_percent,
-            passed=passed,
-            correct_answers=correct_answers
+            score=score_percent if show_result_to_student else None,
+            passed=passed if show_result_to_student else None,
+            correct_answers=correct_answers if show_result_to_student else None,
+            result_visible=show_result_to_student,
+        )
+
+    async def submit_essay_text(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, content_text: str) -> EssaySubmissionDTO:
+        assessment, essay_settings = await self._authorize_essay_submission(
+            user_id, course_id, item_id, EssaySubmissionModeEnum.TEXT
+        )
+        submission = await self.repo.upsert_essay_submission(user_id, item_id, content_text=content_text)
+        await self.repo.mark_item_completed(user_id, item_id)
+        await self._recalculate_progress(user_id, course_id)
+        await self._log_essay_submitted(user_id, course_id, item_id)
+        await self.session.commit()
+        return self._build_essay_submission_dto(submission)
+
+    async def request_essay_upload_url(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, file_name: str) -> EssayUploadUrlResponseDTO:
+        await self._authorize_essay_submission(user_id, course_id, item_id, EssaySubmissionModeEnum.DOCUMENT)
+        storage_key = self.r2.build_essay_document_key(item_id, user_id, file_name)
+        return EssayUploadUrlResponseDTO(
+            upload_url=self.r2.generate_upload_url(storage_key), storage_key=storage_key
+        )
+
+    async def finalize_essay_document(
+        self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, storage_key: str, file_name: str
+    ) -> EssaySubmissionDTO:
+        await self._authorize_essay_submission(user_id, course_id, item_id, EssaySubmissionModeEnum.DOCUMENT)
+        submission = await self.repo.upsert_essay_submission(
+            user_id, item_id, document_storage_key=storage_key, document_file_name=file_name
+        )
+        await self.repo.mark_item_completed(user_id, item_id)
+        await self._recalculate_progress(user_id, course_id)
+        await self._log_essay_submitted(user_id, course_id, item_id)
+        await self.session.commit()
+        return self._build_essay_submission_dto(submission)
+
+    async def _authorize_essay_submission(
+        self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, expected_mode: EssaySubmissionModeEnum
+    ):
+        access = await self.repo.get_user_course_access(user_id, course_id)
+        if not access:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
+
+        item = await self.content_repo.get_item(item_id)
+        if not item or item.item_type != CourseItemTypeEnum.ASSESSMENT:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an assessment")
+
+        assessment = await self.content_repo.get_assessment_by_item(item_id)
+        if not assessment or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an essay")
+
+        essay_settings = await self.content_repo.get_essay_settings(assessment.id)
+        if not essay_settings:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Essay not found")
+
+        if essay_settings.submission_mode != expected_mode:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"This essay only accepts {essay_settings.submission_mode.value.lower()} submissions",
+            )
+
+        if assessment.due_date is not None and datetime.now(timezone.utc) > assessment.due_date:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The deadline for this essay has passed")
+
+        existing = await self.repo.get_essay_submission(user_id, item_id)
+        if existing is not None and existing.score is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="This essay has already been graded and can no longer be resubmitted"
+            )
+
+        return assessment, essay_settings
+
+    async def _log_essay_submitted(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID) -> None:
+        course = await self.course_repo.get_by_id(course_id)
+        item = await self.content_repo.get_item(item_id)
+        await self.activity_service.log_activity(
+            user_id,
+            ActivityTypeEnum.ESSAY_SUBMITTED,
+            {
+                "course_id": str(course_id),
+                "course_title": course.title if course else "Unknown",
+                "item_id": str(item_id),
+                "item_title": item.title if item else "Unknown",
+            },
         )
 
     async def list_user_quizzes(

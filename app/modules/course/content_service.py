@@ -1,23 +1,29 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.pagination import PaginationParams
 from app.core.bunny import get_bunny_client
 from app.core.storage import get_r2_client
 from app.modules.course.content_dto import (
+    CourseAssessmentManageDTO,
+    CourseAssessmentPublicDTO,
+    CourseAssessmentUpdateDTO,
     CourseDocumentManageDTO,
     CourseDocumentPublicDTO,
+    CourseEssayDetailDTO,
     CourseItemCreateDTO,
     CourseItemManageReadDTO,
     CourseItemReadDTO,
     CourseItemReorderDTO,
     CourseItemUpdateDTO,
-    CourseQuizManageDTO,
+    CourseQuizDetailDTO,
+    CourseQuizManageDetailDTO,
     CourseQuizOptionManageDTO,
     CourseQuizOptionPublicDTO,
-    CourseQuizPublicDTO,
     CourseQuizQuestionManageDTO,
     CourseQuizQuestionPublicDTO,
     CourseSectionCreateDTO,
@@ -29,6 +35,8 @@ from app.modules.course.content_dto import (
     CourseVideoPublicDTO,
     DocumentFinalizeDTO,
     DocumentUploadCredentialsDTO,
+    EssayGradeDTO,
+    EssaySubmissionListItemDTO,
     QuizOptionCreateDTO,
     QuizOptionUpdateDTO,
     QuizQuestionCreateDTO,
@@ -36,16 +44,22 @@ from app.modules.course.content_dto import (
     VideoUploadCredentialsDTO,
 )
 from app.modules.course.content_entity import (
+    AssessmentTypeEnum,
+    CourseAssessment,
     CourseDocument,
-    CourseQuiz,
+    CourseEssaySettings,
     CourseQuizOption,
     CourseQuizQuestion,
+    CourseQuizSettings,
     CourseVideo,
+    MultiAnswerModeEnum,
     VideoStatusEnum,
 )
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.entity import Course, CourseItem, CourseItemTypeEnum, CourseSection
 from app.modules.course.repository import CourseRepository
+from app.modules.learning.entity import EssaySubmission
+from app.modules.learning.repository import LearningRepository
 from app.modules.user.entity import User, UserTypeEnum
 
 
@@ -54,6 +68,7 @@ class CourseContentService:
         self.session = session
         self.repo = CourseContentRepository(session)
         self.course_repo = CourseRepository(session)
+        self.learning_repo = LearningRepository(session)
         self._r2 = None
         self._bunny = None
 
@@ -189,8 +204,39 @@ class CourseContentService:
             document_credentials = DocumentUploadCredentialsDTO(
                 upload_url=self.r2.generate_upload_url(storage_key), storage_key=storage_key
             )
-        elif payload.item_type == CourseItemTypeEnum.QUIZ:
-            self.session.add(CourseQuiz(course_item_id=item.id))
+        elif payload.item_type == CourseItemTypeEnum.ASSESSMENT:
+            if payload.assessment_type is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "assessment_type is required for assessment items")
+
+            assessment = CourseAssessment(
+                course_item_id=item.id, assessment_type=payload.assessment_type, due_date=payload.due_date
+            )
+            self.session.add(assessment)
+            await self.session.flush()
+
+            if payload.assessment_type == AssessmentTypeEnum.QUIZ:
+                quiz_settings = payload.quiz_settings
+                self.session.add(
+                    CourseQuizSettings(
+                        assessment_id=assessment.id,
+                        max_attempts=quiz_settings.max_attempts if quiz_settings else None,
+                        pass_mark_percentage=quiz_settings.pass_mark_percentage if quiz_settings else 70,
+                        show_result_to_student=quiz_settings.show_result_to_student if quiz_settings else True,
+                    )
+                )
+            elif payload.assessment_type == AssessmentTypeEnum.ESSAY:
+                if payload.essay_settings is None:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST, "essay_settings is required for essay assessments"
+                    )
+                self.session.add(
+                    CourseEssaySettings(
+                        assessment_id=assessment.id,
+                        question=payload.essay_settings.question,
+                        description=payload.essay_settings.description,
+                        submission_mode=payload.essay_settings.submission_mode,
+                    )
+                )
 
         await self.session.commit()
         return item, video_credentials, document_credentials
@@ -294,21 +340,56 @@ class CourseContentService:
             video.status = VideoStatusEnum.PROCESSING
         await self.session.commit()
 
-    # -- quiz ----------------------------------------------------------------
+    # -- assessment settings -----------------------------------------------------
+
+    async def update_assessment_settings(
+        self, item_id: uuid.UUID, payload: CourseAssessmentUpdateDTO, current_user: User
+    ) -> CourseAssessment:
+        _, _, item = await self._authorize_item(item_id, current_user)
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found for this item")
+
+        payload_fields = payload.model_dump(exclude_unset=True)
+        if "due_date" in payload_fields:
+            assessment.due_date = payload.due_date
+
+        if payload.quiz_settings is not None:
+            settings = await self.repo.get_quiz_settings(assessment.id)
+            if settings is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This is not a quiz assessment")
+            for field, value in payload.quiz_settings.model_dump(exclude_unset=True).items():
+                setattr(settings, field, value)
+
+        if payload.essay_settings is not None:
+            essay_settings = await self.repo.get_essay_settings(assessment.id)
+            if essay_settings is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This is not an essay assessment")
+            for field, value in payload.essay_settings.model_dump(exclude_unset=True).items():
+                setattr(essay_settings, field, value)
+
+        await self.session.flush()
+        await self.session.commit()
+        return assessment
+
+    # -- quiz questions/options ----------------------------------------------
 
     async def create_question(
         self, item_id: uuid.UUID, payload: QuizQuestionCreateDTO, current_user: User
     ) -> tuple[CourseQuizQuestion, list[CourseQuizOption]]:
         _, _, item = await self._authorize_item(item_id, current_user)
-        quiz = await self.repo.get_quiz_by_item(item.id)
-        if quiz is None:
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found for this item")
 
         question = CourseQuizQuestion(
-            quiz_id=quiz.id,
+            assessment_id=assessment.id,
             text=payload.text,
             order_index=payload.order_index,
             allow_multiple_answers=payload.allow_multiple_answers,
+            multi_answer_mode=self._resolve_multi_answer_mode(
+                payload.allow_multiple_answers, payload.multi_answer_mode
+            ),
         )
         self.session.add(question)
         await self.session.flush()
@@ -324,17 +405,32 @@ class CourseContentService:
         await self.session.commit()
         return question, options
 
-    async def _course_for_quiz(self, quiz_id: uuid.UUID, current_user: User) -> None:
-        item_stmt = select(CourseItem).join(CourseQuiz, CourseQuiz.course_item_id == CourseItem.id).where(
-            CourseQuiz.id == quiz_id
+    @staticmethod
+    def _resolve_multi_answer_mode(
+        allow_multiple_answers: bool, multi_answer_mode: MultiAnswerModeEnum | None
+    ) -> MultiAnswerModeEnum | None:
+        if not allow_multiple_answers:
+            if multi_answer_mode is not None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "multi_answer_mode can only be set when allow_multiple_answers is true",
+                )
+            return None
+        return multi_answer_mode or MultiAnswerModeEnum.OR
+
+    async def _course_for_assessment(self, assessment_id: uuid.UUID, current_user: User) -> None:
+        item_stmt = (
+            select(CourseItem)
+            .join(CourseAssessment, CourseAssessment.course_item_id == CourseItem.id)
+            .where(CourseAssessment.id == assessment_id)
         )
         item = (await self.session.execute(item_stmt)).scalar_one_or_none()
         if item is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
         section = await self.repo.get_section(item.section_id)
         course = await self.course_repo.get_by_id(section.course_id) if section else None
         if course is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
         self._ensure_can_manage(course, current_user)
 
     async def update_question(
@@ -343,8 +439,14 @@ class CourseContentService:
         question = await self.repo.get_question(question_id)
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
-        await self._course_for_quiz(question.quiz_id, current_user)
-        for field, value in payload.model_dump(exclude_unset=True).items():
+        await self._course_for_assessment(question.assessment_id, current_user)
+        fields = payload.model_dump(exclude_unset=True)
+        allow_multiple_answers = fields.get("allow_multiple_answers", question.allow_multiple_answers)
+        if "allow_multiple_answers" in fields or "multi_answer_mode" in fields:
+            fields["multi_answer_mode"] = self._resolve_multi_answer_mode(
+                allow_multiple_answers, fields.get("multi_answer_mode", question.multi_answer_mode)
+            )
+        for field, value in fields.items():
             setattr(question, field, value)
         await self.session.flush()
         await self.session.commit()
@@ -354,7 +456,7 @@ class CourseContentService:
         question = await self.repo.get_question(question_id)
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
-        await self._course_for_quiz(question.quiz_id, current_user)
+        await self._course_for_assessment(question.assessment_id, current_user)
         question.mark_deleted(current_user.id)
         await self.session.commit()
 
@@ -364,7 +466,7 @@ class CourseContentService:
         question = await self.repo.get_question(question_id)
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
-        await self._course_for_quiz(question.quiz_id, current_user)
+        await self._course_for_assessment(question.assessment_id, current_user)
         option = CourseQuizOption(question_id=question.id, **payload.model_dump())
         self.session.add(option)
         await self.session.flush()
@@ -375,7 +477,7 @@ class CourseContentService:
         question = await self.repo.get_question(option.question_id)
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
-        await self._course_for_quiz(question.quiz_id, current_user)
+        await self._course_for_assessment(question.assessment_id, current_user)
 
     async def update_option(
         self, option_id: uuid.UUID, payload: QuizOptionUpdateDTO, current_user: User
@@ -398,6 +500,60 @@ class CourseContentService:
         option.mark_deleted(current_user.id)
         await self.session.commit()
 
+    # -- essay grading (instructor/admin) ----------------------------------------
+
+    async def list_essay_submissions(
+        self, item_id: uuid.UUID, pagination: PaginationParams, current_user: User
+    ) -> tuple[list[EssaySubmissionListItemDTO], int]:
+        _, _, item = await self._authorize_item(item_id, current_user)
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Essay not found for this item")
+
+        records, total = await self.learning_repo.list_essay_submissions_for_item(item.id, pagination)
+        result = []
+        for submission, user in records:
+            document_download_url = None
+            if submission.document_storage_key:
+                document_download_url = self.r2.generate_download_url(submission.document_storage_key)
+            result.append(
+                EssaySubmissionListItemDTO(
+                    user_id=user.id,
+                    user_full_name=f"{user.first_name} {user.last_name}",
+                    user_email=user.email,
+                    content_text=submission.content_text,
+                    document_file_name=submission.document_file_name,
+                    document_download_url=document_download_url,
+                    submitted_at=submission.submitted_at,
+                    score=float(submission.score) if submission.score is not None else None,
+                    is_published=submission.is_published,
+                    feedback=submission.feedback,
+                )
+            )
+        return result, total
+
+    async def grade_essay_submission(
+        self, item_id: uuid.UUID, user_id: uuid.UUID, payload: EssayGradeDTO, current_user: User
+    ) -> EssaySubmission:
+        _, _, item = await self._authorize_item(item_id, current_user)
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Essay not found for this item")
+
+        submission = await self.learning_repo.get_essay_submission(user_id, item.id)
+        if submission is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "This student has not submitted this essay")
+
+        submission = await self.learning_repo.grade_essay_submission(
+            submission,
+            score=payload.score,
+            feedback=payload.feedback,
+            is_published=payload.is_published,
+            graded_by=current_user.id,
+        )
+        await self.session.commit()
+        return submission
+
     # -- tree assembly for course detail endpoints ------------------------------
 
     async def build_tree(self, course_id: uuid.UUID, manage: bool, enrolled: bool = False) -> list:
@@ -408,13 +564,20 @@ class CourseContentService:
 
         videos = {v.course_item_id: v for v in await self.repo.list_videos_for_items(item_ids)}
         documents = {d.course_item_id: d for d in await self.repo.list_documents_for_items(item_ids)}
-        quizzes = {q.course_item_id: q for q in await self.repo.list_quizzes_for_items(item_ids)}
+        assessments = {a.course_item_id: a for a in await self.repo.list_assessments_for_items(item_ids)}
 
-        quiz_ids = [q.id for q in quizzes.values()]
-        questions = await self.repo.list_questions_for_quizzes(quiz_ids)
-        questions_by_quiz: dict[uuid.UUID, list[CourseQuizQuestion]] = {}
+        assessment_ids = [a.id for a in assessments.values()]
+        quiz_settings_by_assessment = {
+            s.assessment_id: s for s in await self.repo.list_quiz_settings(assessment_ids)
+        }
+        essay_settings_by_assessment = {
+            s.assessment_id: s for s in await self.repo.list_essay_settings(assessment_ids)
+        }
+
+        questions = await self.repo.list_questions_for_quizzes(assessment_ids)
+        questions_by_assessment: dict[uuid.UUID, list[CourseQuizQuestion]] = {}
         for q in questions:
-            questions_by_quiz.setdefault(q.quiz_id, []).append(q)
+            questions_by_assessment.setdefault(q.assessment_id, []).append(q)
 
         question_ids = [q.id for q in questions]
         options = await self.repo.list_options_for_questions(question_ids)
@@ -429,8 +592,18 @@ class CourseContentService:
         result_sections = []
         for section in sections:
             item_dtos = [
-                self._map_item(item, videos.get(item.id), documents.get(item.id), quizzes.get(item.id),
-                               questions_by_quiz, options_by_question, manage, enrolled)
+                self._map_item(
+                    item,
+                    videos.get(item.id),
+                    documents.get(item.id),
+                    assessments.get(item.id),
+                    quiz_settings_by_assessment,
+                    essay_settings_by_assessment,
+                    questions_by_assessment,
+                    options_by_question,
+                    manage,
+                    enrolled,
+                )
                 for item in items_by_section.get(section.id, [])
             ]
             section_cls = CourseSectionManageReadDTO if manage else CourseSectionReadDTO
@@ -451,8 +624,10 @@ class CourseContentService:
         item: CourseItem,
         video: CourseVideo | None,
         document: CourseDocument | None,
-        quiz: CourseQuiz | None,
-        questions_by_quiz: dict,
+        assessment: CourseAssessment | None,
+        quiz_settings_by_assessment: dict,
+        essay_settings_by_assessment: dict,
+        questions_by_assessment: dict,
         options_by_question: dict,
         manage: bool,
         enrolled: bool,
@@ -460,7 +635,7 @@ class CourseContentService:
         if not manage and not enrolled and not item.is_preview:
             video = None
             document = None
-            quiz = None
+            assessment = None
 
         video_dto = None
         if video is not None:
@@ -487,38 +662,66 @@ class CourseContentService:
                 **extra,
             )
 
-        quiz_dto = None
-        if quiz is not None:
-            question_dtos = []
-            for question in sorted(questions_by_quiz.get(quiz.id, []), key=lambda q: q.order_index):
-                option_dtos = []
-                for option in sorted(options_by_question.get(question.id, []), key=lambda o: o.order_index):
-                    if manage:
-                        option_dtos.append(
-                            CourseQuizOptionManageDTO(
-                                id=option.id, text=option.text, order_index=option.order_index,
-                                is_correct=option.is_correct,
+        assessment_dto = None
+        if assessment is not None:
+            quiz_detail = None
+            essay_detail = None
+
+            if assessment.assessment_type == AssessmentTypeEnum.QUIZ:
+                question_dtos = []
+                for question in sorted(
+                    questions_by_assessment.get(assessment.id, []), key=lambda q: q.order_index
+                ):
+                    option_dtos = []
+                    for option in sorted(options_by_question.get(question.id, []), key=lambda o: o.order_index):
+                        if manage:
+                            option_dtos.append(
+                                CourseQuizOptionManageDTO(
+                                    id=option.id, text=option.text, order_index=option.order_index,
+                                    is_correct=option.is_correct,
+                                )
                             )
-                        )
-                    else:
-                        option_dtos.append(
-                            CourseQuizOptionPublicDTO(
-                                id=option.id, text=option.text, order_index=option.order_index
+                        else:
+                            option_dtos.append(
+                                CourseQuizOptionPublicDTO(
+                                    id=option.id, text=option.text, order_index=option.order_index
+                                )
                             )
+                    question_cls = CourseQuizQuestionManageDTO if manage else CourseQuizQuestionPublicDTO
+                    question_dtos.append(
+                        question_cls(
+                            id=question.id,
+                            text=question.text,
+                            order_index=question.order_index,
+                            allow_multiple_answers=question.allow_multiple_answers,
+                            multi_answer_mode=question.multi_answer_mode,
+                            options=option_dtos,
                         )
-                question_cls = CourseQuizQuestionManageDTO if manage else CourseQuizQuestionPublicDTO
-                question_dtos.append(
-                    question_cls(
-                        id=question.id,
-                        text=question.text,
-                        order_index=question.order_index,
-                        allow_multiple_answers=question.allow_multiple_answers,
-                        options=option_dtos,
                     )
+                settings = quiz_settings_by_assessment.get(assessment.id)
+                quiz_cls = CourseQuizManageDetailDTO if manage else CourseQuizDetailDTO
+                quiz_detail = quiz_cls(
+                    max_attempts=settings.max_attempts if settings else None,
+                    pass_mark_percentage=settings.pass_mark_percentage if settings else 70,
+                    show_result_to_student=settings.show_result_to_student if settings else True,
+                    questions=question_dtos,
                 )
-            quiz_cls = CourseQuizManageDTO if manage else CourseQuizPublicDTO
-            quiz_dto = quiz_cls(
-                id=quiz.id, passing_score_percentage=quiz.passing_score_percentage, questions=question_dtos
+            elif assessment.assessment_type == AssessmentTypeEnum.ESSAY:
+                essay_settings = essay_settings_by_assessment.get(assessment.id)
+                if essay_settings is not None:
+                    essay_detail = CourseEssayDetailDTO(
+                        question=essay_settings.question,
+                        description=essay_settings.description,
+                        submission_mode=essay_settings.submission_mode,
+                    )
+
+            assessment_cls = CourseAssessmentManageDTO if manage else CourseAssessmentPublicDTO
+            assessment_dto = assessment_cls(
+                id=assessment.id,
+                assessment_type=assessment.assessment_type,
+                due_date=assessment.due_date,
+                quiz=quiz_detail,
+                essay=essay_detail,
             )
 
         item_cls = CourseItemManageReadDTO if manage else CourseItemReadDTO
@@ -532,5 +735,5 @@ class CourseContentService:
             is_preview=item.is_preview,
             video=video_dto,
             document=document_dto,
-            quiz=quiz_dto,
+            assessment=assessment_dto,
         )

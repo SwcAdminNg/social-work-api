@@ -6,7 +6,14 @@ from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_admin_user, get_current_user
-from app.modules.user.dto import UserFilterParams, UserReadDTO, UserRoleUpdateDTO, UserUpdateDTO
+from app.modules.user.dto import (
+    ProfilePictureUploadRequest,
+    ProfilePictureUploadResponse,
+    UserFilterParams,
+    UserReadDTO,
+    UserRoleUpdateDTO,
+    UserUpdateDTO,
+)
 from app.modules.user.entity import User
 from app.modules.user.service import UserService
 
@@ -41,6 +48,20 @@ async def update_my_profile(
 ) -> ApiResponse[UserReadDTO]:
     updated_user = await UserService(db).update_profile(current_user, payload)
     return ApiResponse(message="Profile updated successfully", data=UserReadDTO.model_validate(updated_user))
+
+
+@router.post(
+    "/me/profile-picture-upload-url",
+    response_model=ApiResponse[ProfilePictureUploadResponse],
+    summary="Get a pre-signed URL to upload the current user's profile picture",
+)
+async def get_profile_picture_upload_url(
+    payload: ProfilePictureUploadRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ProfilePictureUploadResponse]:
+    data = await UserService(db).generate_profile_picture_upload_url(current_user, payload)
+    return ApiResponse(message="Upload URL generated successfully", data=data)
 
 
 @router.get("/{user_id}", response_model=ApiResponse[UserReadDTO], summary="Get user details by ID (admin only)")

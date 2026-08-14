@@ -11,6 +11,11 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.learning.dto import (
     CourseCurriculumDTO,
     EnrolledCourseDTO,
+    EssayDocumentFinalizeDTO,
+    EssaySubmissionDTO,
+    EssaySubmitTextDTO,
+    EssayUploadUrlRequestDTO,
+    EssayUploadUrlResponseDTO,
     LearningItemContentDTO,
     QuizResultDTO,
     QuizSubmitDTO,
@@ -113,8 +118,64 @@ async def submit_quiz(
 ) -> ApiResponse[QuizResultDTO]:
     service = LearningService(db)
     data = await service.submit_quiz(current_user.id, course_id, item_id, payload.answers)
-    message = "Quiz passed successfully" if data.passed else "Quiz failed, please try again"
+    if not data.result_visible:
+        message = "Quiz submitted successfully"
+    else:
+        message = "Quiz passed successfully" if data.passed else "Quiz failed, please try again"
     return ApiResponse(message=message, data=data)
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/essay/submit-text",
+    response_model=ApiResponse[EssaySubmissionDTO],
+    summary="Submit (or resubmit, until graded) a text essay answer",
+)
+async def submit_essay_text(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: EssaySubmitTextDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[EssaySubmissionDTO]:
+    service = LearningService(db)
+    data = await service.submit_essay_text(current_user.id, course_id, item_id, payload.content_text)
+    return ApiResponse(message="Essay submitted successfully", data=data)
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/essay/upload-url",
+    response_model=ApiResponse[EssayUploadUrlResponseDTO],
+    summary="Get a presigned URL to upload a document essay answer directly to R2",
+)
+async def request_essay_upload_url(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: EssayUploadUrlRequestDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[EssayUploadUrlResponseDTO]:
+    service = LearningService(db)
+    data = await service.request_essay_upload_url(current_user.id, course_id, item_id, payload.file_name)
+    return ApiResponse(message="Upload URL generated successfully", data=data)
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/essay/submit-document",
+    response_model=ApiResponse[EssaySubmissionDTO],
+    summary="Confirm a document essay upload to R2 completed (or resubmit, until graded)",
+)
+async def submit_essay_document(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: EssayDocumentFinalizeDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[EssaySubmissionDTO]:
+    service = LearningService(db)
+    data = await service.finalize_essay_document(
+        current_user.id, course_id, item_id, payload.storage_key, payload.file_name
+    )
+    return ApiResponse(message="Essay submitted successfully", data=data)
 
 
 @router.get(

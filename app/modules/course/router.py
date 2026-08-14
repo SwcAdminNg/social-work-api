@@ -9,6 +9,7 @@ from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user, get_current_user_optional, get_current_admin_user
 from app.modules.course.content_dto import (
+    CourseAssessmentUpdateDTO,
     CourseDetailDTO,
     CourseItemCreateDTO,
     CourseItemManageReadDTO,
@@ -23,6 +24,8 @@ from app.modules.course.content_dto import (
     CourseSectionUpdateDTO,
     DocumentFinalizeDTO,
     DocumentUploadCredentialsDTO,
+    EssayGradeDTO,
+    EssaySubmissionListItemDTO,
     QuizOptionCreateDTO,
     QuizOptionUpdateDTO,
     QuizQuestionCreateDTO,
@@ -244,7 +247,7 @@ async def list_enrolled_courses(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[CourseReadDTO]:
     service = CourseService(db)
-    items, total = await service.list_enrolled(current_user, pagination, filters.search)
+    items, total = await service.list_enrolled(current_user, pagination, filters.search, filters.status)
     data = PaginatedResponse.create(
         items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
@@ -253,6 +256,7 @@ async def list_enrolled_courses(
     bookmark_ids = await service.get_bookmark_ids(current_user, [item.id for item in data.data])
     for item in data.data:
         item.is_bookmarked = item.id in bookmark_ids
+        item.is_enrolled = True
     await service.attach_progress_status(data.data, current_user)
 
     return data
@@ -275,8 +279,10 @@ async def list_bookmarked_courses(
     )
     await service.attach_instructors(data.data)
 
+    enrolled_ids, _ = await service.get_course_access_details(current_user, [item.id for item in data.data])
     for item in data.data:
         item.is_bookmarked = True
+        item.is_enrolled = item.id in enrolled_ids
     await service.attach_progress_status(data.data, current_user)
 
     return data
@@ -682,7 +688,8 @@ async def create_quiz_question(
     ]
     data = CourseQuizQuestionManageDTO(
         id=question.id, text=question.text, order_index=question.order_index,
-        allow_multiple_answers=question.allow_multiple_answers, options=options,
+        allow_multiple_answers=question.allow_multiple_answers,
+        multi_answer_mode=question.multi_answer_mode, options=options,
     )
     return ApiResponse(message="Question created successfully", data=data)
 
@@ -762,3 +769,62 @@ async def delete_quiz_option(
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_option(option_id, current_user)
     return ApiResponse(message="Option deleted successfully")
+
+
+# ---------------------------------------------------------------------------
+# Assessment settings (quiz/essay - shared)
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/items/{item_id}/assessment",
+    response_model=ApiResponse[None],
+    summary="Update assessment settings: due date, and quiz (max attempts/pass mark/"
+    "show result) or essay (question/description/submission mode) settings "
+    "(admin or owning instructor)",
+)
+async def update_assessment_settings(
+    item_id: uuid.UUID,
+    payload: CourseAssessmentUpdateDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseContentService(db).update_assessment_settings(item_id, payload, current_user)
+    return ApiResponse(message="Assessment settings updated successfully")
+
+
+# ---------------------------------------------------------------------------
+# Essay grading (admin or owning instructor)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/items/{item_id}/essay/submissions",
+    response_model=PaginatedResponse[EssaySubmissionListItemDTO],
+    summary="List student submissions for an essay item (admin or owning instructor)",
+)
+async def list_essay_submissions(
+    item_id: uuid.UUID,
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[EssaySubmissionListItemDTO]:
+    items, total = await CourseContentService(db).list_essay_submissions(item_id, pagination, current_user)
+    return PaginatedResponse.create(items=items, total_items=total, params=pagination)
+
+
+@router.post(
+    "/items/{item_id}/essay/submissions/{user_id}/grade",
+    response_model=ApiResponse[None],
+    summary="Score a student's essay submission and optionally publish the result "
+    "(admin or owning instructor)",
+)
+async def grade_essay_submission(
+    item_id: uuid.UUID,
+    user_id: uuid.UUID,
+    payload: EssayGradeDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseContentService(db).grade_essay_submission(item_id, user_id, payload, current_user)
+    return ApiResponse(message="Essay graded successfully")

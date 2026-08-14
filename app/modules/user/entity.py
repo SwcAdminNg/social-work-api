@@ -45,6 +45,7 @@ class User(BaseEntity):
         server_default=UserTypeEnum.USER.value,
     )
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    profile_picture_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     # Nullable to support admin-invited users: their row is created before they set
     # a password, via the invite-acceptance flow (see AdminInviteToken).
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)

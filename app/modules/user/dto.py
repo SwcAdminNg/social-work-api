@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import Query
 from pydantic import Field
 
-from app.common.base_dto import AuditDTO, BaseDTO, UpdateDTO
+from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.user.entity import GenderEnum, PlatformEnum, UserTypeEnum
 
 
@@ -17,6 +17,7 @@ class UserReadDTO(AuditDTO):
     gender: GenderEnum | None = None
     user_type: UserTypeEnum
     address: str | None = None
+    profile_picture_url: str | None = None
     is_active: bool
     is_suspended: bool
     last_login_at: datetime | None = None
@@ -50,3 +51,13 @@ class UserFilterParams:
 
 class UserRoleUpdateDTO(BaseDTO):
     role: UserTypeEnum
+
+
+class ProfilePictureUploadRequest(CreateDTO):
+    file_name: str
+    content_type: str
+
+
+class ProfilePictureUploadResponse(CreateDTO):
+    upload_url: str
+    profile_picture_url: str

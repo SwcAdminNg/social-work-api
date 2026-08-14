@@ -4,7 +4,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
-from app.modules.user.dto import UserFilterParams, UserUpdateDTO
+from app.core.storage import get_r2_client
+from app.modules.user.dto import ProfilePictureUploadRequest, ProfilePictureUploadResponse, UserFilterParams, UserUpdateDTO
 from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
 
@@ -29,6 +30,26 @@ class UserService:
         await self.repository.update(user)
         await self.session.commit()
         return user
+
+    async def generate_profile_picture_upload_url(
+        self, user: User, payload: ProfilePictureUploadRequest
+    ) -> ProfilePictureUploadResponse:
+        r2_client = get_r2_client()
+
+        if user.profile_picture_url:
+            from app.core.config import settings
+            old_key = user.profile_picture_url.replace(f"{settings.r2_public_url.rstrip('/')}/", "")
+            r2_client.delete_object(old_key)
+
+        avatar_key = r2_client.build_avatar_key(user.id, payload.file_name)
+        upload_url = r2_client.generate_upload_url(avatar_key, payload.content_type)
+
+        public_url = r2_client.get_public_url(avatar_key)
+        user.profile_picture_url = public_url
+        await self.repository.update(user)
+        await self.session.commit()
+
+        return ProfilePictureUploadResponse(upload_url=upload_url, profile_picture_url=public_url)
 
     async def list(
         self, pagination: PaginationParams, filters: UserFilterParams | None = None

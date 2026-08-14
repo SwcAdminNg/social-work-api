@@ -9,7 +9,8 @@ from app.common.pagination import PaginationParams
 
 from app.modules.course.access_entity import UserCourseAccess
 from app.modules.course.entity import Course, CourseItem, CourseSection
-from app.modules.learning.entity import QuizAttempt, UserCourseProgress, UserItemProgress
+from app.modules.learning.entity import EssaySubmission, QuizAttempt, UserCourseProgress, UserItemProgress
+from app.modules.user.entity import User
 
 
 class LearningRepository:
@@ -78,6 +79,84 @@ class LearningRepository:
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
+    async def count_quiz_attempts(self, user_id: uuid.UUID, item_id: uuid.UUID) -> int:
+        stmt = select(func.count(QuizAttempt.id)).where(
+            QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id
+        )
+        return (await self.session.execute(stmt)).scalar() or 0
+
+    # -- essay submissions -----------------------------------------------------
+
+    async def get_essay_submission(self, user_id: uuid.UUID, item_id: uuid.UUID) -> EssaySubmission | None:
+        stmt = select(EssaySubmission).where(
+            EssaySubmission.user_id == user_id, EssaySubmission.item_id == item_id
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def upsert_essay_submission(
+        self,
+        user_id: uuid.UUID,
+        item_id: uuid.UUID,
+        content_text: str | None = None,
+        document_storage_key: str | None = None,
+        document_file_name: str | None = None,
+    ) -> EssaySubmission:
+        submission = await self.get_essay_submission(user_id, item_id)
+        now = datetime.now(timezone.utc)
+        if submission is None:
+            submission = EssaySubmission(
+                user_id=user_id,
+                item_id=item_id,
+                content_text=content_text,
+                document_storage_key=document_storage_key,
+                document_file_name=document_file_name,
+                submitted_at=now,
+            )
+            self.session.add(submission)
+        else:
+            if content_text is not None:
+                submission.content_text = content_text
+                submission.document_storage_key = None
+                submission.document_file_name = None
+            if document_storage_key is not None:
+                submission.document_storage_key = document_storage_key
+                submission.document_file_name = document_file_name
+                submission.content_text = None
+            submission.submitted_at = now
+        await self.session.flush()
+        return submission
+
+    async def list_essay_submissions_for_item(
+        self, item_id: uuid.UUID, pagination: PaginationParams
+    ) -> tuple[list[tuple[EssaySubmission, User]], int]:
+        stmt = (
+            select(EssaySubmission, User)
+            .join(User, User.id == EssaySubmission.user_id)
+            .where(EssaySubmission.item_id == item_id)
+        )
+        total_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(total_stmt)).scalar_one()
+
+        stmt = stmt.order_by(EssaySubmission.submitted_at.desc()).limit(pagination.limit).offset(pagination.offset)
+        result = await self.session.execute(stmt)
+        return result.all(), total
+
+    async def grade_essay_submission(
+        self,
+        submission: EssaySubmission,
+        score: float,
+        feedback: str | None,
+        is_published: bool,
+        graded_by: uuid.UUID,
+    ) -> EssaySubmission:
+        submission.score = score
+        submission.feedback = feedback
+        submission.is_published = is_published
+        submission.graded_by = graded_by
+        submission.graded_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return submission
+
     async def count_course_items(self, course_id: uuid.UUID) -> int:
         stmt = (
             select(func.count(CourseItem.id))
@@ -145,8 +224,9 @@ class LearningRepository:
     ):
         from app.modules.course.entity import Course, CourseSection, CourseItem, CourseItemTypeEnum
         from app.modules.course.access_entity import UserCourseAccess
+        from app.modules.course.content_entity import AssessmentTypeEnum, CourseAssessment
         from sqlalchemy.orm import aliased
-        
+
         subq = (
             select(
                 QuizAttempt.item_id,
@@ -156,27 +236,29 @@ class LearningRepository:
             .group_by(QuizAttempt.item_id)
             .subquery()
         )
-        
+
         latest_attempt = aliased(QuizAttempt)
-        
+
         stmt = (
             select(CourseItem, Course, latest_attempt)
             .join(CourseSection, CourseItem.section_id == CourseSection.id)
             .join(Course, CourseSection.course_id == Course.id)
             .join(UserCourseAccess, UserCourseAccess.course_id == Course.id)
+            .join(CourseAssessment, CourseAssessment.course_item_id == CourseItem.id)
             .outerjoin(
                 subq,
                 CourseItem.id == subq.c.item_id
             )
             .outerjoin(
                 latest_attempt,
-                (latest_attempt.item_id == CourseItem.id) & 
+                (latest_attempt.item_id == CourseItem.id) &
                 (latest_attempt.user_id == user_id) &
                 (latest_attempt.created_at == subq.c.latest_attempt_at)
             )
             .where(
                 UserCourseAccess.user_id == user_id,
-                CourseItem.item_type == CourseItemTypeEnum.QUIZ,
+                CourseItem.item_type == CourseItemTypeEnum.ASSESSMENT,
+                CourseAssessment.assessment_type == AssessmentTypeEnum.QUIZ,
                 CourseItem.deleted_at.is_(None),
                 CourseSection.deleted_at.is_(None),
                 Course.deleted_at.is_(None)

@@ -24,6 +24,7 @@ class CourseInstructorInputDTO(CreateDTO):
 class CourseInstructorReadDTO(BaseDTO):
     user_id: uuid.UUID | None = None
     name: str
+    profile_picture_url: str | None = None
 
 
 class _TimedAccessValidatorMixin:
@@ -129,6 +130,7 @@ class CourseReadDTO(AuditDTO):
     access_end_date: datetime | None = None
     instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
     is_bookmarked: bool = False
+    is_enrolled: bool = False
     progress_status: CourseProgressStatusEnum | None = Field(
         default=None,
         description="The current user's progress on this course. Only set when the "
@@ -166,7 +168,6 @@ class PublicCourseCatalogReadDTO(CourseCatalogReadDTO):
 
 
 class PublicCourseReadDTO(CourseReadDTO):
-    is_enrolled: bool = False
     has_access: bool = False
 
 
@@ -179,8 +180,12 @@ class EnrolledCourseFilterParams:
         search: str | None = Query(
             None, description="Search by course title/description or instructor name"
         ),
+        status: CourseProgressStatusEnum | None = Query(
+            None, description="Filter by progress status: NOT_STARTED, IN_PROGRESS, or COMPLETED"
+        ),
     ) -> None:
         self.search = search
+        self.status = status
 
 
 class CourseFilterParams:

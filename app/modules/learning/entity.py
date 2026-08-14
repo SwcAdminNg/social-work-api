@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,3 +48,24 @@ class QuizAttempt(BaseEntity):
     score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     answers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class EssaySubmission(BaseEntity):
+    __tablename__ = "essay_submissions"
+    __table_args__ = (UniqueConstraint("user_id", "item_id", name="uq_essay_submissions_user_item"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), nullable=False, index=True
+    )
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    document_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

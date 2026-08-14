@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
-from app.modules.course.dto import CourseFilterParams, CourseManageFilterParams
+from app.modules.course.dto import CourseFilterParams, CourseManageFilterParams, CourseProgressStatusEnum
 from app.modules.course.entity import Course, CourseCatalog
 from app.modules.course.instructor_entity import CourseInstructor
 
@@ -86,9 +86,14 @@ class CourseRepository(BaseRepository[Course]):
         return items, total
 
     async def list_enrolled(
-        self, user_id: uuid.UUID, pagination: PaginationParams, search: str | None = None
+        self,
+        user_id: uuid.UUID,
+        pagination: PaginationParams,
+        search: str | None = None,
+        status: CourseProgressStatusEnum | None = None,
     ) -> tuple[Sequence[Course], int]:
         from app.modules.course.access_entity import UserCourseAccess
+        from app.modules.learning.entity import UserCourseProgress
 
         stmt = (
             self._base_select()
@@ -101,6 +106,25 @@ class CourseRepository(BaseRepository[Course]):
             stmt = stmt.where(
                 or_(Course.title.ilike(term), Course.description.ilike(term), Course.id.in_(name_match_stmt))
             )
+
+        if status is not None:
+            stmt = stmt.outerjoin(
+                UserCourseProgress,
+                (UserCourseProgress.course_id == Course.id) & (UserCourseProgress.user_id == user_id),
+            )
+            if status == CourseProgressStatusEnum.COMPLETED:
+                stmt = stmt.where(UserCourseProgress.is_completed.is_(True))
+            elif status == CourseProgressStatusEnum.IN_PROGRESS:
+                stmt = stmt.where(
+                    UserCourseProgress.is_completed.is_(False), UserCourseProgress.progress_percent > 0
+                )
+            else:  # NOT_STARTED - no progress row yet, or a row stuck at 0%
+                stmt = stmt.where(
+                    or_(
+                        UserCourseProgress.id.is_(None),
+                        (UserCourseProgress.is_completed.is_(False)) & (UserCourseProgress.progress_percent == 0),
+                    )
+                )
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()

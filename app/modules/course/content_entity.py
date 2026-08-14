@@ -1,7 +1,8 @@
 import enum
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,24 +55,78 @@ class CourseDocument(BaseEntity):
     is_uploaded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
-class CourseQuiz(BaseEntity):
-    __tablename__ = "course_quizzes"
+class AssessmentTypeEnum(str, enum.Enum):
+    """The set of pluggable assessment kinds. To add a new one: add a member here,
+    a settings table keyed by `assessment_id` (see `CourseQuizSettings`/`CourseEssaySettings`),
+    and branch on it in `CourseContentService`/`LearningService`."""
+
+    QUIZ = "QUIZ"
+    ESSAY = "ESSAY"
+
+
+class MultiAnswerModeEnum(str, enum.Enum):
+    AND = "AND"
+    OR = "OR"
+
+
+class EssaySubmissionModeEnum(str, enum.Enum):
+    TEXT = "TEXT"
+    DOCUMENT = "DOCUMENT"
+
+
+class CourseAssessment(BaseEntity):
+    """Polymorphic parent row for a course item's assessment. The actual settings
+    live in a type-specific table (`CourseQuizSettings`/`CourseEssaySettings`) keyed
+    by `assessment_id`, matching the `course_item_id`-keyed pattern used by
+    `CourseVideo`/`CourseDocument`."""
+
+    __tablename__ = "course_assessments"
 
     course_item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("course_items.id"), unique=True, nullable=False, index=True
     )
-    passing_score_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=70)
+    assessment_type: Mapped[AssessmentTypeEnum] = mapped_column(
+        Enum(AssessmentTypeEnum, name="assessment_type_enum", native_enum=True), nullable=False
+    )
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CourseQuizSettings(BaseEntity):
+    __tablename__ = "course_quiz_settings"
+
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_assessments.id"), unique=True, nullable=False, index=True
+    )
+    max_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pass_mark_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=70)
+    show_result_to_student: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class CourseEssaySettings(BaseEntity):
+    __tablename__ = "course_essay_settings"
+
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_assessments.id"), unique=True, nullable=False, index=True
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    submission_mode: Mapped[EssaySubmissionModeEnum] = mapped_column(
+        Enum(EssaySubmissionModeEnum, name="essay_submission_mode_enum", native_enum=True), nullable=False
+    )
 
 
 class CourseQuizQuestion(BaseEntity):
     __tablename__ = "course_quiz_questions"
 
-    quiz_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("course_quizzes.id"), nullable=False, index=True
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_assessments.id"), nullable=False, index=True
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     allow_multiple_answers: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    multi_answer_mode: Mapped[MultiAnswerModeEnum | None] = mapped_column(
+        Enum(MultiAnswerModeEnum, name="multi_answer_mode_enum", native_enum=True), nullable=True
+    )
 
 
 class CourseQuizOption(BaseEntity):

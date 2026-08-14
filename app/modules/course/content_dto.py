@@ -1,9 +1,15 @@
 import uuid
+from datetime import datetime
 
 from pydantic import Field
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
-from app.modules.course.content_entity import VideoStatusEnum
+from app.modules.course.content_entity import (
+    AssessmentTypeEnum,
+    EssaySubmissionModeEnum,
+    MultiAnswerModeEnum,
+    VideoStatusEnum,
+)
 from app.modules.course.dto import CourseReadDTO, PublicCourseReadDTO
 from app.modules.course.entity import CourseItemTypeEnum
 
@@ -32,6 +38,35 @@ class CourseSectionReorderDTO(BaseDTO):
 
 
 # ---------------------------------------------------------------------------
+# Assessment settings - shared by item creation and the settings-patch endpoint
+# ---------------------------------------------------------------------------
+
+
+class CourseQuizSettingsInDTO(CreateDTO):
+    max_attempts: int | None = Field(default=None, ge=1)
+    pass_mark_percentage: int = Field(default=70, ge=0, le=100)
+    show_result_to_student: bool = True
+
+
+class CourseQuizSettingsPatchDTO(UpdateDTO):
+    max_attempts: int | None = Field(default=None, ge=1)
+    pass_mark_percentage: int | None = Field(default=None, ge=0, le=100)
+    show_result_to_student: bool | None = None
+
+
+class CourseEssaySettingsInDTO(CreateDTO):
+    question: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    submission_mode: EssaySubmissionModeEnum
+
+
+class CourseEssaySettingsPatchDTO(UpdateDTO):
+    question: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None, min_length=1)
+    submission_mode: EssaySubmissionModeEnum | None = None
+
+
+# ---------------------------------------------------------------------------
 # Items - create/update payloads
 # ---------------------------------------------------------------------------
 
@@ -43,6 +78,21 @@ class CourseItemCreateDTO(CreateDTO):
     is_preview: bool = False
     # Required only when item_type == DOCUMENT, used to build the R2 storage key.
     file_name: str | None = Field(default=None, max_length=255)
+    # Required only when item_type == ASSESSMENT.
+    assessment_type: AssessmentTypeEnum | None = None
+    due_date: datetime | None = None
+    quiz_settings: CourseQuizSettingsInDTO | None = None
+    essay_settings: CourseEssaySettingsInDTO | None = None
+
+
+class CourseAssessmentUpdateDTO(UpdateDTO):
+    """Partial update for assessment-level settings. Use `model_dump(exclude_unset=True)`
+    so an omitted `due_date` leaves it untouched while an explicit `"due_date": null`
+    clears it."""
+
+    due_date: datetime | None = None
+    quiz_settings: CourseQuizSettingsPatchDTO | None = None
+    essay_settings: CourseEssaySettingsPatchDTO | None = None
 
 
 class CourseItemUpdateDTO(UpdateDTO):
@@ -134,6 +184,10 @@ class QuizQuestionCreateDTO(CreateDTO):
     text: str = Field(min_length=1)
     order_index: int = 0
     allow_multiple_answers: bool = False
+    # Only meaningful when allow_multiple_answers is True; defaults to OR (partial
+    # credit for each correctly ticked option) when left unset. Must be omitted/None
+    # for single-answer questions.
+    multi_answer_mode: MultiAnswerModeEnum | None = None
     options: list[QuizOptionCreateDTO] = Field(default_factory=list)
 
 
@@ -141,6 +195,7 @@ class QuizQuestionUpdateDTO(UpdateDTO):
     text: str | None = Field(default=None, min_length=1)
     order_index: int | None = None
     allow_multiple_answers: bool | None = None
+    multi_answer_mode: MultiAnswerModeEnum | None = None
 
 
 class CourseQuizOptionPublicDTO(BaseDTO):
@@ -158,6 +213,7 @@ class CourseQuizQuestionPublicDTO(BaseDTO):
     text: str
     order_index: int
     allow_multiple_answers: bool
+    multi_answer_mode: MultiAnswerModeEnum | None
     options: list[CourseQuizOptionPublicDTO]
 
 
@@ -166,19 +222,49 @@ class CourseQuizQuestionManageDTO(BaseDTO):
     text: str
     order_index: int
     allow_multiple_answers: bool
+    multi_answer_mode: MultiAnswerModeEnum | None
     options: list[CourseQuizOptionManageDTO]
 
 
-class CourseQuizPublicDTO(BaseDTO):
-    id: uuid.UUID
-    passing_score_percentage: int
+class CourseQuizDetailDTO(BaseDTO):
+    max_attempts: int | None
+    pass_mark_percentage: int
+    show_result_to_student: bool
     questions: list[CourseQuizQuestionPublicDTO]
 
 
-class CourseQuizManageDTO(BaseDTO):
-    id: uuid.UUID
-    passing_score_percentage: int
+class CourseQuizManageDetailDTO(BaseDTO):
+    max_attempts: int | None
+    pass_mark_percentage: int
+    show_result_to_student: bool
     questions: list[CourseQuizQuestionManageDTO]
+
+
+class CourseEssayDetailDTO(BaseDTO):
+    question: str
+    description: str
+    submission_mode: EssaySubmissionModeEnum
+
+
+# ---------------------------------------------------------------------------
+# Assessment - the item-level wrapper around quiz/essay settings
+# ---------------------------------------------------------------------------
+
+
+class CourseAssessmentPublicDTO(BaseDTO):
+    id: uuid.UUID
+    assessment_type: AssessmentTypeEnum
+    due_date: datetime | None
+    quiz: CourseQuizDetailDTO | None = None
+    essay: CourseEssayDetailDTO | None = None
+
+
+class CourseAssessmentManageDTO(BaseDTO):
+    id: uuid.UUID
+    assessment_type: AssessmentTypeEnum
+    due_date: datetime | None
+    quiz: CourseQuizManageDetailDTO | None = None
+    essay: CourseEssayDetailDTO | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +281,7 @@ class CourseItemReadDTO(AuditDTO):
     is_preview: bool
     video: CourseVideoPublicDTO | None = None
     document: CourseDocumentPublicDTO | None = None
-    quiz: CourseQuizPublicDTO | None = None
+    assessment: CourseAssessmentPublicDTO | None = None
 
 
 class CourseItemManageReadDTO(AuditDTO):
@@ -206,7 +292,7 @@ class CourseItemManageReadDTO(AuditDTO):
     is_preview: bool
     video: CourseVideoManageDTO | None = None
     document: CourseDocumentManageDTO | None = None
-    quiz: CourseQuizManageDTO | None = None
+    assessment: CourseAssessmentManageDTO | None = None
 
 
 class CourseSectionReadDTO(AuditDTO):
@@ -233,3 +319,27 @@ class CourseManageDetailDTO(CourseReadDTO):
 
 class PublicCourseDetailDTO(PublicCourseReadDTO):
     sections: list[CourseSectionReadDTO] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Essay grading (instructor/admin side)
+# ---------------------------------------------------------------------------
+
+
+class EssaySubmissionListItemDTO(BaseDTO):
+    user_id: uuid.UUID
+    user_full_name: str
+    user_email: str
+    content_text: str | None
+    document_file_name: str | None
+    document_download_url: str | None
+    submitted_at: datetime
+    score: float | None
+    is_published: bool
+    feedback: str | None
+
+
+class EssayGradeDTO(CreateDTO):
+    score: float = Field(ge=0, le=100)
+    feedback: str | None = None
+    is_published: bool = False

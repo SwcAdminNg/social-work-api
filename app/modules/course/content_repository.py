@@ -5,10 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.course.content_entity import (
+    CourseAssessment,
     CourseDocument,
-    CourseQuiz,
+    CourseEssaySettings,
     CourseQuizOption,
     CourseQuizQuestion,
+    CourseQuizSettings,
     CourseVideo,
 )
 from app.modules.course.entity import CourseItem, CourseSection
@@ -77,24 +79,44 @@ class CourseContentRepository:
         stmt = select(CourseDocument).where(CourseDocument.course_item_id.in_(item_ids))
         return (await self.session.execute(stmt)).scalars().all()
 
-    # -- quiz -------------------------------------------------------------------
+    # -- assessment ---------------------------------------------------------------
 
-    async def get_quiz_by_item(self, item_id: uuid.UUID) -> CourseQuiz | None:
-        stmt = select(CourseQuiz).where(CourseQuiz.course_item_id == item_id)
+    async def get_assessment_by_item(self, item_id: uuid.UUID) -> CourseAssessment | None:
+        stmt = select(CourseAssessment).where(CourseAssessment.course_item_id == item_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_quizzes_for_items(self, item_ids: Sequence[uuid.UUID]) -> Sequence[CourseQuiz]:
+    async def list_assessments_for_items(self, item_ids: Sequence[uuid.UUID]) -> Sequence[CourseAssessment]:
         if not item_ids:
             return []
-        stmt = select(CourseQuiz).where(CourseQuiz.course_item_id.in_(item_ids))
+        stmt = select(CourseAssessment).where(CourseAssessment.course_item_id.in_(item_ids))
         return (await self.session.execute(stmt)).scalars().all()
 
-    async def list_questions_for_quizzes(self, quiz_ids: Sequence[uuid.UUID]) -> Sequence[CourseQuizQuestion]:
-        if not quiz_ids:
+    async def get_quiz_settings(self, assessment_id: uuid.UUID) -> CourseQuizSettings | None:
+        stmt = select(CourseQuizSettings).where(CourseQuizSettings.assessment_id == assessment_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_quiz_settings(self, assessment_ids: Sequence[uuid.UUID]) -> Sequence[CourseQuizSettings]:
+        if not assessment_ids:
+            return []
+        stmt = select(CourseQuizSettings).where(CourseQuizSettings.assessment_id.in_(assessment_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    async def get_essay_settings(self, assessment_id: uuid.UUID) -> CourseEssaySettings | None:
+        stmt = select(CourseEssaySettings).where(CourseEssaySettings.assessment_id == assessment_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_essay_settings(self, assessment_ids: Sequence[uuid.UUID]) -> Sequence[CourseEssaySettings]:
+        if not assessment_ids:
+            return []
+        stmt = select(CourseEssaySettings).where(CourseEssaySettings.assessment_id.in_(assessment_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    async def list_questions_for_quizzes(self, assessment_ids: Sequence[uuid.UUID]) -> Sequence[CourseQuizQuestion]:
+        if not assessment_ids:
             return []
         stmt = (
             select(CourseQuizQuestion)
-            .where(CourseQuizQuestion.quiz_id.in_(quiz_ids), CourseQuizQuestion.deleted_at.is_(None))
+            .where(CourseQuizQuestion.assessment_id.in_(assessment_ids), CourseQuizQuestion.deleted_at.is_(None))
             .order_by(CourseQuizQuestion.order_index)
         )
         return (await self.session.execute(stmt)).scalars().all()

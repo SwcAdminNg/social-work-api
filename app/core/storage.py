@@ -27,6 +27,12 @@ class R2Client:
     def build_thumbnail_key(self, course_id: uuid.UUID, file_name: str) -> str:
         return f"courses/{course_id}/thumbnails/{uuid.uuid4()}-{file_name}"
 
+    def build_avatar_key(self, user_id: uuid.UUID, file_name: str) -> str:
+        return f"users/{user_id}/avatar/{uuid.uuid4()}-{file_name}"
+
+    def build_essay_document_key(self, item_id: uuid.UUID, user_id: uuid.UUID, file_name: str) -> str:
+        return f"essays/{item_id}/{user_id}/{uuid.uuid4()}-{file_name}"
+
     def generate_upload_url(self, key: str, content_type: str | None = None) -> str:
         params = {"Bucket": settings.r2_bucket_name, "Key": key}
         if content_type:

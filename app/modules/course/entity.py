@@ -33,7 +33,7 @@ class CourseCategoryEnum(str, enum.Enum):
 
 
 class CourseItemTypeEnum(str, enum.Enum):
-    QUIZ = "QUIZ"
+    ASSESSMENT = "ASSESSMENT"
     DOCUMENT = "DOCUMENT"
     VIDEO = "VIDEO"
 
@@ -113,4 +113,3 @@ class CourseItem(BaseEntity):
     )
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_preview: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    passing_score: Mapped[int | None] = mapped_column(Integer, nullable=True, default=70)

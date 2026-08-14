@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.avatar import build_initials_avatar_url
 from app.common.pagination import PaginationParams
 from app.common.slug import ensure_unique_slug, slugify
 from app.core.storage import get_r2_client
@@ -101,15 +102,17 @@ class CourseService:
         if not course_ids:
             return {}
         stmt = (
-            select(CourseInstructor)
+            select(CourseInstructor, User.profile_picture_url)
+            .outerjoin(User, User.id == CourseInstructor.user_id)
             .where(CourseInstructor.course_id.in_(course_ids), CourseInstructor.deleted_at.is_(None))
             .order_by(CourseInstructor.order_index.asc())
         )
-        rows = (await self.session.execute(stmt)).scalars().all()
+        rows = (await self.session.execute(stmt)).all()
         result: dict[uuid.UUID, list[CourseInstructorReadDTO]] = {}
-        for row in rows:
+        for row, user_picture_url in rows:
+            picture_url = user_picture_url or build_initials_avatar_url(row.name)
             result.setdefault(row.course_id, []).append(
-                CourseInstructorReadDTO(user_id=row.user_id, name=row.name)
+                CourseInstructorReadDTO(user_id=row.user_id, name=row.name, profile_picture_url=picture_url)
             )
         return result
 
@@ -208,9 +211,13 @@ class CourseService:
         return items, total
 
     async def list_enrolled(
-        self, current_user: User, pagination: PaginationParams, search: str | None = None
+        self,
+        current_user: User,
+        pagination: PaginationParams,
+        search: str | None = None,
+        status: CourseProgressStatusEnum | None = None,
     ) -> tuple[Sequence[Course], int]:
-        return await self.repository.list_enrolled(current_user.id, pagination, search)
+        return await self.repository.list_enrolled(current_user.id, pagination, search, status)
 
     async def list_recent_courses(self, pagination: PaginationParams) -> tuple[Sequence[Course], int]:
         cache_key = f"courses:recent:page_{pagination.page}:size_{pagination.page_size}"
