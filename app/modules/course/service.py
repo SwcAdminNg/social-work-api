@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.avatar import build_initials_avatar_url
+from app.common.duration import format_estimated_duration
 from app.common.pagination import PaginationParams
 from app.common.slug import ensure_unique_slug, slugify
 from app.core.storage import get_r2_client
@@ -168,6 +169,19 @@ class CourseService:
         instructors_map = await self.get_instructors_map([dto.id for dto in dtos])
         for dto in dtos:
             dto.instructors = instructors_map.get(dto.id, [])
+
+    async def attach_estimated_time(self, dtos) -> None:
+        """Mutates a list of CourseReadDTO/PublicCourseReadDTO in place, filling
+        `estimated_total_minutes`/`estimated_duration` from the sum of each item's
+        `estimated_minutes`. Always queried live (never cached), same as
+        `attach_instructors`, so it stays accurate as curriculum items change."""
+        if not dtos:
+            return
+        totals = await self.repository.sum_estimated_minutes_by_course([dto.id for dto in dtos])
+        for dto in dtos:
+            total = totals.get(dto.id, 0)
+            dto.estimated_total_minutes = total or None
+            dto.estimated_duration = format_estimated_duration(total) if total else None
 
     async def list_published(
         self, pagination: PaginationParams, filters: CourseFilterParams | None = None

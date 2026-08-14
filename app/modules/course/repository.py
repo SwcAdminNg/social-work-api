@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
 from app.modules.course.dto import CourseFilterParams, CourseManageFilterParams, CourseProgressStatusEnum
-from app.modules.course.entity import Course, CourseCatalog
+from app.modules.course.entity import Course, CourseCatalog, CourseItem, CourseSection
 from app.modules.course.instructor_entity import CourseInstructor
 
 
@@ -19,6 +19,23 @@ class CourseRepository(BaseRepository[Course]):
         stmt = self._base_select().where(Course.slug == slug)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def sum_estimated_minutes_by_course(self, course_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]:
+        if not course_ids:
+            return {}
+        stmt = (
+            select(CourseSection.course_id, func.coalesce(func.sum(CourseItem.estimated_minutes), 0))
+            .select_from(CourseItem)
+            .join(CourseSection, CourseItem.section_id == CourseSection.id)
+            .where(
+                CourseSection.course_id.in_(course_ids),
+                CourseItem.deleted_at.is_(None),
+                CourseSection.deleted_at.is_(None),
+            )
+            .group_by(CourseSection.course_id)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {row[0]: int(row[1]) for row in rows}
 
     def _apply_filters(self, stmt, filters: CourseFilterParams | None, catalog_categories: list[str] | None = None):
         if filters is None:

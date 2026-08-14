@@ -76,6 +76,8 @@ class CourseItemCreateDTO(CreateDTO):
     item_type: CourseItemTypeEnum
     order_index: int = 0
     is_preview: bool = False
+    # Optional estimate of how long a learner takes to get through this item.
+    estimated_minutes: int | None = Field(default=None, ge=0)
     # Required only when item_type == DOCUMENT, used to build the R2 storage key.
     file_name: str | None = Field(default=None, max_length=255)
     # Required only when item_type == ASSESSMENT.
@@ -99,6 +101,7 @@ class CourseItemUpdateDTO(UpdateDTO):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     order_index: int | None = None
     is_preview: bool | None = None
+    estimated_minutes: int | None = Field(default=None, ge=0)
 
 
 class ItemOrderEntryDTO(BaseDTO):
@@ -279,6 +282,7 @@ class CourseItemReadDTO(AuditDTO):
     item_type: CourseItemTypeEnum
     order_index: int
     is_preview: bool
+    estimated_minutes: int | None = None
     video: CourseVideoPublicDTO | None = None
     document: CourseDocumentPublicDTO | None = None
     assessment: CourseAssessmentPublicDTO | None = None
@@ -290,6 +294,7 @@ class CourseItemManageReadDTO(AuditDTO):
     item_type: CourseItemTypeEnum
     order_index: int
     is_preview: bool
+    estimated_minutes: int | None = None
     video: CourseVideoManageDTO | None = None
     document: CourseDocumentManageDTO | None = None
     assessment: CourseAssessmentManageDTO | None = None

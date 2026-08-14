@@ -11,6 +11,7 @@ from app.modules.course.content_entity import AssessmentTypeEnum, EssaySubmissio
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.dto import (
+    AssessmentStatsDTO,
     CourseCurriculumDTO,
     EnrolledCourseDTO,
     EssaySubmissionDTO,
@@ -21,6 +22,8 @@ from app.modules.learning.dto import (
     QuizAttemptDTO,
     QuizQuestionDTO,
     QuizResultDTO,
+    UserAssessmentDTO,
+    UserAssessmentStatusEnum,
 )
 from app.common.pagination import PaginationParams
 from app.core.storage import get_r2_client
@@ -144,7 +147,8 @@ class LearningService:
             section_items = [i for i in items if i.section_id == section.id]
             item_dtos = [
                 LearningItemDTO(
-                    id=i.id, title=i.title, item_type=i.item_type, is_completed=i.id in completed_item_ids
+                    id=i.id, title=i.title, item_type=i.item_type, is_completed=i.id in completed_item_ids,
+                    estimated_minutes=i.estimated_minutes,
                 )
                 for i in section_items
             ]
@@ -170,7 +174,8 @@ class LearningService:
         is_completed = item_progress.is_completed if item_progress else False
 
         dto = LearningItemContentDTO(
-            id=item.id, title=item.title, item_type=item.item_type, is_completed=is_completed
+            id=item.id, title=item.title, item_type=item.item_type, is_completed=is_completed,
+            estimated_minutes=item.estimated_minutes,
         )
 
         if item.item_type == CourseItemTypeEnum.VIDEO:
@@ -435,37 +440,178 @@ class LearningService:
             },
         )
 
-    async def list_user_quizzes(
+    async def _list_all_user_assessment_dtos(
+        self,
+        user_id: uuid.UUID,
+        course_id: uuid.UUID | None = None,
+        assessment_type_filter: str | None = None,
+    ) -> list[UserAssessmentDTO]:
+        rows = await self.repo.list_user_assessments(
+            user_id, course_id, assessment_type_filter.upper() if assessment_type_filter else None
+        )
+
+        result = []
+        for course_item, course, assessment, quiz_settings, latest_attempt, essay_submission, attempts_used in rows:
+            if assessment.assessment_type == AssessmentTypeEnum.QUIZ:
+                dto = self._build_user_quiz_dto(
+                    course_item, course, assessment, quiz_settings, latest_attempt, attempts_used
+                )
+            else:
+                dto = self._build_user_essay_dto(course_item, course, assessment, essay_submission)
+            result.append(dto)
+        return result
+
+    @staticmethod
+    def _in_date_range(due_date: datetime | None, start_date: datetime | None, end_date: datetime | None) -> bool:
+        """Date-range scoping is based on `due_date` for both the list and stats
+        endpoints. An assessment with no due date is only included when no range
+        is given (lifetime) - there's nothing to compare it against otherwise."""
+        if start_date is None and end_date is None:
+            return True
+        if due_date is None:
+            return False
+        if start_date is not None and due_date < start_date:
+            return False
+        if end_date is not None and due_date > end_date:
+            return False
+        return True
+
+    @staticmethod
+    def _has_retake_available(dto: UserAssessmentDTO, now: datetime) -> bool:
+        if dto.assessment_type != AssessmentTypeEnum.QUIZ:
+            return False
+        if not dto.attempts_used:
+            return False
+        if dto.due_date is not None and dto.due_date <= now:
+            return False  # can't submit past the deadline, so no retake is actually usable
+        return dto.attempts_remaining is None or dto.attempts_remaining > 0
+
+    async def list_user_assessments(
         self,
         user_id: uuid.UUID,
         pagination: PaginationParams,
         status_filter: str | None = None,
-        course_id: uuid.UUID | None = None
-    ) -> tuple[list["UserQuizDTO"], int]:
-        from app.modules.learning.dto import UserQuizDTO, UserQuizStatusEnum
-        
-        items, total = await self.repo.list_user_quizzes(user_id, pagination, status_filter, course_id)
-        
-        result = []
-        for course_item, course, latest_attempt in items:
-            if latest_attempt:
-                status = UserQuizStatusEnum.PASSED if latest_attempt.passed else UserQuizStatusEnum.FAILED
+        course_id: uuid.UUID | None = None,
+        assessment_type_filter: str | None = None,
+        upcoming: bool = False,
+        completed: bool = False,
+        retakes: bool = False,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> tuple[list[UserAssessmentDTO], int]:
+        result = await self._list_all_user_assessment_dtos(user_id, course_id, assessment_type_filter)
+        result = [dto for dto in result if self._in_date_range(dto.due_date, start_date, end_date)]
+
+        if status_filter:
+            status_filter = status_filter.upper()
+            result = [dto for dto in result if dto.status.value == status_filter]
+
+        now = datetime.now(timezone.utc)
+
+        if upcoming:
+            result = [
+                dto for dto in result
+                if dto.due_date is not None and dto.due_date > now and dto.status == UserAssessmentStatusEnum.NOT_STARTED
+            ]
+
+        if completed:
+            result = [dto for dto in result if dto.status != UserAssessmentStatusEnum.NOT_STARTED]
+
+        if retakes:
+            result = [dto for dto in result if self._has_retake_available(dto, now)]
+
+        total = len(result)
+        start = pagination.offset
+        end = start + pagination.limit
+        return result[start:end], total
+
+    async def get_assessment_stats(
+        self, user_id: uuid.UUID, start_date: datetime | None = None, end_date: datetime | None = None
+    ) -> AssessmentStatsDTO:
+        dtos = await self._list_all_user_assessment_dtos(user_id)
+        dtos = [dto for dto in dtos if self._in_date_range(dto.due_date, start_date, end_date)]
+
+        now = datetime.now(timezone.utc)
+
+        upcoming_count = sum(
+            1 for dto in dtos
+            if dto.due_date is not None and dto.due_date > now and dto.status == UserAssessmentStatusEnum.NOT_STARTED
+        )
+        completed_count = sum(1 for dto in dtos if dto.status != UserAssessmentStatusEnum.NOT_STARTED)
+        scores = [dto.score for dto in dtos if dto.score is not None]
+        average_score_percentage = sum(scores) / len(scores) if scores else None
+        retakes_available_count = sum(1 for dto in dtos if self._has_retake_available(dto, now))
+
+        return AssessmentStatsDTO(
+            upcoming_count=upcoming_count,
+            completed_count=completed_count,
+            average_score_percentage=average_score_percentage,
+            retakes_available_count=retakes_available_count,
+        )
+
+    def _build_user_quiz_dto(
+        self, course_item, course, assessment, quiz_settings, latest_attempt, attempts_used: int
+    ) -> UserAssessmentDTO:
+        show_result_to_student = quiz_settings.show_result_to_student if quiz_settings else True
+        max_attempts = quiz_settings.max_attempts if quiz_settings else None
+        pass_mark_percentage = quiz_settings.pass_mark_percentage if quiz_settings else 70
+
+        if latest_attempt:
+            if show_result_to_student:
+                status = UserAssessmentStatusEnum.PASSED if latest_attempt.passed else UserAssessmentStatusEnum.FAILED
                 score = float(latest_attempt.score) if latest_attempt.score is not None else None
-                attempted_at = latest_attempt.created_at
             else:
-                status = UserQuizStatusEnum.NOT_STARTED
+                status = UserAssessmentStatusEnum.SUBMITTED
                 score = None
-                attempted_at = None
-                
-            result.append(UserQuizDTO(
-                item_id=course_item.id,
-                title=course_item.title,
-                course_id=course.id,
-                course_title=course.title,
-                status=status,
-                score=score,
-                attempted_at=attempted_at
-            ))
-            
-        return result, total
+            last_activity_at = latest_attempt.created_at
+        else:
+            status = UserAssessmentStatusEnum.NOT_STARTED
+            score = None
+            last_activity_at = None
+
+        attempts_remaining = None if max_attempts is None else max(max_attempts - attempts_used, 0)
+
+        return UserAssessmentDTO(
+            item_id=course_item.id,
+            title=course_item.title,
+            course_id=course.id,
+            course_title=course.title,
+            assessment_type=AssessmentTypeEnum.QUIZ,
+            due_date=assessment.due_date,
+            status=status,
+            score=score,
+            last_activity_at=last_activity_at,
+            max_attempts=max_attempts,
+            attempts_used=attempts_used,
+            attempts_remaining=attempts_remaining,
+            pass_mark_percentage=pass_mark_percentage,
+        )
+
+    def _build_user_essay_dto(self, course_item, course, assessment, essay_submission) -> UserAssessmentDTO:
+        if essay_submission is None:
+            status = UserAssessmentStatusEnum.NOT_STARTED
+            score = None
+            last_activity_at = None
+            is_graded = None
+            is_published = None
+        else:
+            is_graded = essay_submission.score is not None
+            is_published = essay_submission.is_published
+            status = UserAssessmentStatusEnum.GRADED if is_graded else UserAssessmentStatusEnum.SUBMITTED
+            score = float(essay_submission.score) if is_published and essay_submission.score is not None else None
+            last_activity_at = essay_submission.submitted_at
+
+        return UserAssessmentDTO(
+            item_id=course_item.id,
+            title=course_item.title,
+            course_id=course.id,
+            course_title=course.title,
+            assessment_type=AssessmentTypeEnum.ESSAY,
+            due_date=assessment.due_date,
+            status=status,
+            score=score,
+            last_activity_at=last_activity_at,
+            is_graded=is_graded,
+            is_published=is_published,
+        )
 

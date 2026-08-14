@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.common.pagination import PaginatedResponse, PaginationParams
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.learning.dto import (
+    AssessmentStatsDTO,
     CourseCurriculumDTO,
     EnrolledCourseDTO,
     EssayDocumentFinalizeDTO,
@@ -19,7 +21,7 @@ from app.modules.learning.dto import (
     LearningItemContentDTO,
     QuizResultDTO,
     QuizSubmitDTO,
-    UserQuizDTO,
+    UserAssessmentDTO,
 )
 from app.modules.learning.service import LearningService
 from app.modules.user.entity import User
@@ -179,18 +181,43 @@ async def submit_essay_document(
 
 
 @router.get(
-    "/quizzes/me",
-    response_model=PaginatedResponse[UserQuizDTO],
-    summary="List all quizzes available to the user with their status",
+    "/assessments/me",
+    response_model=PaginatedResponse[UserAssessmentDTO],
+    summary="List all assessments (quiz or essay) available to the user, with status/score/due date",
 )
-async def list_my_quizzes(
+async def list_my_assessments(
     status: str | None = None,
     course_id: uuid.UUID | None = None,
+    assessment_type: str | None = None,
+    upcoming: bool = False,
+    completed: bool = False,
+    retakes: bool = False,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     pagination: PaginationParams = Depends(),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> PaginatedResponse[UserQuizDTO]:
+) -> PaginatedResponse[UserAssessmentDTO]:
     service = LearningService(db)
-    items, total = await service.list_user_quizzes(current_user.id, pagination, status, course_id)
+    items, total = await service.list_user_assessments(
+        current_user.id, pagination, status, course_id, assessment_type,
+        upcoming, completed, retakes, start_date, end_date,
+    )
     return PaginatedResponse.create(items=items, total_items=total, params=pagination)
+
+
+@router.get(
+    "/assessments/stats",
+    response_model=ApiResponse[AssessmentStatsDTO],
+    summary="Assessment stats for the current user: upcoming, completed, average score, retakes available",
+)
+async def get_assessment_stats(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AssessmentStatsDTO]:
+    service = LearningService(db)
+    data = await service.get_assessment_stats(current_user.id, start_date, end_date)
+    return ApiResponse(message="Assessment stats retrieved successfully", data=data)
 

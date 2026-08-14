@@ -129,6 +129,17 @@ class CourseReadDTO(AuditDTO):
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
     instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
+    estimated_total_minutes: int | None = Field(
+        default=None,
+        description="Sum of estimated_minutes across the course's curriculum items. Null when "
+        "no item has an estimate set.",
+    )
+    estimated_duration: str | None = Field(
+        default=None,
+        description="Human-friendly rendering of estimated_total_minutes, auto-scaled to "
+        "hours/days/weeks (e.g. '45 mins', '2 hrs 15 mins', '3 days 4 hrs', '1 week 2 days'). "
+        "Null when estimated_total_minutes is null.",
+    )
     is_bookmarked: bool = False
     is_enrolled: bool = False
     progress_status: CourseProgressStatusEnum | None = Field(

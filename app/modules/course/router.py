@@ -75,6 +75,7 @@ async def create_course(
     course = await service.create(payload, current_user)
     data = CourseReadDTO.model_validate(course)
     await service.attach_instructors([data])
+    await service.attach_estimated_time([data])
     return ApiResponse(message="Course created successfully", data=data)
 
 
@@ -114,6 +115,7 @@ async def list_courses(
     )
 
     await service.attach_instructors(data.data)
+    await service.attach_estimated_time(data.data)
 
     if current_user:
         enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
@@ -159,6 +161,7 @@ async def list_featured_courses(
     )
 
     await service.attach_instructors(data.data)
+    await service.attach_estimated_time(data.data)
 
     if current_user:
         enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
@@ -192,6 +195,7 @@ async def list_recent_courses(
     )
 
     await service.attach_instructors(data.data)
+    await service.attach_estimated_time(data.data)
 
     if current_user:
         enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
@@ -252,6 +256,7 @@ async def list_enrolled_courses(
         items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
     await service.attach_instructors(data.data)
+    await service.attach_estimated_time(data.data)
 
     bookmark_ids = await service.get_bookmark_ids(current_user, [item.id for item in data.data])
     for item in data.data:
@@ -278,6 +283,7 @@ async def list_bookmarked_courses(
         items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
     await service.attach_instructors(data.data)
+    await service.attach_estimated_time(data.data)
 
     enrolled_ids, _ = await service.get_course_access_details(current_user, [item.id for item in data.data])
     for item in data.data:
@@ -333,6 +339,7 @@ async def list_manage_courses(
         items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
     await service.attach_instructors(data.data)
+    await service.attach_estimated_time(data.data)
     return data
 
 
@@ -352,6 +359,7 @@ async def get_manage_course(
     sections = await CourseContentService(db).build_tree(course.id, manage=True)
     course_read = CourseReadDTO.model_validate(course)
     await service.attach_instructors([course_read])
+    await service.attach_estimated_time([course_read])
     data = CourseManageDetailDTO(**course_read.model_dump(), sections=sections)
     return ApiResponse(message="Course retrieved successfully", data=data)
 
@@ -371,6 +379,7 @@ async def get_course_by_slug(
     await service.ensure_course_viewable(course, current_user)
     data = PublicCourseReadDTO.model_validate(course, from_attributes=True)
     await service.attach_instructors([data])
+    await service.attach_estimated_time([data])
 
     is_enrolled = False
     has_access = False
@@ -408,6 +417,7 @@ async def update_course(
     course = await service.update(id, payload, current_user)
     data = CourseReadDTO.model_validate(course)
     await service.attach_instructors([data])
+    await service.attach_estimated_time([data])
     return ApiResponse(message="Course updated successfully", data=data)
 
 
@@ -426,6 +436,7 @@ async def set_course_published(
     course = await service.set_published(id, is_published, current_user)
     data = CourseReadDTO.model_validate(course)
     await service.attach_instructors([data])
+    await service.attach_estimated_time([data])
     message = "Course published successfully" if is_published else "Course unpublished successfully"
     return ApiResponse(message=message, data=data)
 
@@ -559,6 +570,7 @@ async def create_item(
         item_type=item.item_type,
         order_index=item.order_index,
         is_preview=item.is_preview,
+        estimated_minutes=item.estimated_minutes,
         video_upload=video_credentials,
         document_upload=document_credentials,
     )

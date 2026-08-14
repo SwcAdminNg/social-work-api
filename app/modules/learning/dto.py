@@ -22,6 +22,7 @@ class LearningItemDTO(BaseDTO):
     title: str
     item_type: CourseItemTypeEnum
     is_completed: bool
+    estimated_minutes: int | None = None
 
 
 class LearningSectionDTO(BaseDTO):
@@ -74,6 +75,7 @@ class LearningItemContentDTO(BaseDTO):
     title: str
     item_type: CourseItemTypeEnum
     is_completed: bool
+    estimated_minutes: int | None = None
 
     # Optional fields depending on item_type
     video_url: str | None = None
@@ -133,17 +135,41 @@ class EssayDocumentFinalizeDTO(BaseModel):
     mime_type: str | None = None
 
 
-class UserQuizStatusEnum(str, Enum):
+class UserAssessmentStatusEnum(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
     PASSED = "PASSED"
     FAILED = "FAILED"
-    NOT_STARTED = "NOT_STARTED"
+    SUBMITTED = "SUBMITTED"
+    GRADED = "GRADED"
 
 
-class UserQuizDTO(BaseDTO):
+class UserAssessmentDTO(BaseDTO):
+    """One row per assessment (quiz or essay) the user has access to, with their
+    latest status. Quiz-only fields are null for essays and vice versa."""
+
     item_id: uuid.UUID
     title: str
     course_id: uuid.UUID
     course_title: str
-    status: UserQuizStatusEnum
+    assessment_type: AssessmentTypeEnum
+    due_date: datetime | None = None
+    status: UserAssessmentStatusEnum
     score: float | None = None
-    attempted_at: datetime | None = None
+    last_activity_at: datetime | None = None  # latest quiz attempt, or essay submission time
+
+    # Quiz-only
+    max_attempts: int | None = None
+    attempts_used: int | None = None
+    attempts_remaining: int | None = None
+    pass_mark_percentage: int | None = None
+
+    # Essay-only
+    is_graded: bool | None = None
+    is_published: bool | None = None
+
+
+class AssessmentStatsDTO(BaseDTO):
+    upcoming_count: int
+    completed_count: int
+    average_score_percentage: float | None = None
+    retakes_available_count: int

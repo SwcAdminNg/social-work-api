@@ -13,7 +13,7 @@ Base URL prefix for everything below: `/learning`.
   user (`get_current_user`) — no special role needed, but the user must be **enrolled in the
   course** (`403 Forbidden, "Not enrolled"` otherwise).
 - **Response envelope**: `ApiResponse<T>` — `{ "success": true, "message": "...", "data": {...} }`.
-  List endpoints (`/quizzes/me`) use `PaginatedResponse<T>` with a `meta` block (`page`,
+  List endpoints (`/assessments/me`) use `PaginatedResponse<T>` with a `meta` block (`page`,
   `page_size`, `total_items`, `total_pages`, `has_next`, `has_previous`).
 - **Null stripping**: absent/null fields are stripped from JSON responses — treat a missing field
   as `null`.
@@ -51,9 +51,15 @@ build the sidebar/outline. Assessment items appear like any other item here:
   "id": "item-uuid",
   "title": "Module 1 Quiz",
   "item_type": "ASSESSMENT",
-  "is_completed": true
+  "is_completed": true,
+  "estimated_minutes": 15
 }
 ```
+`estimated_minutes` is an optional, instructor-entered estimate of how long the item takes to
+complete (in minutes) — a display hint only, not enforced or tracked against actual time spent.
+Applies to every item type (`VIDEO`/`DOCUMENT`/`ASSESSMENT`); omitted/absent when the instructor
+hasn't set one, same as any other null-stripped field.
+
 This endpoint does **not** include quiz questions or essay prompts — fetch the item itself for
 that (next).
 
@@ -72,6 +78,7 @@ fields present depend on `item_type`/`assessment_type`.
   "title": "Module 1 Quiz",
   "item_type": "ASSESSMENT",
   "is_completed": true,
+  "estimated_minutes": 15,
   "assessment_type": "QUIZ",
   "due_date": "2026-09-01T23:59:00Z",
   "max_attempts": 3,
@@ -121,6 +128,7 @@ Notes:
   "title": "Reflective Essay",
   "item_type": "ASSESSMENT",
   "is_completed": false,
+  "estimated_minutes": 45,
   "assessment_type": "ESSAY",
   "due_date": null,
   "essay_question": "Describe a trauma-informed intervention you would use.",
@@ -294,17 +302,31 @@ document essay.
 
 ---
 
-## 5. "My quizzes" summary list
+## 5. "My assessments" summary list
 
-**`GET /learning/quizzes/me?status=PASSED&course_id=...&page=1&page_size=20`**
+**`GET /learning/assessments/me?status=PASSED&course_id=...&assessment_type=QUIZ&page=1&page_size=20`**
 
-Lists every quiz assessment across courses the student has access to, with their latest status.
-Both query params are optional filters.
+Lists **every assessment — quiz and essay — across courses the student has access to**, with its
+latest status, in one feed. All query params are optional filters. This replaces the old
+quiz-only `/learning/quizzes/me` endpoint (renamed and broadened).
 
 | Param | Type | Notes |
 |---|---|---|
-| `status` | `"PASSED" \| "FAILED" \| "NOT_STARTED"` | Case-insensitive. |
+| `status` | `"NOT_STARTED" \| "PASSED" \| "FAILED" \| "SUBMITTED" \| "GRADED"` | Case-insensitive. See status meanings below. |
 | `course_id` | UUID | Restrict to one course. |
+| `assessment_type` | `"QUIZ" \| "ESSAY"` | Restrict to one assessment type. Case-insensitive. |
+
+### Status values
+
+| Status | Applies to | Meaning |
+|---|---|---|
+| `NOT_STARTED` | quiz & essay | No attempt/submission yet. |
+| `PASSED` | quiz only | Latest attempt scored ≥ `pass_mark_percentage`, and results are visible. |
+| `FAILED` | quiz only | Latest attempt scored below the pass mark, and results are visible. |
+| `SUBMITTED` | quiz & essay | Quiz: attempted, but `show_result_to_student` is off so pass/fail is withheld. Essay: submitted, not yet graded by the instructor. |
+| `GRADED` | essay only | An instructor has scored the essay (regardless of whether the score is published yet — check `is_published`/`score` for that). |
+
+### Response shape (`UserAssessmentDTO`)
 
 ```json
 {
@@ -316,22 +338,105 @@ Both query params are optional filters.
       "title": "Module 1 Quiz",
       "course_id": "course-uuid",
       "course_title": "Intro to Trauma-Informed Care",
+      "assessment_type": "QUIZ",
+      "due_date": "2026-09-01T23:59:00Z",
       "status": "PASSED",
       "score": 66.7,
-      "attempted_at": "2026-08-10T14:00:00Z"
+      "last_activity_at": "2026-08-10T14:00:00Z",
+      "max_attempts": 3,
+      "attempts_used": 1,
+      "attempts_remaining": 2,
+      "pass_mark_percentage": 40
+    },
+    {
+      "item_id": "item-uuid-2",
+      "title": "Reflective Essay",
+      "course_id": "course-uuid",
+      "course_title": "Intro to Trauma-Informed Care",
+      "assessment_type": "ESSAY",
+      "due_date": null,
+      "status": "SUBMITTED",
+      "score": null,
+      "last_activity_at": "2026-08-11T09:00:00Z",
+      "is_graded": false,
+      "is_published": false
     }
   ],
-  "meta": { "page": 1, "page_size": 20, "total_items": 1, "total_pages": 1, "has_next": false, "has_previous": false }
+  "meta": { "page": 1, "page_size": 20, "total_items": 2, "total_pages": 1, "has_next": false, "has_previous": false }
 }
 ```
-`score`/`attempted_at` are `null` when `status: "NOT_STARTED"`.
 
-There's no essay equivalent of this list endpoint yet — check individual essay items via §2.3 for
-now.
+Field notes:
+- `max_attempts`/`attempts_used`/`attempts_remaining`/`pass_mark_percentage` are only meaningful
+  (non-`null`) for `assessment_type: "QUIZ"` rows — `null` on essay rows.
+- `is_graded`/`is_published` are only meaningful for `assessment_type: "ESSAY"` rows — `null` on
+  quiz rows.
+- `score` follows the same visibility rules as everywhere else: `null` for a quiz whose
+  `show_result_to_student` is off, and `null` for an essay that isn't `is_published` yet — even if
+  it's already `is_graded`.
+- `last_activity_at` is the latest quiz-attempt timestamp or the essay's `submitted_at`, whichever
+  applies — use it as a generic "last touched" timestamp for sorting/display.
+
+### 5.1 Shortcut filters: upcoming / completed / retakes
+
+Three extra boolean query params, all default `false`, all combine with each other and with
+`status`/`course_id`/`assessment_type` as **AND** (so don't set two that contradict each other,
+e.g. `upcoming=true&completed=true` will just return nothing):
+
+| Param | Meaning |
+|---|---|
+| `upcoming=true` | Has a `due_date` in the future **and** hasn't been started yet (`status: NOT_STARTED`). This is a to-do/deadline view, not "everything with a future due date" — something you've already submitted with a future due date doesn't count as "upcoming". |
+| `completed=true` | Shorthand for "`status` is not `NOT_STARTED`" — i.e. attempted/submitted at least once, regardless of pass/fail/graded state. |
+| `retakes=true` | Quiz items only, where you've used at least one attempt, the deadline (if any) hasn't passed, and either attempts are unlimited or `attempts_remaining > 0`. Essays never appear here — there's no "retake" concept for essays (see §4's resubmit-until-graded rule instead). |
+
+### 5.2 Date-range filtering
+
+`GET /learning/assessments/me?start_date=2026-08-01T00:00:00Z&end_date=2026-08-31T23:59:59Z`
+
+Both `start_date` and `end_date` are optional ISO 8601 datetimes. **The range filters by
+`due_date`.** Omit both for lifetime data (the default). Important consequence: if a date range is
+given, any assessment with **no `due_date` set** is excluded from the results (there's nothing to
+compare it against) — only assessments with `due_date` set at all are affected by this. With no
+range given, everything is included regardless of `due_date`.
 
 ---
 
-## 6. Marking non-assessment items complete (for contrast)
+## 6. Assessment stats
+
+**`GET /learning/assessments/stats`**
+
+One call for a dashboard summary card. Same optional `start_date`/`end_date` params as §5.2, same
+`due_date`-based range semantics, same lifetime-by-default behavior.
+
+```http
+GET /learning/assessments/stats
+GET /learning/assessments/stats?start_date=2026-08-01T00:00:00Z&end_date=2026-08-31T23:59:59Z
+```
+
+Response (`AssessmentStatsDTO`):
+```json
+{
+  "success": true,
+  "message": "Assessment stats retrieved successfully",
+  "data": {
+    "upcoming_count": 2,
+    "completed_count": 9,
+    "average_score_percentage": 68.75,
+    "retakes_available_count": 6
+  }
+}
+```
+
+| Field | Definition |
+|---|---|
+| `upcoming_count` | Count of assessments (quiz + essay) matching the `upcoming=true` rule from §5.1: future `due_date`, not yet started. |
+| `completed_count` | Count of assessments matching the `completed=true` rule from §5.1: `status != NOT_STARTED`. |
+| `average_score_percentage` | Mean of `score` across **all** assessments in scope that currently have a visible score (a quiz with `show_result_to_student=false` or an essay that isn't `is_published` yet doesn't contribute — its score is unknown to the student, so it's excluded, not counted as 0). `null` if nothing in scope has a visible score yet. |
+| `retakes_available_count` | Count of assessments matching the `retakes=true` rule from §5.1. |
+
+---
+
+## 7. Marking non-assessment items complete (for contrast)
 
 **`POST /learning/courses/{course_id}/items/{item_id}/complete`** — only valid for `VIDEO`/`DOCUMENT`
 items. Calling it on an `ASSESSMENT` item returns `400 "Cannot manually complete an assessment
@@ -339,7 +444,7 @@ item"` — completion for quizzes/essays happens automatically on submit instead
 
 ---
 
-## 7. Quick reference — endpoint list
+## 8. Quick reference — endpoint list
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -351,4 +456,5 @@ item"` — completion for quizzes/essays happens automatically on submit instead
 | POST | `/learning/courses/{course_id}/items/{item_id}/essay/submit-text` | Submit/resubmit a TEXT essay |
 | POST | `/learning/courses/{course_id}/items/{item_id}/essay/upload-url` | Get presigned upload URL (DOCUMENT essay) |
 | POST | `/learning/courses/{course_id}/items/{item_id}/essay/submit-document` | Finalize a DOCUMENT essay submission |
-| GET | `/learning/quizzes/me` | List all quizzes + status for the current user |
+| GET | `/learning/assessments/me` | List all quizzes + essays, with filters (§5) |
+| GET | `/learning/assessments/stats` | Dashboard summary stats (§6) |

@@ -215,16 +215,20 @@ class LearningRepository:
         await self.session.flush()
         return access
 
-    async def list_user_quizzes(
-        self, 
-        user_id: uuid.UUID, 
-        pagination: PaginationParams,
-        status_filter: str | None = None,
-        course_id: uuid.UUID | None = None
+    async def list_user_assessments(
+        self,
+        user_id: uuid.UUID,
+        course_id: uuid.UUID | None = None,
+        assessment_type: str | None = None,
     ):
+        """All ASSESSMENT items (quiz or essay) the user has course access to, with
+        their latest quiz attempt / essay submission joined in. No pagination or
+        status filtering here - status depends on per-assessment visibility rules
+        (show_result_to_student / is_published) that only the service layer knows
+        how to apply, so the service paginates/filters the mapped DTOs instead."""
         from app.modules.course.entity import Course, CourseSection, CourseItem, CourseItemTypeEnum
         from app.modules.course.access_entity import UserCourseAccess
-        from app.modules.course.content_entity import AssessmentTypeEnum, CourseAssessment
+        from app.modules.course.content_entity import CourseAssessment, CourseQuizSettings
         from sqlalchemy.orm import aliased
 
         subq = (
@@ -239,12 +243,23 @@ class LearningRepository:
 
         latest_attempt = aliased(QuizAttempt)
 
+        attempt_count = (
+            select(func.count(QuizAttempt.id))
+            .where(QuizAttempt.item_id == CourseItem.id, QuizAttempt.user_id == user_id)
+            .correlate(CourseItem)
+            .scalar_subquery()
+        )
+
         stmt = (
-            select(CourseItem, Course, latest_attempt)
+            select(
+                CourseItem, Course, CourseAssessment, CourseQuizSettings, latest_attempt, EssaySubmission,
+                attempt_count,
+            )
             .join(CourseSection, CourseItem.section_id == CourseSection.id)
             .join(Course, CourseSection.course_id == Course.id)
             .join(UserCourseAccess, UserCourseAccess.course_id == Course.id)
             .join(CourseAssessment, CourseAssessment.course_item_id == CourseItem.id)
+            .outerjoin(CourseQuizSettings, CourseQuizSettings.assessment_id == CourseAssessment.id)
             .outerjoin(
                 subq,
                 CourseItem.id == subq.c.item_id
@@ -255,31 +270,25 @@ class LearningRepository:
                 (latest_attempt.user_id == user_id) &
                 (latest_attempt.created_at == subq.c.latest_attempt_at)
             )
+            .outerjoin(
+                EssaySubmission,
+                (EssaySubmission.item_id == CourseItem.id) & (EssaySubmission.user_id == user_id)
+            )
             .where(
                 UserCourseAccess.user_id == user_id,
                 CourseItem.item_type == CourseItemTypeEnum.ASSESSMENT,
-                CourseAssessment.assessment_type == AssessmentTypeEnum.QUIZ,
                 CourseItem.deleted_at.is_(None),
                 CourseSection.deleted_at.is_(None),
                 Course.deleted_at.is_(None)
             )
         )
-        
+
         if course_id:
             stmt = stmt.where(Course.id == course_id)
-            
-        if status_filter:
-            status_filter = status_filter.upper()
-            if status_filter == "PASSED":
-                stmt = stmt.where(latest_attempt.passed.is_(True))
-            elif status_filter == "FAILED":
-                stmt = stmt.where(latest_attempt.passed.is_(False))
-            elif status_filter == "NOT_STARTED":
-                stmt = stmt.where(latest_attempt.id.is_(None))
-                
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        total = (await self.session.execute(count_stmt)).scalar_one()
-        
-        stmt = stmt.order_by(CourseItem.created_at.desc()).limit(pagination.limit).offset(pagination.offset)
+
+        if assessment_type:
+            stmt = stmt.where(CourseAssessment.assessment_type == assessment_type)
+
+        stmt = stmt.order_by(CourseItem.created_at.desc())
         result = await self.session.execute(stmt)
-        return result.all(), total
+        return result.all()

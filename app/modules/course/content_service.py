@@ -183,6 +183,7 @@ class CourseContentService:
             item_type=payload.item_type,
             order_index=payload.order_index,
             is_preview=payload.is_preview,
+            estimated_minutes=payload.estimated_minutes,
         )
         self.session.add(item)
         await self.session.flush()
@@ -733,6 +734,7 @@ class CourseContentService:
             item_type=item.item_type,
             order_index=item.order_index,
             is_preview=item.is_preview,
+            estimated_minutes=item.estimated_minutes,
             video=video_dto,
             document=document_dto,
             assessment=assessment_dto,
