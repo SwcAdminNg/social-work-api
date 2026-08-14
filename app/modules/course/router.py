@@ -39,6 +39,7 @@ from app.modules.course.dto import (
     CourseThumbnailUploadRequest,
     CourseThumbnailUploadResponse,
     CourseUpdateDTO,
+    EnrolledCourseFilterParams,
     PublicCourseReadDTO,
     SetFeaturedCoursesDTO,
     CourseCatalogCreateDTO,
@@ -67,8 +68,11 @@ async def create_course(
     current_user: User = Depends(get_current_admin_or_instructor),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseReadDTO]:
-    course = await CourseService(db).create(payload, current_user)
-    return ApiResponse(message="Course created successfully", data=CourseReadDTO.model_validate(course))
+    service = CourseService(db)
+    course = await service.create(payload, current_user)
+    data = CourseReadDTO.model_validate(course)
+    await service.attach_instructors([data])
+    return ApiResponse(message="Course created successfully", data=data)
 
 
 @router.post(
@@ -106,12 +110,17 @@ async def list_courses(
         params=pagination,
     )
 
+    await service.attach_instructors(data.data)
+
     if current_user:
         enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
+        bookmark_ids = await service.get_bookmark_ids(current_user, [c.id for c in items])
         for item in data.data:
             item.is_enrolled = item.id in enrolled_ids
             item.has_access = item.id in access_ids
-            
+            item.is_bookmarked = item.id in bookmark_ids
+        await service.attach_progress_status(data.data, current_user)
+
     return data
 
 @router.put(
@@ -146,12 +155,50 @@ async def list_featured_courses(
         params=pagination,
     )
 
+    await service.attach_instructors(data.data)
+
     if current_user:
         enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
+        bookmark_ids = await service.get_bookmark_ids(current_user, [c.id for c in items])
         for item in data.data:
             item.is_enrolled = item.id in enrolled_ids
             item.has_access = item.id in access_ids
-            
+            item.is_bookmarked = item.id in bookmark_ids
+        await service.attach_progress_status(data.data, current_user)
+
+    return data
+
+
+@router.get(
+    "/recent",
+    response_model=PaginatedResponse[PublicCourseReadDTO],
+    summary="List recently added courses (public)",
+)
+async def list_recent_courses(
+    pagination: PaginationParams = Depends(),
+    current_user: User | None = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[PublicCourseReadDTO]:
+    service = CourseService(db)
+    items, total = await service.list_recent_courses(pagination)
+
+    data = PaginatedResponse.create(
+        items=[PublicCourseReadDTO.model_validate(c, from_attributes=True) for c in items],
+        total_items=total,
+        params=pagination,
+    )
+
+    await service.attach_instructors(data.data)
+
+    if current_user:
+        enrolled_ids, access_ids = await service.get_course_access_details(current_user, [c.id for c in items])
+        bookmark_ids = await service.get_bookmark_ids(current_user, [c.id for c in items])
+        for item in data.data:
+            item.is_enrolled = item.id in enrolled_ids
+            item.has_access = item.id in access_ids
+            item.is_bookmarked = item.id in bookmark_ids
+        await service.attach_progress_status(data.data, current_user)
+
     return data
 
 @router.post(
@@ -192,13 +239,75 @@ async def list_course_catalogs(
 )
 async def list_enrolled_courses(
     pagination: PaginationParams = Depends(),
+    filters: EnrolledCourseFilterParams = Depends(),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[CourseReadDTO]:
-    items, total = await CourseService(db).list_enrolled(current_user, pagination)
-    return PaginatedResponse.create(
+    service = CourseService(db)
+    items, total = await service.list_enrolled(current_user, pagination, filters.search)
+    data = PaginatedResponse.create(
         items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
+    await service.attach_instructors(data.data)
+
+    bookmark_ids = await service.get_bookmark_ids(current_user, [item.id for item in data.data])
+    for item in data.data:
+        item.is_bookmarked = item.id in bookmark_ids
+    await service.attach_progress_status(data.data, current_user)
+
+    return data
+
+
+@router.get(
+    "/bookmarked",
+    response_model=PaginatedResponse[CourseReadDTO],
+    summary="List courses the current user has bookmarked",
+)
+async def list_bookmarked_courses(
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[CourseReadDTO]:
+    service = CourseService(db)
+    items, total = await service.list_bookmarked(current_user, pagination)
+    data = PaginatedResponse.create(
+        items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
+    )
+    await service.attach_instructors(data.data)
+
+    for item in data.data:
+        item.is_bookmarked = True
+    await service.attach_progress_status(data.data, current_user)
+
+    return data
+
+
+@router.post(
+    "/{course_id}/bookmark",
+    response_model=ApiResponse[None],
+    summary="Bookmark a course (enrolled or not) for the current user",
+)
+async def bookmark_course(
+    course_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseService(db).add_bookmark(current_user, course_id)
+    return ApiResponse(message="Course bookmarked successfully")
+
+
+@router.delete(
+    "/{course_id}/bookmark",
+    response_model=ApiResponse[None],
+    summary="Remove a bookmark from a course for the current user",
+)
+async def unbookmark_course(
+    course_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseService(db).remove_bookmark(current_user, course_id)
+    return ApiResponse(message="Bookmark removed successfully")
 
 
 @router.get(
@@ -212,10 +321,13 @@ async def list_manage_courses(
     current_user: User = Depends(get_current_admin_or_instructor),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[CourseReadDTO]:
-    items, total = await CourseService(db).list_manage(pagination, filters, current_user)
-    return PaginatedResponse.create(
+    service = CourseService(db)
+    items, total = await service.list_manage(pagination, filters, current_user)
+    data = PaginatedResponse.create(
         items=[CourseReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
+    await service.attach_instructors(data.data)
+    return data
 
 
 
@@ -229,9 +341,12 @@ async def get_manage_course(
     current_user: User = Depends(get_current_admin_or_instructor),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseManageDetailDTO]:
-    course = await CourseService(db).get_for_manage(id, current_user)
+    service = CourseService(db)
+    course = await service.get_for_manage(id, current_user)
     sections = await CourseContentService(db).build_tree(course.id, manage=True)
-    data = CourseManageDetailDTO(**CourseReadDTO.model_validate(course).model_dump(), sections=sections)
+    course_read = CourseReadDTO.model_validate(course)
+    await service.attach_instructors([course_read])
+    data = CourseManageDetailDTO(**course_read.model_dump(), sections=sections)
     return ApiResponse(message="Course retrieved successfully", data=data)
 
 
@@ -247,17 +362,22 @@ async def get_course_by_slug(
 ) -> ApiResponse[PublicCourseDetailDTO]:
     service = CourseService(db)
     course = await service.get_by_slug_published(slug)
+    await service.ensure_course_viewable(course, current_user)
     data = PublicCourseReadDTO.model_validate(course, from_attributes=True)
-    
+    await service.attach_instructors([data])
+
     is_enrolled = False
     has_access = False
     if current_user:
         enrolled_ids, access_ids = await service.get_course_access_details(current_user, [course.id])
+        bookmark_ids = await service.get_bookmark_ids(current_user, [course.id])
         is_enrolled = course.id in enrolled_ids
         has_access = course.id in access_ids
         data.is_enrolled = is_enrolled
         data.has_access = has_access
-        
+        data.is_bookmarked = course.id in bookmark_ids
+        await service.attach_progress_status([data], current_user)
+
     sections = await CourseContentService(db).build_tree(course.id, manage=False, enrolled=is_enrolled)
     
     response_data = PublicCourseDetailDTO(
@@ -278,8 +398,11 @@ async def update_course(
     current_user: User = Depends(get_current_admin_or_instructor),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseReadDTO]:
-    course = await CourseService(db).update(id, payload, current_user)
-    return ApiResponse(message="Course updated successfully", data=CourseReadDTO.model_validate(course))
+    service = CourseService(db)
+    course = await service.update(id, payload, current_user)
+    data = CourseReadDTO.model_validate(course)
+    await service.attach_instructors([data])
+    return ApiResponse(message="Course updated successfully", data=data)
 
 
 @router.patch(
@@ -293,9 +416,12 @@ async def set_course_published(
     current_user: User = Depends(get_current_admin_or_instructor),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseReadDTO]:
-    course = await CourseService(db).set_published(id, is_published, current_user)
+    service = CourseService(db)
+    course = await service.set_published(id, is_published, current_user)
+    data = CourseReadDTO.model_validate(course)
+    await service.attach_instructors([data])
     message = "Course published successfully" if is_published else "Course unpublished successfully"
-    return ApiResponse(message=message, data=CourseReadDTO.model_validate(course))
+    return ApiResponse(message=message, data=data)
 
 
 @router.delete(
@@ -504,9 +630,12 @@ async def finalize_document(
     summary="Get a fresh, short-lived download URL for a course document (public)",
 )
 async def get_document_download_url(
-    slug: str, item_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    slug: str,
+    item_id: uuid.UUID,
+    current_user: User | None = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
-    url = await CourseContentService(db).get_document_download_url(slug, item_id)
+    url = await CourseContentService(db).get_document_download_url(slug, item_id, current_user)
     return ApiResponse(message="Download URL generated successfully", data={"download_url": url})
 
 

@@ -13,6 +13,8 @@ class UserStatsDTO(BaseModel):
     total_reviews: int
     in_process_courses: int
     completed_courses: int
+    not_started_courses: int
+    bookmarked_courses: int
 
 
 class ActivityLogDTO(BaseModel):

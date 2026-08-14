@@ -248,10 +248,17 @@ class CourseContentService:
         await self.session.commit()
         return document
 
-    async def get_document_download_url(self, slug: str, item_id: uuid.UUID) -> str:
+    async def get_document_download_url(
+        self, slug: str, item_id: uuid.UUID, current_user: User | None = None
+    ) -> str:
         course = await self.course_repo.get_by_slug(slug)
         if course is None or not course.is_published:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+
+        from app.modules.course.service import CourseService
+
+        await CourseService(self.session).ensure_course_viewable(course, current_user)
+
         item = await self.repo.get_item(item_id)
         section = await self.repo.get_section(item.section_id) if item else None
         if item is None or section is None or section.course_id != course.id:

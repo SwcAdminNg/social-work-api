@@ -1,7 +1,8 @@
 import enum
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +38,11 @@ class CourseItemTypeEnum(str, enum.Enum):
     VIDEO = "VIDEO"
 
 
+class CourseAccessModeEnum(str, enum.Enum):
+    SELF_PACED = "SELF_PACED"
+    SCHEDULED = "SCHEDULED"
+
+
 class Course(BaseEntity):
     __tablename__ = "courses"
 
@@ -65,6 +71,14 @@ class Course(BaseEntity):
     featured_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     average_rating: Mapped[float] = mapped_column(Numeric(3, 2), default=0.0, server_default="0.0")
     total_reviews: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    access_mode: Mapped[CourseAccessModeEnum] = mapped_column(
+        Enum(CourseAccessModeEnum, name="course_access_mode_enum", native_enum=True),
+        nullable=False,
+        default=CourseAccessModeEnum.SELF_PACED,
+        server_default=CourseAccessModeEnum.SELF_PACED.value,
+    )
+    access_start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    access_end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CourseCatalog(BaseEntity):

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Sequence
 
 from fastapi import HTTPException, status
@@ -12,7 +13,10 @@ from app.core.cache import get_cache, set_cache, delete_cache
 from app.modules.course.dto import (
     CourseCreateDTO,
     CourseFilterParams,
+    CourseInstructorInputDTO,
+    CourseInstructorReadDTO,
     CourseManageFilterParams,
+    CourseProgressStatusEnum,
     CourseThumbnailUploadRequest,
     CourseThumbnailUploadResponse,
     CourseUpdateDTO,
@@ -20,9 +24,14 @@ from app.modules.course.dto import (
     CourseCatalogUpdateDTO,
     PublicCourseCatalogReadDTO,
 )
-from app.modules.course.entity import Course, CourseItem, CourseSection, CourseCatalog
+from app.modules.course.entity import Course, CourseAccessModeEnum, CourseItem, CourseSection, CourseCatalog
+from app.modules.course.instructor_entity import CourseInstructor
 from app.modules.course.repository import CourseRepository, CourseCatalogRepository
 from app.modules.user.entity import User, UserTypeEnum
+
+# Fields on the create/update DTOs that don't map to a Course column - handled
+# separately (instructors -> course_instructors table).
+_NON_COLUMN_FIELDS = {"instructors"}
 
 
 class CourseService:
@@ -34,12 +43,128 @@ class CourseService:
         if user.user_type != UserTypeEnum.ADMIN and course.instructor_id != user.id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not manage this course")
 
+    async def ensure_course_viewable(self, course: Course, user: User | None) -> None:
+        """Blocks viewing a SCHEDULED course entirely outside its access window.
+        Admins and the course's instructors (owner or credited co-instructor) always
+        bypass the block so they can preview/manage the course at any time."""
+        if course.access_mode != CourseAccessModeEnum.SCHEDULED:
+            return
+
+        if user is not None:
+            if user.user_type == UserTypeEnum.ADMIN or course.instructor_id == user.id:
+                return
+            co_instructor_stmt = select(func.count()).select_from(CourseInstructor).where(
+                CourseInstructor.course_id == course.id, CourseInstructor.user_id == user.id
+            )
+            if (await self.session.execute(co_instructor_stmt)).scalar_one() > 0:
+                return
+
+        now = datetime.now(timezone.utc)
+        if course.access_start_date and now < course.access_start_date:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This course has not started yet")
+        if course.access_end_date and now > course.access_end_date:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This course's access window has ended")
+
     async def create(self, payload: CourseCreateDTO, instructor: User) -> Course:
         slug = await ensure_unique_slug(self.session, Course, slugify(payload.title))
-        course = Course(**payload.model_dump(), slug=slug, instructor_id=instructor.id)
+        course = Course(
+            **payload.model_dump(exclude=_NON_COLUMN_FIELDS), slug=slug, instructor_id=instructor.id
+        )
         await self.repository.create(course)
+        await self._replace_instructors(course, payload.instructors, instructor)
         await self.session.commit()
         return course
+
+    async def _replace_instructors(
+        self,
+        course: Course,
+        instructors: list[CourseInstructorInputDTO] | None,
+        default_owner: User,
+    ) -> None:
+        await self.session.execute(
+            CourseInstructor.__table__.delete().where(CourseInstructor.course_id == course.id)
+        )
+        entries = instructors if instructors else [
+            CourseInstructorInputDTO(
+                user_id=default_owner.id, name=f"{default_owner.first_name} {default_owner.last_name}"
+            )
+        ]
+        for idx, entry in enumerate(entries):
+            self.session.add(
+                CourseInstructor(course_id=course.id, user_id=entry.user_id, name=entry.name, order_index=idx)
+            )
+        await self.session.flush()
+
+    async def get_instructors_map(
+        self, course_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, list[CourseInstructorReadDTO]]:
+        if not course_ids:
+            return {}
+        stmt = (
+            select(CourseInstructor)
+            .where(CourseInstructor.course_id.in_(course_ids), CourseInstructor.deleted_at.is_(None))
+            .order_by(CourseInstructor.order_index.asc())
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+        result: dict[uuid.UUID, list[CourseInstructorReadDTO]] = {}
+        for row in rows:
+            result.setdefault(row.course_id, []).append(
+                CourseInstructorReadDTO(user_id=row.user_id, name=row.name)
+            )
+        return result
+
+    async def get_progress_status_map(
+        self, user: User, course_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, CourseProgressStatusEnum]:
+        """Only returns an entry for courses the user is actually enrolled in -
+        courses missing from the result should be treated as "not enrolled"
+        (as opposed to NOT_STARTED, which means enrolled but untouched)."""
+        if not course_ids:
+            return {}
+        from app.modules.course.access_entity import UserCourseAccess
+        from app.modules.learning.entity import UserCourseProgress
+
+        access_stmt = select(UserCourseAccess.course_id).where(
+            UserCourseAccess.user_id == user.id, UserCourseAccess.course_id.in_(course_ids)
+        )
+        enrolled_ids = set((await self.session.execute(access_stmt)).scalars().all())
+        if not enrolled_ids:
+            return {}
+
+        progress_stmt = select(UserCourseProgress).where(
+            UserCourseProgress.user_id == user.id, UserCourseProgress.course_id.in_(enrolled_ids)
+        )
+        progress_by_course = {
+            p.course_id: p for p in (await self.session.execute(progress_stmt)).scalars().all()
+        }
+
+        result: dict[uuid.UUID, CourseProgressStatusEnum] = {}
+        for cid in enrolled_ids:
+            progress = progress_by_course.get(cid)
+            if progress and progress.is_completed:
+                result[cid] = CourseProgressStatusEnum.COMPLETED
+            elif progress and progress.progress_percent > 0:
+                result[cid] = CourseProgressStatusEnum.IN_PROGRESS
+            else:
+                result[cid] = CourseProgressStatusEnum.NOT_STARTED
+        return result
+
+    async def attach_progress_status(self, dtos, user: User) -> None:
+        if not dtos:
+            return
+        status_map = await self.get_progress_status_map(user, [dto.id for dto in dtos])
+        for dto in dtos:
+            dto.progress_status = status_map.get(dto.id)
+
+    async def attach_instructors(self, dtos) -> None:
+        """Mutates a list of CourseReadDTO/PublicCourseReadDTO in place, filling
+        their `instructors` field. Always queried live (never cached) so instructor
+        credits stay fresh regardless of the course-level cache TTL."""
+        if not dtos:
+            return
+        instructors_map = await self.get_instructors_map([dto.id for dto in dtos])
+        for dto in dtos:
+            dto.instructors = instructors_map.get(dto.id, [])
 
     async def list_published(
         self, pagination: PaginationParams, filters: CourseFilterParams | None = None
@@ -51,6 +176,8 @@ class CourseService:
             if filters.is_free is not None: filter_parts.append(f"free_{filters.is_free}")
             if filters.search: filter_parts.append(f"search_{filters.search}")
             if hasattr(filters, 'catalog') and filters.catalog: filter_parts.append(f"catalog_{filters.catalog}")
+            if getattr(filters, 'instructor_id', None): filter_parts.append(f"instr_{filters.instructor_id}")
+            if getattr(filters, 'instructor_name', None): filter_parts.append(f"instrname_{filters.instructor_name}")
             
         filters_key = ":".join(filter_parts) if filter_parts else "all"
         cache_key = f"courses:published:page_{pagination.page}:size_{pagination.page_size}:filters_{filters_key}"
@@ -72,15 +199,36 @@ class CourseService:
         items, total = await self.repository.list_published(pagination, filters, catalog_categories)
         
         from app.modules.course.dto import CourseReadDTO
-        serializable_items = [CourseReadDTO.model_validate(item).model_dump(mode='json') for item in items]
+        serializable_items = [
+            CourseReadDTO.model_validate(item).model_dump(mode='json', exclude=_NON_COLUMN_FIELDS)
+            for item in items
+        ]
         await set_cache(cache_key, {'items': serializable_items, 'total': total}, expire=1200)
         
         return items, total
 
     async def list_enrolled(
-        self, current_user: User, pagination: PaginationParams
+        self, current_user: User, pagination: PaginationParams, search: str | None = None
     ) -> tuple[Sequence[Course], int]:
-        return await self.repository.list_enrolled(current_user.id, pagination)
+        return await self.repository.list_enrolled(current_user.id, pagination, search)
+
+    async def list_recent_courses(self, pagination: PaginationParams) -> tuple[Sequence[Course], int]:
+        cache_key = f"courses:recent:page_{pagination.page}:size_{pagination.page_size}"
+        cached_data = await get_cache(cache_key)
+        if cached_data:
+            items = [Course(**item) for item in cached_data['items']]
+            return items, cached_data['total']
+
+        items, total = await self.repository.list_recent(pagination)
+
+        from app.modules.course.dto import CourseReadDTO
+        serializable_items = [
+            CourseReadDTO.model_validate(item).model_dump(mode='json', exclude=_NON_COLUMN_FIELDS)
+            for item in items
+        ]
+        await set_cache(cache_key, {'items': serializable_items, 'total': total}, expire=300)
+
+        return items, total
 
     async def list_manage(
         self, pagination: PaginationParams, filters: CourseManageFilterParams, current_user: User
@@ -101,7 +249,11 @@ class CourseService:
             
         # Serialize for cache using its schema model
         from app.modules.course.dto import CourseReadDTO
-        await set_cache(cache_key, CourseReadDTO.model_validate(course).model_dump(mode='json'), expire=900)
+        await set_cache(
+            cache_key,
+            CourseReadDTO.model_validate(course).model_dump(mode='json', exclude=_NON_COLUMN_FIELDS),
+            expire=900,
+        )
         
         return course
 
@@ -120,11 +272,16 @@ class CourseService:
 
     async def update(self, id: uuid.UUID, payload: CourseUpdateDTO, current_user: User) -> Course:
         course = await self.get_for_manage(id, current_user)
-        for field, value in payload.model_dump(exclude_unset=True).items():
+        update_data = payload.model_dump(exclude_unset=True, exclude=_NON_COLUMN_FIELDS)
+        for field, value in update_data.items():
             setattr(course, field, value)
         await self.repository.update(course)
+
+        if "instructors" in payload.model_fields_set and payload.instructors is not None:
+            await self._replace_instructors(course, payload.instructors, current_user)
+
         await self.session.commit()
-        
+
         await delete_cache(f"course:slug:{course.slug}")
         await delete_cache("courses:*")
         await delete_cache("course_catalogs:public")
@@ -250,6 +407,47 @@ class CourseService:
         
         return enrolled, accessible
 
+    async def get_bookmark_ids(self, user: User, course_ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
+        if not course_ids:
+            return set()
+        from app.modules.course.bookmark_entity import CourseBookmark
+
+        stmt = select(CourseBookmark.course_id).where(
+            CourseBookmark.user_id == user.id, CourseBookmark.course_id.in_(course_ids)
+        )
+        return set((await self.session.execute(stmt)).scalars().all())
+
+    async def add_bookmark(self, user: User, course_id: uuid.UUID) -> None:
+        from app.modules.course.bookmark_entity import CourseBookmark
+
+        await self.get_by_id(course_id)  # 404s if the course doesn't exist
+
+        existing_stmt = select(func.count()).select_from(CourseBookmark).where(
+            CourseBookmark.user_id == user.id, CourseBookmark.course_id == course_id
+        )
+        if (await self.session.execute(existing_stmt)).scalar_one() > 0:
+            return
+
+        self.session.add(CourseBookmark(user_id=user.id, course_id=course_id))
+        await self.session.commit()
+
+    async def remove_bookmark(self, user: User, course_id: uuid.UUID) -> None:
+        from app.modules.course.bookmark_entity import CourseBookmark
+
+        stmt = select(CourseBookmark).where(
+            CourseBookmark.user_id == user.id, CourseBookmark.course_id == course_id
+        )
+        bookmark = (await self.session.execute(stmt)).scalar_one_or_none()
+        if bookmark is None:
+            return
+        await self.session.delete(bookmark)
+        await self.session.commit()
+
+    async def list_bookmarked(
+        self, current_user: User, pagination: PaginationParams
+    ) -> tuple[Sequence[Course], int]:
+        return await self.repository.list_bookmarked(current_user.id, pagination)
+
     async def set_featured_courses(self, course_ids: list[uuid.UUID], current_user: User) -> None:
         if current_user.user_type != UserTypeEnum.ADMIN:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins can set featured courses")
@@ -268,7 +466,10 @@ class CourseService:
         
         # Cache serialization
         from app.modules.course.dto import CourseReadDTO
-        serializable_items = [CourseReadDTO.model_validate(item).model_dump(mode='json') for item in items]
+        serializable_items = [
+            CourseReadDTO.model_validate(item).model_dump(mode='json', exclude=_NON_COLUMN_FIELDS)
+            for item in items
+        ]
         await set_cache(cache_key, {'items': serializable_items, 'total': total}, expire=1800)
         
         return items, total

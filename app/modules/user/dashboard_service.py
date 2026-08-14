@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.modules.course.access_entity import UserCourseAccess
+from app.modules.course.bookmark_entity import CourseBookmark
 from app.modules.course.review_entity import CourseReview
 from app.modules.learning.entity import QuizAttempt, UserCourseProgress
 from app.modules.user.activity_entity import ActivityLog
@@ -58,13 +59,24 @@ class DashboardService:
         )
         completed_courses = (await self.db.execute(completed_stmt)).scalar_one()
 
+        # 7. Not-started Courses: enrolled but with no progress made yet
+        not_started_courses = max(0, total_courses_enrolled - in_process_courses - completed_courses)
+
+        # 8. Bookmarked Courses
+        bookmarked_stmt = select(func.count()).select_from(CourseBookmark).where(
+            CourseBookmark.user_id == user_id
+        )
+        bookmarked_courses = (await self.db.execute(bookmarked_stmt)).scalar_one()
+
         return UserStatsDTO(
             total_courses_enrolled=total_courses_enrolled,
             quizzes_attempted=quizzes_attempted,
             completion_rate=completion_rate,
             total_reviews=total_reviews,
             in_process_courses=in_process_courses,
-            completed_courses=completed_courses
+            completed_courses=completed_courses,
+            not_started_courses=not_started_courses,
+            bookmarked_courses=bookmarked_courses,
         )
 
     async def list_recent_activity(

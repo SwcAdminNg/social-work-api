@@ -8,6 +8,7 @@ from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
 from app.modules.course.dto import CourseFilterParams, CourseManageFilterParams
 from app.modules.course.entity import Course, CourseCatalog
+from app.modules.course.instructor_entity import CourseInstructor
 
 
 class CourseRepository(BaseRepository[Course]):
@@ -33,6 +34,19 @@ class CourseRepository(BaseRepository[Course]):
         if filters.search is not None:
             term = f"%{filters.search}%"
             stmt = stmt.where(or_(Course.title.ilike(term), Course.description.ilike(term)))
+        if getattr(filters, "instructor_id", None) is not None:
+            co_instructor_stmt = select(CourseInstructor.course_id).where(
+                CourseInstructor.user_id == filters.instructor_id
+            )
+            stmt = stmt.where(
+                or_(Course.instructor_id == filters.instructor_id, Course.id.in_(co_instructor_stmt))
+            )
+        if getattr(filters, "instructor_name", None) is not None:
+            name_term = f"%{filters.instructor_name}%"
+            name_match_stmt = select(CourseInstructor.course_id).where(
+                CourseInstructor.name.ilike(name_term)
+            )
+            stmt = stmt.where(Course.id.in_(name_match_stmt))
         if catalog_categories is not None:
             stmt = stmt.where(Course.category.in_(catalog_categories))
         return stmt
@@ -72,14 +86,53 @@ class CourseRepository(BaseRepository[Course]):
         return items, total
 
     async def list_enrolled(
-        self, user_id: uuid.UUID, pagination: PaginationParams
+        self, user_id: uuid.UUID, pagination: PaginationParams, search: str | None = None
     ) -> tuple[Sequence[Course], int]:
         from app.modules.course.access_entity import UserCourseAccess
-        
+
         stmt = (
             self._base_select()
             .join(UserCourseAccess, UserCourseAccess.course_id == Course.id)
             .where(UserCourseAccess.user_id == user_id)
+        )
+        if search:
+            term = f"%{search}%"
+            name_match_stmt = select(CourseInstructor.course_id).where(CourseInstructor.name.ilike(term))
+            stmt = stmt.where(
+                or_(Course.title.ilike(term), Course.description.ilike(term), Course.id.in_(name_match_stmt))
+            )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        stmt = stmt.offset(pagination.offset).limit(pagination.limit)
+        items = (await self.session.execute(stmt)).scalars().all()
+        return items, total
+
+    async def list_recent(self, pagination: PaginationParams) -> tuple[Sequence[Course], int]:
+        stmt = (
+            self._base_select()
+            .where(Course.is_published.is_(True))
+            .order_by(Course.created_at.desc())
+        )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        stmt = stmt.offset(pagination.offset).limit(pagination.limit)
+        items = (await self.session.execute(stmt)).scalars().all()
+        return items, total
+
+    async def list_bookmarked(
+        self, user_id: uuid.UUID, pagination: PaginationParams
+    ) -> tuple[Sequence[Course], int]:
+        from app.modules.course.bookmark_entity import CourseBookmark
+
+        stmt = (
+            self._base_select()
+            .join(CourseBookmark, CourseBookmark.course_id == Course.id)
+            .where(CourseBookmark.user_id == user_id)
+            .order_by(CourseBookmark.created_at.desc())
         )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
