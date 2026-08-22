@@ -5,6 +5,7 @@ Welcome to the **Social Workers API** project! This document contains all the ne
 ## 1. Tech Stack Overview
 
 This backend is built on the modern Python ecosystem:
+
 - **Framework:** FastAPI
 - **Database:** PostgreSQL (with `asyncpg`)
 - **ORM:** SQLAlchemy 2.0 (Async)
@@ -55,7 +56,9 @@ alembic/               # Database migration configurations and versions
 ```
 
 ### Adding a new entity
+
 Whenever you create a new feature/entity, create a folder in `app/modules/`. Make sure you:
+
 1. Define the SQLAlchemy model in `entity.py`.
 2. Register it in `app/models/__init__.py`.
 3. Create the corresponding `dto.py`, `repository.py`, `service.py`, and `router.py`.
@@ -64,6 +67,7 @@ Whenever you create a new feature/entity, create a folder in `app/modules/`. Mak
 ## 4. Local Installation & Setup
 
 ### Prerequisites
+
 - **Python:** 3.11+ (Recommended 3.13)
 - **PostgreSQL:** Running locally. Easiest way is via Docker:
   ```bash
@@ -82,6 +86,7 @@ Whenever you create a new feature/entity, create a folder in `app/modules/`. Mak
    - Mac/Linux/Git Bash: `source venv/Scripts/activate` or `source venv/bin/activate`
 
 2. **Install Dependencies:**
+
    ```bash
    pip install -r requirements.txt
    ```
@@ -89,6 +94,7 @@ Whenever you create a new feature/entity, create a folder in `app/modules/`. Mak
 3. **Configure the Environment:**
    Make sure you have an `.env` file in the root directory (copy from `.env.example`).
    Ensure that the PostgreSQL and Redis connection strings match your local setup:
+
    ```env
    POSTGRES_USER=postgres
    POSTGRES_PASSWORD=postgres
@@ -97,18 +103,27 @@ Whenever you create a new feature/entity, create a folder in `app/modules/`. Mak
    POSTGRES_DB=social_workers
    REDIS_URL=redis://localhost:6379/0
    ```
-   *Note: For testing third-party integrations (like Paystack, Bunny.net, R2, QStash), you will need to fill in the respective sandbox/test credentials in your `.env`.*
+
+   _Note: For testing third-party integrations (like Paystack, Bunny.net, R2, QStash), you will need to fill in the respective sandbox/test credentials in your `.env`._
 
 4. **Run Database Migrations:**
    Apply existing migrations to build your database schema:
+
    ```bash
    alembic upgrade head
    ```
 
 5. **Start the API Server:**
+
    ```bash
    uvicorn app.main:app --reload
    ```
+
+6. **Start the API Server Worker:**
+
+```bash
+arq app.worker.WorkerSettings
+```
 
 6. **Verify the API is running:**
    - Interactive API Docs (Swagger UI): http://127.0.0.1:8000/docs

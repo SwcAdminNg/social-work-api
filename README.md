@@ -51,6 +51,11 @@ To roll back the last migration: `alembic downgrade -1`
 uvicorn app.main:app --reload
 ```
 
+6. **Start the API Server Worker:**
+   ```bash
+   arq app.worker.WorkerSettings
+   ```
+
 - Swagger UI: http://127.0.0.1:8000/docs
 - ReDoc: http://127.0.0.1:8000/redoc
 - Health check: http://127.0.0.1:8000/health
