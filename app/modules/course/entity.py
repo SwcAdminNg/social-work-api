@@ -79,6 +79,10 @@ class Course(BaseEntity):
     )
     access_start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     access_end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bumped whenever a new curriculum item is added (see CourseContentService.create_item)
+    # - lets enrolled-course listings flag "new material since you were last here" by
+    # comparing this against the student's UserCourseProgress.last_accessed_at.
+    content_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CourseCatalog(BaseEntity):

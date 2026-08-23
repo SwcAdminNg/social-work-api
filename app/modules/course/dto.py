@@ -147,6 +147,18 @@ class CourseReadDTO(AuditDTO):
         description="The current user's progress on this course. Only set when the "
         "user is authenticated and enrolled; null otherwise.",
     )
+    content_updated_at: datetime | None = Field(
+        default=None,
+        description="When a curriculum item was last added to this course. Null if "
+        "nothing's been added since the course was created.",
+    )
+    has_new_content: bool = Field(
+        default=False,
+        description="True when `content_updated_at` is more recent than this user's "
+        "last visit to the course (their `UserCourseProgress.last_accessed_at`) - i.e. "
+        "there's material here they haven't seen yet. Only meaningful (can be true) "
+        "when the user is enrolled; always false otherwise.",
+    )
 
 class SetFeaturedCoursesDTO(BaseModel):
     course_ids: list[uuid.UUID]

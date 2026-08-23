@@ -191,6 +191,7 @@ class CourseContentService:
         current_user: User,
     ) -> tuple[CourseItem, VideoUploadCredentialsDTO | None, DocumentUploadCredentialsDTO | None]:
         course, section = await self._authorize_section(course_id, section_id, current_user)
+        course.content_updated_at = datetime.now(timezone.utc)
 
         item = CourseItem(
             section_id=section.id,

@@ -632,6 +632,24 @@ student**, not just whoever happens to interact with the course next:
   poll. It touches every enrolled student in one transaction, so expect the call to take
   proportionally longer on a course with a large roster.
 
+### 7.2 "New content" flag for students
+
+Creating a new item also stamps `Course.content_updated_at = now()`. Every enrolled-course
+listing exposes two fields per course, computed per-student against their own
+`UserCourseProgress.last_accessed_at` (their last curriculum visit — falls back to enrollment
+time if they've never opened it):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `content_updated_at` | datetime \| null | When a curriculum item was last added to this course. Null if nothing's ever been added since creation. |
+| `has_new_content` | bool | `true` when `content_updated_at` is more recent than this student's last visit — i.e. there's material they haven't seen yet. Always `false` for a non-enrolled/anonymous viewer. |
+
+Both appear on `GET /courses/enrolled`, `GET /courses` (and other course-listing endpoints that
+call `attach_progress_status`), and the student-facing `GET /learning/courses`. `has_new_content`
+clears itself automatically the next time the student opens `GET /learning/courses/{course_id}/curriculum`
+— no separate "mark as seen" call needed. Deleting an item does **not** set `content_updated_at`
+(only additions count as "new material").
+
 ---
 
 ## 8. Error responses you should handle

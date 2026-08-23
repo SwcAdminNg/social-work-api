@@ -40,13 +40,24 @@ class LearningRepository:
         return progress
 
     async def update_user_course_progress(
-        self, progress: UserCourseProgress, percent: int, is_completed: bool
+        self, progress: UserCourseProgress, percent: int, is_completed: bool, touch_last_accessed: bool = True
     ) -> None:
         progress.progress_percent = percent
         progress.is_completed = is_completed
-        progress.last_accessed_at = datetime.now(timezone.utc)
+        if touch_last_accessed:
+            # Only a genuine student action (completing an item, opening the
+            # curriculum) should move this - a course-content change recalculating
+            # everyone's numbers in bulk is not the student "accessing" anything,
+            # and must not mask a "new content since you were last here" signal.
+            progress.last_accessed_at = datetime.now(timezone.utc)
         self.session.add(progress)
         await self.session.flush()
+
+    async def touch_last_accessed(self, user_id: uuid.UUID, course_id: uuid.UUID) -> None:
+        progress = await self.get_user_course_progress(user_id, course_id)
+        if progress is not None:
+            progress.last_accessed_at = datetime.now(timezone.utc)
+            await self.session.flush()
 
     async def get_user_item_progress(self, user_id: uuid.UUID, item_id: uuid.UUID) -> UserItemProgress | None:
         stmt = select(UserItemProgress).where(

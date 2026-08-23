@@ -117,9 +117,7 @@ class CourseService:
             )
         return result
 
-    async def get_progress_status_map(
-        self, user: User, course_ids: Sequence[uuid.UUID]
-    ) -> dict[uuid.UUID, CourseProgressStatusEnum]:
+    async def get_progress_map(self, user: User, course_ids: Sequence[uuid.UUID]):
         """Only returns an entry for courses the user is actually enrolled in -
         courses missing from the result should be treated as "not enrolled"
         (as opposed to NOT_STARTED, which means enrolled but untouched)."""
@@ -141,24 +139,36 @@ class CourseService:
         progress_by_course = {
             p.course_id: p for p in (await self.session.execute(progress_stmt)).scalars().all()
         }
-
-        result: dict[uuid.UUID, CourseProgressStatusEnum] = {}
-        for cid in enrolled_ids:
-            progress = progress_by_course.get(cid)
-            if progress and progress.is_completed:
-                result[cid] = CourseProgressStatusEnum.COMPLETED
-            elif progress and progress.progress_percent > 0:
-                result[cid] = CourseProgressStatusEnum.IN_PROGRESS
-            else:
-                result[cid] = CourseProgressStatusEnum.NOT_STARTED
-        return result
+        # Every enrolled id gets an entry, even with no progress row yet (None) -
+        # distinguishes "enrolled but untouched" from "not enrolled at all".
+        return {cid: progress_by_course.get(cid) for cid in enrolled_ids}
 
     async def attach_progress_status(self, dtos, user: User) -> None:
+        """Sets `progress_status` and `has_new_content` on each CourseReadDTO (or
+        subclass) in place. `has_new_content` compares the course's
+        `content_updated_at` (already populated on the dto) against this user's
+        `UserCourseProgress.last_accessed_at` - true means there's curriculum
+        content added since they were last in the course."""
         if not dtos:
             return
-        status_map = await self.get_progress_status_map(user, [dto.id for dto in dtos])
+        progress_map = await self.get_progress_map(user, [dto.id for dto in dtos])
         for dto in dtos:
-            dto.progress_status = status_map.get(dto.id)
+            if dto.id not in progress_map:
+                continue
+            progress = progress_map[dto.id]
+            if progress and progress.is_completed:
+                dto.progress_status = CourseProgressStatusEnum.COMPLETED
+            elif progress and progress.progress_percent > 0:
+                dto.progress_status = CourseProgressStatusEnum.IN_PROGRESS
+            else:
+                dto.progress_status = CourseProgressStatusEnum.NOT_STARTED
+
+            # Fall back to enrollment time when they've never visited - content
+            # that predates enrollment isn't "new", it's just the course.
+            last_seen = (progress.last_accessed_at or progress.created_at) if progress else None
+            dto.has_new_content = bool(
+                dto.content_updated_at is not None and last_seen is not None and dto.content_updated_at > last_seen
+            )
 
     async def attach_instructors(self, dtos) -> None:
         """Mutates a list of CourseReadDTO/PublicCourseReadDTO in place, filling

@@ -70,7 +70,9 @@ class LearningService:
         result = await self.session.execute(stmt)
         return result.scalars().first() is not None
 
-    async def _recalculate_progress(self, user_id: uuid.UUID, course_id: uuid.UUID) -> None:
+    async def _recalculate_progress(
+        self, user_id: uuid.UUID, course_id: uuid.UUID, touch_last_accessed: bool = True
+    ) -> None:
         total_items = await self.repo.count_course_items(course_id)
         if total_items == 0:
             return
@@ -81,7 +83,9 @@ class LearningService:
 
         progress = await self.repo.get_user_course_progress(user_id, course_id)
         if progress:
-            await self.repo.update_user_course_progress(progress, percent, is_completed)
+            await self.repo.update_user_course_progress(
+                progress, percent, is_completed, touch_last_accessed=touch_last_accessed
+            )
 
     async def recalculate_progress_for_enrolled_users(self, course_id: uuid.UUID) -> None:
         """Called whenever a course's item count changes - a new item added to any
@@ -89,10 +93,16 @@ class LearningService:
         goes stale. Without this, a student who finished a course before an
         instructor added new content (e.g. a course being drip-fed week by week)
         would keep showing as `is_completed` forever, since `_recalculate_progress`
-        only ever runs as a side effect of *that* student's own actions."""
+        only ever runs as a side effect of *that* student's own actions.
+
+        `touch_last_accessed=False`: this is the instructor changing the course,
+        not the student doing anything - bumping `last_accessed_at` here would
+        both misrepresent "last accessed" and immediately clear the "new content
+        since you were last here" flag (see Course.content_updated_at) for every
+        enrolled student before any of them actually saw it."""
         user_ids = await self.repo.list_enrolled_user_ids(course_id)
         for user_id in user_ids:
-            await self._recalculate_progress(user_id, course_id)
+            await self._recalculate_progress(user_id, course_id, touch_last_accessed=False)
 
     # -- module/section gating & the redo-on-fail reset engine -----------------
     #
@@ -273,7 +283,11 @@ class LearningService:
                 **course.__dict__,
                 progress_percent=progress.progress_percent,
                 is_completed=progress.is_completed,
-                is_enrolled=True
+                is_enrolled=True,
+                has_new_content=bool(
+                    course.content_updated_at is not None
+                    and course.content_updated_at > (progress.last_accessed_at or progress.created_at)
+                ),
             )
             result.append(dto)
         return result, total
@@ -286,7 +300,9 @@ class LearningService:
         progress = await self.repo.get_user_course_progress(user_id, course_id)
         if not progress:
             progress = await self.repo.create_user_course_progress(user_id, course_id)
-            await self.session.commit()
+        else:
+            await self.repo.touch_last_accessed(user_id, course_id)
+        await self.session.commit()
 
         sections = await self.content_repo.list_sections(course_id)
         section_ids = [s.id for s in sections]
