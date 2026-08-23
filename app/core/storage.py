@@ -33,6 +33,18 @@ class R2Client:
     def build_essay_document_key(self, item_id: uuid.UUID, user_id: uuid.UUID, file_name: str) -> str:
         return f"essays/{item_id}/{user_id}/{uuid.uuid4()}-{file_name}"
 
+    def build_certificate_template_image_key(self, template_id: uuid.UUID, file_name: str) -> str:
+        return f"certificate-templates/{template_id}/{uuid.uuid4()}-{file_name}"
+
+    def build_certificate_pdf_key(self, course_id: uuid.UUID, user_id: uuid.UUID, certificate_id: uuid.UUID) -> str:
+        return f"certificates/{course_id}/{user_id}/{certificate_id}.pdf"
+
+    def upload_bytes(self, key: str, data: bytes, content_type: str) -> None:
+        """Direct server-side upload, unlike `generate_upload_url` - used only for
+        content we generate ourselves (e.g. rendered certificate PDFs), never for
+        user-supplied file bytes."""
+        self._client.put_object(Bucket=settings.r2_bucket_name, Key=key, Body=data, ContentType=content_type)
+
     def generate_upload_url(self, key: str, content_type: str | None = None) -> str:
         params = {"Bucket": settings.r2_bucket_name, "Key": key}
         if content_type:

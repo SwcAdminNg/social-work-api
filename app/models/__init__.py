@@ -14,6 +14,8 @@ from app.modules.course.content_entity import (  # noqa: F401
 )
 from app.modules.course.entity import Course, CourseItem, CourseSection  # noqa: F401
 from app.modules.course.access_entity import UserCourseAccess  # noqa: F401
+from app.modules.course.bookmark_entity import CourseBookmark  # noqa: F401
+from app.modules.course.instructor_entity import CourseInstructor  # noqa: F401
 from app.modules.course.review_entity import CourseReview  # noqa: F401
 from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, UserSubscription  # noqa: F401
 from app.modules.user.entity import User  # noqa: F401
@@ -24,3 +26,4 @@ from app.modules.learning.entity import (  # noqa: F401
     UserCourseProgress,
     UserItemProgress,
 )
+from app.modules.certificate.entity import Certificate, CertificateTemplate  # noqa: F401

@@ -83,6 +83,13 @@ class Course(BaseEntity):
     # - lets enrolled-course listings flag "new material since you were last here" by
     # comparing this against the student's UserCourseProgress.last_accessed_at.
     content_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    certificate_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # Null falls back to the first active global (owner_id=None) CertificateTemplate
+    # - see CertificateService._resolve_template - so a course "just works" the
+    # moment at least one global template has been seeded/created.
+    certificate_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("certificate_templates.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class CourseCatalog(BaseEntity):

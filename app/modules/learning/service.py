@@ -42,8 +42,10 @@ from app.modules.learning.entity import (
     QuizGroupAttemptStatusEnum,
     UserItemProgress,
 )
+from app.modules.certificate.service import CertificateService
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
+from app.modules.user.repository import UserRepository
 
 
 class LearningService:
@@ -53,6 +55,7 @@ class LearningService:
         self.course_repo = CourseRepository(session)
         self.content_repo = CourseContentRepository(session)
         self.activity_service = ActivityService(session)
+        self.certificate_service = CertificateService(session)
         self._r2 = None
 
     @property
@@ -86,6 +89,14 @@ class LearningService:
             await self.repo.update_user_course_progress(
                 progress, percent, is_completed, touch_last_accessed=touch_last_accessed
             )
+
+        if is_completed:
+            # Idempotent - a no-op once a certificate already exists for this
+            # user/course, or if the course has no certificate template/is opted out.
+            course = await self.course_repo.get_by_id(course_id)
+            user = await UserRepository(self.session).get_by_id(user_id)
+            if course is not None and user is not None:
+                await self.certificate_service.ensure_issued(user, course)
 
     async def recalculate_progress_for_enrolled_users(self, course_id: uuid.UUID) -> None:
         """Called whenever a course's item count changes - a new item added to any
