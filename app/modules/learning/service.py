@@ -83,6 +83,17 @@ class LearningService:
         if progress:
             await self.repo.update_user_course_progress(progress, percent, is_completed)
 
+    async def recalculate_progress_for_enrolled_users(self, course_id: uuid.UUID) -> None:
+        """Called whenever a course's item count changes - a new item added to any
+        section, or an item/section removed - so no enrolled student's progress
+        goes stale. Without this, a student who finished a course before an
+        instructor added new content (e.g. a course being drip-fed week by week)
+        would keep showing as `is_completed` forever, since `_recalculate_progress`
+        only ever runs as a side effect of *that* student's own actions."""
+        user_ids = await self.repo.list_enrolled_user_ids(course_id)
+        for user_id in user_ids:
+            await self._recalculate_progress(user_id, course_id)
+
     # -- module/section gating & the redo-on-fail reset engine -----------------
     #
     # Each CourseSection ("module") may designate one of its ASSESSMENT items as

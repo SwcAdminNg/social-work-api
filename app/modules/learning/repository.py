@@ -392,6 +392,10 @@ class LearningRepository:
         await self.session.flush()
         return access
 
+    async def list_enrolled_user_ids(self, course_id: uuid.UUID) -> Sequence[uuid.UUID]:
+        stmt = select(UserCourseAccess.user_id).where(UserCourseAccess.course_id == course_id)
+        return (await self.session.execute(stmt)).scalars().all()
+
     async def list_user_assessments(
         self,
         user_id: uuid.UUID,

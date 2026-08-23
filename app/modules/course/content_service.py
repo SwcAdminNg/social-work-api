@@ -160,8 +160,15 @@ class CourseContentService:
     async def delete_section(
         self, course_id: uuid.UUID, section_id: uuid.UUID, current_user: User
     ) -> None:
-        _, section = await self._authorize_section(course_id, section_id, current_user)
+        course, section = await self._authorize_section(course_id, section_id, current_user)
         section.mark_deleted(current_user.id)
+
+        # Deleting a section drops its items from every enrolled student's item
+        # count too (progress queries join through non-deleted sections), so their
+        # progress/completion needs recomputing the same as an item add/remove.
+        from app.modules.learning.service import LearningService
+        await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
+
         await self.session.commit()
 
     async def reorder_sections(
@@ -269,6 +276,13 @@ class CourseContentService:
                     )
                 )
 
+        # A new item raises this course's total item count for every enrolled
+        # student, so anyone who'd already finished the course (e.g. one that gets
+        # new modules added week by week) needs to be un-completed until they
+        # catch up on the new content - see LearningService.recalculate_progress_for_enrolled_users.
+        from app.modules.learning.service import LearningService
+        await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
+
         await self.session.commit()
         return item, video_credentials, document_credentials
 
@@ -312,7 +326,7 @@ class CourseContentService:
         return item
 
     async def delete_item(self, item_id: uuid.UUID, current_user: User) -> None:
-        _, _, item = await self._authorize_item(item_id, current_user)
+        course, _, item = await self._authorize_item(item_id, current_user)
 
         if item.item_type == CourseItemTypeEnum.DOCUMENT:
             document = await self.repo.get_document_by_item(item.id)
@@ -320,6 +334,10 @@ class CourseContentService:
                 self.r2.delete_object(document.storage_key)
 
         item.mark_deleted(current_user.id)
+
+        from app.modules.learning.service import LearningService
+        await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
+
         await self.session.commit()
 
     async def reorder_items(

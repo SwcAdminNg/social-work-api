@@ -610,6 +610,28 @@ These apply to assessment items the same way they apply to video/document items:
 - **`PATCH /courses/{course_id}/sections/{section_id}/items/reorder`** — bulk reorder
   (`{ "items": [{ "id": "...", "order_index": 0 }, ...] }`).
 
+### 7.1 Adding/removing items live-updates every enrolled student's completion
+
+Relevant for courses that get built out gradually (e.g. a cohort where you add a new module
+every week while students actively work through what already exists). Creating a new item
+(any type), deleting an item, or deleting a whole section immediately recalculates
+`progress_percent`/`is_completed` (`UserCourseProgress`) for **every currently enrolled
+student**, not just whoever happens to interact with the course next:
+
+- Add a new item to a course a student had already finished → that student's course flips
+  back to **not completed** (their `progress_percent` drops below 100) until they also finish
+  the new item. There is no "grandfathering" of an old completion — completion always reflects
+  every currently-existing, non-deleted item in the course.
+- Delete an item a student hadn't finished yet → their `progress_percent` recalculates against
+  the smaller item count, and may become 100%/`is_completed: true` if that was the only thing
+  left.
+- This only touches the course-level `is_completed`/`progress_percent` rollup — per-item
+  `UserItemProgress` rows for content the student already completed are untouched, and
+  module-gating state (§11) is unaffected (it's derived independently, live, per request).
+- This happens synchronously as part of the create/delete call - no extra step, nothing to
+  poll. It touches every enrolled student in one transaction, so expect the call to take
+  proportionally longer on a course with a large roster.
+
 ---
 
 ## 8. Error responses you should handle
