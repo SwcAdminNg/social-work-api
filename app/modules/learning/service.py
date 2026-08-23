@@ -83,6 +83,125 @@ class LearningService:
         if progress:
             await self.repo.update_user_course_progress(progress, percent, is_completed)
 
+    # -- module/section gating & the redo-on-fail reset engine -----------------
+    #
+    # Each CourseSection ("module") may designate one of its ASSESSMENT items as
+    # its `is_final_assessment`. A student must pass it to unlock the *next*
+    # section; exhausting its retries without passing resets the whole section
+    # (every video/document/assessment in it) back to not-completed, with fresh
+    # attempt counters. The one on the course's *last* section doubles as the
+    # course final exam: passing it completes the course, failing it out of
+    # retries resets the *entire* course instead of just that one section.
+    # A section with no final assessment configured just needs to be fully
+    # completed (no pass/fail concept) to unlock the next one.
+
+    async def _get_final_assessment_for_section(self, section_id: uuid.UUID):
+        items = await self.content_repo.list_items_for_sections([section_id])
+        for item in items:
+            if item.item_type == CourseItemTypeEnum.ASSESSMENT:
+                assessment = await self.content_repo.get_assessment_by_item(item.id)
+                if assessment is not None and assessment.is_final_assessment:
+                    return item, assessment
+        return None, None
+
+    async def _has_passed_section(self, user_id: uuid.UUID, section) -> bool:
+        final_item, final_assessment = await self._get_final_assessment_for_section(section.id)
+
+        if final_assessment is None:
+            items = await self.content_repo.list_items_for_sections([section.id])
+            if not items:
+                return True
+            stmt = select(UserItemProgress.item_id).where(
+                UserItemProgress.user_id == user_id,
+                UserItemProgress.item_id.in_([i.id for i in items]),
+                UserItemProgress.is_completed.is_(True),
+            )
+            completed_ids = set((await self.session.execute(stmt)).scalars().all())
+            return all(i.id in completed_ids for i in items)
+
+        if final_assessment.assessment_type == AssessmentTypeEnum.QUIZ:
+            attempt = await self.repo.get_latest_quiz_attempt(user_id, final_item.id)
+            return bool(attempt and attempt.passed)
+        if final_assessment.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
+            attempt = await self.repo.get_latest_submitted_quiz_group_attempt(user_id, final_item.id)
+            return bool(attempt and attempt.passed)
+        if final_assessment.assessment_type == AssessmentTypeEnum.ESSAY:
+            submission = await self.repo.get_essay_submission(user_id, final_item.id)
+            if submission is None or submission.score is None:
+                return False
+            essay_settings = await self.content_repo.get_essay_settings(final_assessment.id)
+            pass_mark = essay_settings.pass_mark_percentage if essay_settings else 70
+            return float(submission.score) >= pass_mark
+        return False
+
+    async def get_section_lock_map(self, user_id: uuid.UUID, course_id: uuid.UUID) -> dict[uuid.UUID, bool]:
+        """The first section is always unlocked. Each following section is locked
+        unless every section before it has been passed - once one is unpassed,
+        everything after it stays locked too (no skipping ahead)."""
+        sections = await self.content_repo.list_sections(course_id)
+        locks: dict[uuid.UUID, bool] = {}
+        prev_passed = True
+        for section in sections:
+            locks[section.id] = not prev_passed
+            prev_passed = prev_passed and await self._has_passed_section(user_id, section)
+        return locks
+
+    async def _ensure_section_unlocked(self, user_id: uuid.UUID, course_id: uuid.UUID, section_id: uuid.UUID) -> None:
+        locks = await self.get_section_lock_map(user_id, course_id)
+        if locks.get(section_id, False):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This module is locked - pass the previous module's final assessment first",
+            )
+
+    @staticmethod
+    def _is_last_section(section, ordered_sections) -> bool:
+        return bool(ordered_sections) and ordered_sections[-1].id == section.id
+
+    async def _reset_section_for_user(self, user_id: uuid.UUID, section_id: uuid.UUID) -> None:
+        """Wipes this user's progress and attempt/submission history for every item
+        in the section, so they redo it - videos, documents, and every assessment,
+        not just the final one - from a clean slate."""
+        items = await self.content_repo.list_items_for_sections([section_id])
+        for item in items:
+            await self.repo.delete_user_item_progress(user_id, item.id)
+            if item.item_type == CourseItemTypeEnum.ASSESSMENT:
+                await self.repo.soft_delete_quiz_attempts_for_item(user_id, item.id)
+                await self.repo.soft_delete_quiz_group_attempts_for_item(user_id, item.id)
+                await self.repo.soft_delete_essay_submission_for_item(user_id, item.id)
+
+    async def _reset_course_for_user(self, user_id: uuid.UUID, course_id: uuid.UUID) -> None:
+        sections = await self.content_repo.list_sections(course_id)
+        for section in sections:
+            await self._reset_section_for_user(user_id, section.id)
+        await self.repo.reset_user_course_progress(user_id, course_id)
+
+    async def _handle_final_assessment_outcome(
+        self,
+        user_id: uuid.UUID,
+        course_id: uuid.UUID,
+        section_id: uuid.UUID,
+        passed: bool,
+        attempts_remaining: int | None,
+    ) -> tuple[bool, bool]:
+        """Call after any final-assessment scoring event (quiz submit, quiz-group
+        submit, or essay grading). Returns (section_reset, course_reset)."""
+        if passed or attempts_remaining is None or attempts_remaining > 0:
+            return False, False
+
+        sections = await self.content_repo.list_sections(course_id)
+        section = next((s for s in sections if s.id == section_id), None)
+        if section is None:
+            return False, False
+
+        if self._is_last_section(section, sections):
+            await self._reset_course_for_user(user_id, course_id)
+            return False, True
+
+        await self._reset_section_for_user(user_id, section.id)
+        await self._recalculate_progress(user_id, course_id)
+        return True, False
+
     async def enroll_course(self, user_id: uuid.UUID, course_id: uuid.UUID) -> dict:
         course = await self.course_repo.get_by_id(course_id)
         if not course:
@@ -153,6 +272,7 @@ class LearningService:
             UserItemProgress.user_id == user_id, UserItemProgress.is_completed.is_(True)
         )
         completed_item_ids = set((await self.session.execute(stmt)).scalars().all())
+        locks = await self.get_section_lock_map(user_id, course_id)
 
         section_dtos = []
         for section in sections:
@@ -164,7 +284,12 @@ class LearningService:
                 )
                 for i in section_items
             ]
-            section_dtos.append(LearningSectionDTO(id=section.id, title=section.title, items=item_dtos))
+            section_dtos.append(
+                LearningSectionDTO(
+                    id=section.id, title=section.title, items=item_dtos,
+                    is_locked=locks.get(section.id, False),
+                )
+            )
 
         return CourseCurriculumDTO(
             course_id=course_id,
@@ -181,6 +306,7 @@ class LearningService:
         item = await self.content_repo.get_item(item_id)
         if not item or item.section_id not in [s.id for s in await self.content_repo.list_sections(course_id)]:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+        await self._ensure_section_unlocked(user_id, course_id, item.section_id)
 
         item_progress = await self.repo.get_user_item_progress(user_id, item_id)
         is_completed = item_progress.is_completed if item_progress else False
@@ -205,13 +331,16 @@ class LearningService:
             if assessment:
                 dto.assessment_type = assessment.assessment_type
                 dto.due_date = assessment.due_date
+                dto.is_final_assessment = assessment.is_final_assessment
 
                 if assessment.assessment_type == AssessmentTypeEnum.QUIZ:
                     await self._fill_quiz_content(dto, user_id, item_id, assessment)
                 elif assessment.assessment_type == AssessmentTypeEnum.ESSAY:
                     await self._fill_essay_content(dto, user_id, item_id, assessment)
                 elif assessment.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
-                    dto.quiz_group = await self._build_quiz_group_content(user_id, item_id, assessment)
+                    dto.quiz_group = await self._build_quiz_group_content(
+                        user_id, course_id, item_id, item.section_id, assessment
+                    )
 
         return dto
 
@@ -262,16 +391,28 @@ class LearningService:
             dto.essay_question = essay_settings.question
             dto.essay_description = essay_settings.description
             dto.essay_submission_mode = essay_settings.submission_mode
+            dto.essay_pass_mark_percentage = essay_settings.pass_mark_percentage
+            dto.essay_max_attempts = essay_settings.max_attempts
 
         submission = await self.repo.get_essay_submission(user_id, item_id)
         if submission:
-            dto.essay_submission = self._build_essay_submission_dto(submission)
+            dto.essay_submission = self._build_essay_submission_dto(submission, essay_settings)
+            dto.essay_attempts_used = submission.graded_attempts
+            if essay_settings and essay_settings.max_attempts is not None:
+                dto.essay_attempts_remaining = max(essay_settings.max_attempts - submission.graded_attempts, 0)
+        else:
+            dto.essay_attempts_used = 0
+            if essay_settings and essay_settings.max_attempts is not None:
+                dto.essay_attempts_remaining = essay_settings.max_attempts
 
-    def _build_essay_submission_dto(self, submission: EssaySubmission) -> EssaySubmissionDTO:
+    def _build_essay_submission_dto(self, submission: EssaySubmission, essay_settings=None) -> EssaySubmissionDTO:
         document_download_url = None
         if submission.document_storage_key:
             document_download_url = self.r2.generate_download_url(submission.document_storage_key)
         is_graded = submission.score is not None
+        passed = None
+        if is_graded and submission.is_published and essay_settings is not None:
+            passed = float(submission.score) >= essay_settings.pass_mark_percentage
         return EssaySubmissionDTO(
             content_text=submission.content_text,
             document_file_name=submission.document_file_name,
@@ -281,6 +422,7 @@ class LearningService:
             is_published=submission.is_published,
             score=float(submission.score) if submission.is_published and submission.score is not None else None,
             feedback=submission.feedback if submission.is_published else None,
+            passed=passed,
         )
 
     async def mark_item_completed(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID) -> dict:
@@ -291,6 +433,7 @@ class LearningService:
         item = await self.content_repo.get_item(item_id)
         if not item or item.item_type == CourseItemTypeEnum.ASSESSMENT:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot manually complete an assessment item")
+        await self._ensure_section_unlocked(user_id, course_id, item.section_id)
 
         await self.repo.mark_item_completed(user_id, item_id)
         await self._recalculate_progress(user_id, course_id)
@@ -305,6 +448,7 @@ class LearningService:
         item = await self.content_repo.get_item(item_id)
         if not item or item.item_type != CourseItemTypeEnum.ASSESSMENT:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an assessment")
+        await self._ensure_section_unlocked(user_id, course_id, item.section_id)
 
         assessment = await self.content_repo.get_assessment_by_item(item_id)
         if not assessment or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
@@ -318,13 +462,12 @@ class LearningService:
         show_result_to_student = settings.show_result_to_student if settings else True
         max_attempts = settings.max_attempts if settings else None
 
-        if max_attempts is not None:
-            attempts_used = await self.repo.count_quiz_attempts(user_id, item_id)
-            if attempts_used >= max_attempts:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Maximum attempts ({max_attempts}) reached for this quiz",
-                )
+        attempts_used_before = await self.repo.count_quiz_attempts(user_id, item_id)
+        if max_attempts is not None and attempts_used_before >= max_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Maximum attempts ({max_attempts}) reached for this quiz",
+            )
 
         questions = await self.content_repo.list_questions_for_quizzes([assessment.id])
         q_ids = [q.id for q in questions]
@@ -357,6 +500,15 @@ class LearningService:
             {"course_id": str(course_id), "course_title": course.title if course else "Unknown", "item_id": str(item_id), "item_title": item.title, "passed": passed, "score": score_percent}
         )
 
+        section_reset = course_reset = False
+        if assessment.is_final_assessment:
+            attempts_remaining = (
+                None if max_attempts is None else max(max_attempts - (attempts_used_before + 1), 0)
+            )
+            section_reset, course_reset = await self._handle_final_assessment_outcome(
+                user_id, course_id, item.section_id, passed, attempts_remaining
+            )
+
         await self.session.commit()
 
         return QuizResultDTO(
@@ -364,6 +516,8 @@ class LearningService:
             passed=passed if show_result_to_student else None,
             correct_answers=correct_answers if show_result_to_student else None,
             result_visible=show_result_to_student,
+            section_reset=section_reset,
+            course_reset=course_reset,
         )
 
     @staticmethod
@@ -403,6 +557,7 @@ class LearningService:
         item = await self.content_repo.get_item(item_id)
         if not item or item.item_type != CourseItemTypeEnum.ASSESSMENT:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Item is not an assessment")
+        await self._ensure_section_unlocked(user_id, course_id, item.section_id)
 
         assessment = await self.content_repo.get_assessment_by_item(item_id)
         if not assessment or assessment.assessment_type != AssessmentTypeEnum.QUIZ_GROUP:
@@ -410,14 +565,30 @@ class LearningService:
 
         return item, assessment
 
-    async def _maybe_expire_quiz_group_attempt(self, attempt: QuizGroupAttempt, pass_mark_percentage: int) -> None:
+    async def _maybe_expire_quiz_group_attempt(
+        self,
+        attempt: QuizGroupAttempt,
+        course_id: uuid.UUID,
+        section_id: uuid.UUID,
+        pass_mark_percentage: int,
+        is_final_assessment: bool,
+        max_attempts: int | None,
+    ) -> None:
         """Lazily auto-submits+scores an IN_PROGRESS attempt whose timer has run
         out, using whatever answers were last saved via `save_quiz_group_progress`
         (empty if the student never called it). Called before any read/write that
-        touches an in-progress attempt, so an expired one never lingers."""
+        touches an in-progress attempt, so an expired one never lingers. If this is
+        a final assessment and that auto-submit exhausts its retries without
+        passing, this also triggers the module/course reset."""
         if attempt.expires_at is None or datetime.now(timezone.utc) < attempt.expires_at:
             return
         await self._finalize_quiz_group_attempt(attempt, pass_mark_percentage, auto_submitted=True)
+        if is_final_assessment:
+            attempts_used = await self.repo.count_quiz_group_attempts(attempt.user_id, attempt.item_id)
+            attempts_remaining = None if max_attempts is None else max(max_attempts - attempts_used, 0)
+            await self._handle_final_assessment_outcome(
+                attempt.user_id, course_id, section_id, bool(attempt.passed), attempts_remaining
+            )
 
     async def _finalize_quiz_group_attempt(
         self, attempt: QuizGroupAttempt, pass_mark_percentage: int, auto_submitted: bool
@@ -547,7 +718,7 @@ class LearningService:
         )
 
     async def _build_quiz_group_content(
-        self, user_id: uuid.UUID, item_id: uuid.UUID, assessment
+        self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, section_id: uuid.UUID, assessment
     ) -> QuizGroupContentDTO:
         settings = await self.content_repo.get_quiz_group_settings(assessment.id)
         pass_mark_percentage = settings.pass_mark_percentage if settings else 70
@@ -573,7 +744,10 @@ class LearningService:
 
         in_progress = await self.repo.get_in_progress_quiz_group_attempt(user_id, item_id)
         if in_progress is not None:
-            await self._maybe_expire_quiz_group_attempt(in_progress, pass_mark_percentage)
+            await self._maybe_expire_quiz_group_attempt(
+                in_progress, course_id, section_id, pass_mark_percentage,
+                assessment.is_final_assessment, max_attempts,
+            )
             await self.session.commit()
             if in_progress.status == QuizGroupAttemptStatusEnum.IN_PROGRESS:
                 section_dtos = await self._build_section_attempt_dtos(in_progress)
@@ -616,7 +790,10 @@ class LearningService:
 
         existing = await self.repo.get_in_progress_quiz_group_attempt(user_id, item_id)
         if existing is not None:
-            await self._maybe_expire_quiz_group_attempt(existing, pass_mark_percentage)
+            await self._maybe_expire_quiz_group_attempt(
+                existing, course_id, item.section_id, pass_mark_percentage,
+                assessment.is_final_assessment, max_attempts,
+            )
             await self.session.commit()
             if existing.status == QuizGroupAttemptStatusEnum.IN_PROGRESS:
                 section_dtos = await self._build_section_attempt_dtos(existing)
@@ -668,15 +845,16 @@ class LearningService:
 
     async def _load_owned_attempt(
         self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, attempt_id: uuid.UUID
-    ) -> tuple[QuizGroupAttempt, int]:
-        _, assessment = await self._authorize_quiz_group(user_id, course_id, item_id)
+    ):
+        item, assessment = await self._authorize_quiz_group(user_id, course_id, item_id)
         settings = await self.content_repo.get_quiz_group_settings(assessment.id)
         pass_mark_percentage = settings.pass_mark_percentage if settings else 70
+        max_attempts = settings.max_attempts if settings else None
 
         attempt = await self.repo.get_quiz_group_attempt(attempt_id)
         if attempt is None or attempt.user_id != user_id or attempt.item_id != item_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Attempt not found")
-        return attempt, pass_mark_percentage
+        return attempt, pass_mark_percentage, item, assessment, max_attempts
 
     async def save_quiz_group_progress(
         self,
@@ -686,10 +864,13 @@ class LearningService:
         attempt_id: uuid.UUID,
         answers: dict[uuid.UUID, list[uuid.UUID]],
     ) -> None:
-        attempt, pass_mark_percentage = await self._load_owned_attempt(
+        attempt, pass_mark_percentage, item, assessment, max_attempts = await self._load_owned_attempt(
             user_id, course_id, item_id, attempt_id
         )
-        await self._maybe_expire_quiz_group_attempt(attempt, pass_mark_percentage)
+        await self._maybe_expire_quiz_group_attempt(
+            attempt, course_id, item.section_id, pass_mark_percentage,
+            assessment.is_final_assessment, max_attempts,
+        )
         if attempt.status != QuizGroupAttemptStatusEnum.IN_PROGRESS:
             await self.session.commit()
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Time is up - this attempt was submitted automatically")
@@ -706,12 +887,10 @@ class LearningService:
         attempt_id: uuid.UUID,
         answers: dict[uuid.UUID, list[uuid.UUID]],
     ) -> QuizGroupResultDTO:
-        attempt, pass_mark_percentage = await self._load_owned_attempt(
+        attempt, pass_mark_percentage, item, assessment, max_attempts = await self._load_owned_attempt(
             user_id, course_id, item_id, attempt_id
         )
-        settings = await self.content_repo.get_quiz_group_settings(
-            (await self.content_repo.get_assessment_by_item(item_id)).id
-        )
+        settings = await self.content_repo.get_quiz_group_settings(assessment.id)
         show_result_to_student = settings.show_result_to_student if settings else True
 
         if attempt.status == QuizGroupAttemptStatusEnum.SUBMITTED:
@@ -730,7 +909,6 @@ class LearningService:
         await self._recalculate_progress(user_id, course_id)
 
         course = await self.course_repo.get_by_id(course_id)
-        item = await self.content_repo.get_item(item_id)
         await self.activity_service.log_activity(
             user_id,
             ActivityTypeEnum.QUIZ_GROUP_COMPLETED,
@@ -741,14 +919,27 @@ class LearningService:
             },
         )
 
+        section_reset = course_reset = False
+        if assessment.is_final_assessment:
+            attempts_used = await self.repo.count_quiz_group_attempts(user_id, item_id)
+            attempts_remaining = None if max_attempts is None else max(max_attempts - attempts_used, 0)
+            section_reset, course_reset = await self._handle_final_assessment_outcome(
+                user_id, course_id, item.section_id, bool(attempt.passed), attempts_remaining
+            )
+
         await self.session.commit()
-        return self._build_group_result_dto(attempt, show_result_to_student)
+        result = self._build_group_result_dto(attempt, show_result_to_student)
+        result.section_reset = section_reset
+        result.course_reset = course_reset
+        return result
 
     async def submit_essay_text(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, content_text: str) -> EssaySubmissionDTO:
-        assessment, essay_settings = await self._authorize_essay_submission(
+        assessment, essay_settings, reset_grade = await self._authorize_essay_submission(
             user_id, course_id, item_id, EssaySubmissionModeEnum.TEXT
         )
-        submission = await self.repo.upsert_essay_submission(user_id, item_id, content_text=content_text)
+        submission = await self.repo.upsert_essay_submission(
+            user_id, item_id, content_text=content_text, reset_grade=reset_grade
+        )
         await self.repo.mark_item_completed(user_id, item_id)
         await self._recalculate_progress(user_id, course_id)
         await self._log_essay_submitted(user_id, course_id, item_id)
@@ -765,9 +956,12 @@ class LearningService:
     async def finalize_essay_document(
         self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, storage_key: str, file_name: str
     ) -> EssaySubmissionDTO:
-        await self._authorize_essay_submission(user_id, course_id, item_id, EssaySubmissionModeEnum.DOCUMENT)
+        _, _, reset_grade = await self._authorize_essay_submission(
+            user_id, course_id, item_id, EssaySubmissionModeEnum.DOCUMENT
+        )
         submission = await self.repo.upsert_essay_submission(
-            user_id, item_id, document_storage_key=storage_key, document_file_name=file_name
+            user_id, item_id, document_storage_key=storage_key, document_file_name=file_name,
+            reset_grade=reset_grade,
         )
         await self.repo.mark_item_completed(user_id, item_id)
         await self._recalculate_progress(user_id, course_id)
@@ -785,6 +979,7 @@ class LearningService:
         item = await self.content_repo.get_item(item_id)
         if not item or item.item_type != CourseItemTypeEnum.ASSESSMENT:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an assessment")
+        await self._ensure_section_unlocked(user_id, course_id, item.section_id)
 
         assessment = await self.content_repo.get_assessment_by_item(item_id)
         if not assessment or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
@@ -804,10 +999,28 @@ class LearningService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The deadline for this essay has passed")
 
         existing = await self.repo.get_essay_submission(user_id, item_id)
+        reset_grade = False
         if existing is not None and existing.score is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="This essay has already been graded and can no longer be resubmitted"
+            # A regular essay locks resubmission on any grade. A *final* essay
+            # assessment instead re-opens for another attempt after a *failed*
+            # grade, as long as retries remain - matching quiz/quiz-group retry
+            # semantics. Passing, or running out of retries, still locks it (the
+            # latter also triggers the module/course reset, from the grading side).
+            passed = float(existing.score) >= essay_settings.pass_mark_percentage
+            max_attempts = essay_settings.max_attempts
+            attempts_remaining = None if max_attempts is None else max(max_attempts - existing.graded_attempts, 0)
+            can_retry = (
+                assessment.is_final_assessment and not passed
+                and (attempts_remaining is None or attempts_remaining > 0)
             )
+            if not can_retry:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This essay has already been graded and can no longer be resubmitted",
+                )
+            reset_grade = True
+
+        return assessment, essay_settings, reset_grade
 
         return assessment, essay_settings
 

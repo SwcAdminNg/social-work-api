@@ -10,6 +10,9 @@ creating, configuring, and grading assessments. A separate doc covers the studen
 `QUIZ_GROUP` is a **set of nested quizzes** ("sections"), each with its own question pool, taken
 together in one sitting with a single overall score — see §5b.
 
+Any assessment (QUIZ, ESSAY, or QUIZ_GROUP) can additionally be marked `is_final_assessment` to
+gate the student's progress through the course's sections ("modules") — see §11.
+
 Base URL prefix for everything below: `/courses`.
 
 ## Conventions
@@ -81,6 +84,7 @@ plus an `assessment_type` and the matching settings block.
 | `quiz_settings` | object \| null | no, only used when `assessment_type = QUIZ` | See below. Fully optional — all fields default. |
 | `essay_settings` | object \| null | **required when `assessment_type = ESSAY`** | 400 if missing. |
 | `quiz_group_settings` | object \| null | no, only used when `assessment_type = QUIZ_GROUP` | See §5b. Fully optional — all fields default. |
+| `is_final_assessment` | bool | no (default `false`) | Marks this as the section's gating assessment — see §11. At most one per section (`400` otherwise). If `true` and the type's own `max_attempts` is left unset, it defaults to `1` instead of unlimited. |
 
 `quiz_settings` (`CourseQuizSettingsInDTO` — all optional):
 
@@ -97,6 +101,8 @@ plus an `assessment_type` and the matching settings block.
 | `question` | string (min 1 char) | The essay prompt/title. |
 | `description` | string (min 1 char) | Longer instructions shown to the student. |
 | `submission_mode` | `"TEXT" \| "DOCUMENT"` | Locks how the student can answer — free text vs. file upload. |
+| `pass_mark_percentage` | int, 0-100 | Default `70`. Only meaningfully enforced when this essay is a final assessment (§11) — a regular essay has nothing that "fails" it. |
+| `max_attempts` | int ≥ 1 \| null | Default `null` (unlimited resubmission until graded, the historical behavior). For a *final* essay assessment, a **failed** grade (`score < pass_mark_percentage`) re-opens the submission for another attempt as long as this cap isn't reached yet — see §11.3. A **passing** grade always locks resubmission, same as before. |
 
 `quiz_group_settings` (`CourseQuizGroupSettingsInDTO` — all optional):
 
@@ -208,8 +214,9 @@ the item's actual `assessment_type` (sending the wrong one returns `400`).
 |---|---|---|
 | `due_date` | ISO 8601 datetime \| null | Omit to leave unchanged. Send explicit `null` to **clear** an existing deadline. |
 | `quiz_settings` | partial object \| null | Only valid if the item is a QUIZ. Any subset of `max_attempts`, `pass_mark_percentage`, `show_result_to_student`. |
-| `essay_settings` | partial object \| null | Only valid if the item is an ESSAY. Any subset of `question`, `description`, `submission_mode`. |
+| `essay_settings` | partial object \| null | Only valid if the item is an ESSAY. Any subset of `question`, `description`, `submission_mode`, `pass_mark_percentage`, `max_attempts`. |
 | `quiz_group_settings` | partial object \| null | Only valid if the item is a QUIZ_GROUP. Any subset of `max_attempts`, `pass_mark_percentage`, `show_result_to_student`, `time_limit_seconds`. Send explicit `"time_limit_seconds": null` to turn an existing timer off. |
+| `is_final_assessment` | bool \| null | Flip whether this assessment gates its section (§11). Omit to leave unchanged. Setting `true` when another assessment in the same section is already final returns `400`. |
 
 ### Examples
 
@@ -253,6 +260,7 @@ Assessment items are returned inline wherever course content is returned — mos
   "id": "assessment-uuid",
   "assessment_type": "QUIZ",
   "due_date": "2026-09-01T23:59:00Z",
+  "is_final_assessment": true,
   "quiz": {
     "max_attempts": 3,
     "pass_mark_percentage": 40,
@@ -287,7 +295,9 @@ never exposes it.)
   "essay": {
     "question": "Describe a trauma-informed intervention you would use.",
     "description": "Write 500-800 words. Reference at least one framework covered in this module.",
-    "submission_mode": "TEXT"
+    "submission_mode": "TEXT",
+    "pass_mark_percentage": 70,
+    "max_attempts": null
   }
 }
 ```
@@ -671,3 +681,75 @@ POST /courses/quiz-group/sections/section-2/questions
 
 The quiz group is now live — students see two sections, each drawing 2 random questions per
 attempt, with a 30-minute timer and a single overall score across both sections.
+
+---
+
+## 11. Module gating and the redo-on-fail flow
+
+Any assessment — QUIZ, ESSAY, or QUIZ_GROUP — can be marked `is_final_assessment: true` when you
+create or patch it (§2/§3). Doing so turns its section into a **gate**:
+
+- A student must **pass** that section's final assessment before the **next** section unlocks.
+  Sections before the first locked one stay accessible; everything from the first locked section
+  onward is locked too (no skipping ahead).
+- A section with **no** final assessment configured just needs to be fully completed (every
+  video/document/assessment item marked done) to unlock the next one — no pass/fail involved.
+- The final assessment on the course's **last** section doubles as the course's final exam. Passing
+  it completes the course. There's no separate "course final exam" concept to configure — whichever
+  section is last (by `order_index`) automatically gets this behavior for its final assessment.
+
+### 11.1 What happens when a student fails
+
+Each final assessment has a retry cap — `max_attempts` (quiz/quiz-group) works exactly like §5.1,
+and now essays have the same concept too (§6, `max_attempts` on `essay_settings`). **If you don't
+set one, it defaults to `1`** the moment you mark something `is_final_assessment: true` — unlike a
+regular assessment (which defaults to unlimited), a final assessment needs *some* cap or the reset
+below can never trigger. Set it explicitly to whatever number of retries you want the student to
+have before the reset kicks in.
+
+When a student **exhausts their retries without passing**:
+
+- If it's **not** the course's last section: **that section is reset** for the student — every
+  video/document/assessment in it goes back to not-completed, and every attempt/submission history
+  for its assessments is cleared (fresh attempt counters, essays re-open for a first submission).
+  They redo the whole section from scratch, not just the final assessment.
+- If it **is** the course's last section: the **entire course** is reset the same way, section by
+  section, back to the very beginning.
+
+Passing with retries to spare, or having a retry left after a fail, doesn't trigger anything — the
+student just retries the final assessment itself, same as a normal quiz retry.
+
+### 11.2 Where this shows up in the API
+
+- The reset happens automatically as a side effect of the normal student-facing submit/grade calls
+  (`quiz/submit`, `quiz-group/submit`, and your `essay/submissions/{user_id}/grade` call) — nothing
+  extra to call on your side. A course-level reset triggered from grading an essay uses the same
+  engine as a student's own quiz submission.
+- `CourseSectionReadDTO`/`CourseSectionManageReadDTO` don't currently expose per-student lock state
+  (that's a *per-student* concept, not a course-structure one) — see the student docs' curriculum
+  endpoint for that.
+- There's no instructor-facing "this student's progress was reset" notification beyond what you'd
+  see by re-checking their submissions/attempts (they'll simply be gone) — the essay submissions
+  list (§6.1) will stop showing a wiped submission, for example.
+
+### 11.3 Essay-specific notes
+
+Essays didn't have any pass/fail or retry concept before this — a regular (non-final) essay is
+**unaffected**: unlimited resubmission until graded once, exactly as before. The new
+`pass_mark_percentage`/`max_attempts` fields only do something once `is_final_assessment: true` is
+set. When a final essay is graded with a **failing** score and retries remain, the student's
+existing submission re-opens for a new attempt (their next `submit-text`/`submit-document` call
+clears the old score/feedback back to "pending review" — you'll see it awaiting grading again, with
+a fresh `submitted_at`). A **passing** grade, or a failing grade with no retries left, locks it
+exactly like before (and the latter also triggers the reset described above).
+
+### 11.4 Example: marking a module's quiz as the gate
+
+```http
+PATCH /courses/items/{quiz_item_id}/assessment
+{ "is_final_assessment": true, "quiz_settings": { "max_attempts": 2, "pass_mark_percentage": 60 } }
+→ 200
+```
+Students must now score ≥60% on this quiz, within 2 tries, before the next section unlocks for
+them. A third failed attempt isn't possible (`400` at `max_attempts`) - the reset already fired
+after the 2nd failure.

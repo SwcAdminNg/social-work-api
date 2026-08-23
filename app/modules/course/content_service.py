@@ -217,8 +217,11 @@ class CourseContentService:
             if payload.assessment_type is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "assessment_type is required for assessment items")
 
+            await self._ensure_single_final_assessment_per_section(section.id, payload.is_final_assessment)
+
             assessment = CourseAssessment(
-                course_item_id=item.id, assessment_type=payload.assessment_type, due_date=payload.due_date
+                course_item_id=item.id, assessment_type=payload.assessment_type, due_date=payload.due_date,
+                is_final_assessment=payload.is_final_assessment,
             )
             self.session.add(assessment)
             await self.session.flush()
@@ -228,7 +231,9 @@ class CourseContentService:
                 self.session.add(
                     CourseQuizSettings(
                         assessment_id=assessment.id,
-                        max_attempts=quiz_settings.max_attempts if quiz_settings else None,
+                        max_attempts=self._resolve_settings_max_attempts(
+                            quiz_settings, payload.is_final_assessment
+                        ),
                         pass_mark_percentage=quiz_settings.pass_mark_percentage if quiz_settings else 70,
                         show_result_to_student=quiz_settings.show_result_to_student if quiz_settings else True,
                     )
@@ -244,6 +249,10 @@ class CourseContentService:
                         question=payload.essay_settings.question,
                         description=payload.essay_settings.description,
                         submission_mode=payload.essay_settings.submission_mode,
+                        pass_mark_percentage=payload.essay_settings.pass_mark_percentage,
+                        max_attempts=self._resolve_settings_max_attempts(
+                            payload.essay_settings, payload.is_final_assessment
+                        ),
                     )
                 )
             elif payload.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
@@ -251,7 +260,9 @@ class CourseContentService:
                 self.session.add(
                     CourseQuizGroupSettings(
                         assessment_id=assessment.id,
-                        max_attempts=group_settings.max_attempts if group_settings else None,
+                        max_attempts=self._resolve_settings_max_attempts(
+                            group_settings, payload.is_final_assessment
+                        ),
                         pass_mark_percentage=group_settings.pass_mark_percentage if group_settings else 70,
                         show_result_to_student=group_settings.show_result_to_student if group_settings else True,
                         time_limit_seconds=group_settings.time_limit_seconds if group_settings else None,
@@ -260,6 +271,35 @@ class CourseContentService:
 
         await self.session.commit()
         return item, video_credentials, document_credentials
+
+    @staticmethod
+    def _resolve_settings_max_attempts(settings_payload, is_final_assessment: bool) -> int | None:
+        """A final assessment needs *some* retry cap for the module/course reset to
+        ever trigger, so it defaults to 1 instead of unlimited when the instructor
+        doesn't set one explicitly. An explicit value (including an explicit
+        `null`/unlimited) always wins."""
+        if settings_payload is not None and "max_attempts" in settings_payload.model_fields_set:
+            return settings_payload.max_attempts
+        if is_final_assessment:
+            return 1
+        return settings_payload.max_attempts if settings_payload else None
+
+    async def _ensure_single_final_assessment_per_section(
+        self, section_id: uuid.UUID, is_final_assessment: bool, excluding_item_id: uuid.UUID | None = None
+    ) -> None:
+        if not is_final_assessment:
+            return
+        items = await self.repo.list_items_for_sections([section_id])
+        for item in items:
+            if excluding_item_id is not None and item.id == excluding_item_id:
+                continue
+            if item.item_type != CourseItemTypeEnum.ASSESSMENT:
+                continue
+            assessment = await self.repo.get_assessment_by_item(item.id)
+            if assessment is not None and assessment.is_final_assessment:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "This section already has a final assessment"
+                )
 
     async def update_item(
         self, item_id: uuid.UUID, payload: CourseItemUpdateDTO, current_user: User
@@ -373,6 +413,13 @@ class CourseContentService:
         payload_fields = payload.model_dump(exclude_unset=True)
         if "due_date" in payload_fields:
             assessment.due_date = payload.due_date
+
+        if "is_final_assessment" in payload_fields and payload.is_final_assessment != assessment.is_final_assessment:
+            if payload.is_final_assessment:
+                await self._ensure_single_final_assessment_per_section(
+                    item.section_id, True, excluding_item_id=item.id
+                )
+            assessment.is_final_assessment = payload.is_final_assessment
 
         if payload.quiz_settings is not None:
             settings = await self.repo.get_quiz_settings(assessment.id)
@@ -634,7 +681,7 @@ class CourseContentService:
     async def grade_essay_submission(
         self, item_id: uuid.UUID, user_id: uuid.UUID, payload: EssayGradeDTO, current_user: User
     ) -> EssaySubmission:
-        _, _, item = await self._authorize_item(item_id, current_user)
+        course, section, item = await self._authorize_item(item_id, current_user)
         assessment = await self.repo.get_assessment_by_item(item.id)
         if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Essay not found for this item")
@@ -650,6 +697,24 @@ class CourseContentService:
             is_published=payload.is_published,
             graded_by=current_user.id,
         )
+
+        if assessment.is_final_assessment:
+            # Grading a final-assessment essay can trigger the same module/course
+            # reset-on-fail mechanic as a quiz or quiz-group submission - just from
+            # the instructor's grading action instead of a student action, since
+            # essays are graded asynchronously rather than auto-scored.
+            essay_settings = await self.repo.get_essay_settings(assessment.id)
+            pass_mark = essay_settings.pass_mark_percentage if essay_settings else 70
+            max_attempts = essay_settings.max_attempts if essay_settings else None
+            passed = payload.score >= pass_mark
+            attempts_remaining = None if max_attempts is None else max(max_attempts - submission.graded_attempts, 0)
+
+            from app.modules.learning.service import LearningService
+
+            await LearningService(self.session)._handle_final_assessment_outcome(
+                user_id, course.id, section.id, passed, attempts_remaining
+            )
+
         await self.session.commit()
         return submission
 
@@ -676,9 +741,9 @@ class CourseContentService:
             s.assessment_id: s for s in await self.repo.list_quiz_group_settings(assessment_ids)
         }
 
-        sections = await self.repo.list_sections_for_groups(assessment_ids)
+        quiz_group_sections = await self.repo.list_sections_for_groups(assessment_ids)
         sections_by_assessment: dict[uuid.UUID, list[CourseQuizGroupSection]] = {}
-        for sec in sections:
+        for sec in quiz_group_sections:
             sections_by_assessment.setdefault(sec.assessment_id, []).append(sec)
 
         questions = await self.repo.list_questions_for_quizzes(assessment_ids)
@@ -837,6 +902,8 @@ class CourseContentService:
                         question=essay_settings.question,
                         description=essay_settings.description,
                         submission_mode=essay_settings.submission_mode,
+                        pass_mark_percentage=essay_settings.pass_mark_percentage,
+                        max_attempts=essay_settings.max_attempts,
                     )
             elif assessment.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
                 section_dtos = []
@@ -879,6 +946,7 @@ class CourseContentService:
                 id=assessment.id,
                 assessment_type=assessment.assessment_type,
                 due_date=assessment.due_date,
+                is_final_assessment=assessment.is_final_assessment,
                 quiz=quiz_detail,
                 essay=essay_detail,
                 quiz_group=quiz_group_detail,

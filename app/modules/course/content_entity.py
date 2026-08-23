@@ -90,6 +90,13 @@ class CourseAssessment(BaseEntity):
         Enum(AssessmentTypeEnum, name="assessment_type_enum", native_enum=True), nullable=False
     )
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # At most one per CourseSection (enforced in the service layer, not the DB - see
+    # CourseContentService._ensure_single_final_assessment_per_section). Marks this
+    # assessment as the gate a student must pass to unlock the section's items to
+    # unlock the *next* CourseSection. The one on the course's *last* section doubles
+    # as the course-wide final exam: passing it completes the course, exhausting its
+    # retries without passing resets the *entire* course instead of just one section.
+    is_final_assessment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class CourseQuizSettings(BaseEntity):
@@ -114,6 +121,12 @@ class CourseEssaySettings(BaseEntity):
     submission_mode: Mapped[EssaySubmissionModeEnum] = mapped_column(
         Enum(EssaySubmissionModeEnum, name="essay_submission_mode_enum", native_enum=True), nullable=False
     )
+    # Only meaningfully enforced when this essay is a final assessment (see
+    # CourseAssessment.is_final_assessment) - a regular essay has nothing that
+    # "fails" it. Mirrors CourseQuizSettings' fields so pass/fail and retry
+    # semantics work the same way across all three assessment types.
+    pass_mark_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=70)
+    max_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class CourseQuizGroupSettings(BaseEntity):

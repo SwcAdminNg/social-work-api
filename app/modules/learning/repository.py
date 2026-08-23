@@ -70,6 +70,22 @@ class LearningRepository:
         await self.session.flush()
         return progress
 
+    async def delete_user_item_progress(self, user_id: uuid.UUID, item_id: uuid.UUID) -> None:
+        """Used when a module/section is reset - a missing row is already treated
+        as "not completed" everywhere else, so a hard delete here (rather than
+        soft-delete + filtering everywhere) keeps the reset simple."""
+        progress = await self.get_user_item_progress(user_id, item_id)
+        if progress is not None:
+            await self.session.delete(progress)
+            await self.session.flush()
+
+    async def reset_user_course_progress(self, user_id: uuid.UUID, course_id: uuid.UUID) -> None:
+        progress = await self.get_user_course_progress(user_id, course_id)
+        if progress is not None:
+            progress.progress_percent = 0
+            progress.is_completed = False
+            await self.session.flush()
+
     async def save_quiz_attempt(
         self, user_id: uuid.UUID, item_id: uuid.UUID, score: float, passed: bool, answers: dict
     ) -> QuizAttempt:
@@ -81,7 +97,9 @@ class LearningRepository:
     async def get_latest_quiz_attempt(self, user_id: uuid.UUID, item_id: uuid.UUID) -> QuizAttempt | None:
         stmt = (
             select(QuizAttempt)
-            .where(QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id)
+            .where(
+                QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id, QuizAttempt.deleted_at.is_(None)
+            )
             .order_by(QuizAttempt.created_at.desc())
         )
         result = await self.session.execute(stmt)
@@ -89,9 +107,19 @@ class LearningRepository:
 
     async def count_quiz_attempts(self, user_id: uuid.UUID, item_id: uuid.UUID) -> int:
         stmt = select(func.count(QuizAttempt.id)).where(
-            QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id
+            QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id, QuizAttempt.deleted_at.is_(None)
         )
         return (await self.session.execute(stmt)).scalar() or 0
+
+    async def soft_delete_quiz_attempts_for_item(self, user_id: uuid.UUID, item_id: uuid.UUID) -> None:
+        """Used when a module/section is reset (its final assessment's retries were
+        exhausted without passing) so attempt counters/history start fresh."""
+        stmt = select(QuizAttempt).where(
+            QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id, QuizAttempt.deleted_at.is_(None)
+        )
+        for attempt in (await self.session.execute(stmt)).scalars().all():
+            attempt.mark_deleted()
+        await self.session.flush()
 
     # -- quiz group attempts -----------------------------------------------------
 
@@ -102,11 +130,14 @@ class LearningRepository:
             QuizGroupAttempt.user_id == user_id,
             QuizGroupAttempt.item_id == item_id,
             QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.IN_PROGRESS,
+            QuizGroupAttempt.deleted_at.is_(None),
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_quiz_group_attempt(self, attempt_id: uuid.UUID) -> QuizGroupAttempt | None:
-        stmt = select(QuizGroupAttempt).where(QuizGroupAttempt.id == attempt_id)
+        stmt = select(QuizGroupAttempt).where(
+            QuizGroupAttempt.id == attempt_id, QuizGroupAttempt.deleted_at.is_(None)
+        )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def create_quiz_group_attempt(
@@ -157,18 +188,22 @@ class LearningRepository:
             QuizGroupAttempt.user_id == user_id,
             QuizGroupAttempt.item_id == item_id,
             QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+            QuizGroupAttempt.deleted_at.is_(None),
         )
         return (await self.session.execute(stmt)).scalar() or 0
 
     async def list_quiz_group_attempts(
         self, user_id: uuid.UUID, item_id: uuid.UUID
     ) -> Sequence[QuizGroupAttempt]:
-        """All attempts (any status), oldest first - used to figure out which
-        questions the student has already been shown so a new attempt can favor
-        ones they haven't seen yet."""
+        """All non-reset attempts (any status), oldest first - used to figure out
+        which questions the student has already been shown so a new attempt can
+        favor ones they haven't seen yet."""
         stmt = (
             select(QuizGroupAttempt)
-            .where(QuizGroupAttempt.user_id == user_id, QuizGroupAttempt.item_id == item_id)
+            .where(
+                QuizGroupAttempt.user_id == user_id, QuizGroupAttempt.item_id == item_id,
+                QuizGroupAttempt.deleted_at.is_(None),
+            )
             .order_by(QuizGroupAttempt.created_at.asc())
         )
         return (await self.session.execute(stmt)).scalars().all()
@@ -182,18 +217,35 @@ class LearningRepository:
                 QuizGroupAttempt.user_id == user_id,
                 QuizGroupAttempt.item_id == item_id,
                 QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+                QuizGroupAttempt.deleted_at.is_(None),
             )
             .order_by(QuizGroupAttempt.created_at.desc())
         )
         return (await self.session.execute(stmt)).scalars().first()
 
+    async def soft_delete_quiz_group_attempts_for_item(self, user_id: uuid.UUID, item_id: uuid.UUID) -> None:
+        stmt = select(QuizGroupAttempt).where(
+            QuizGroupAttempt.user_id == user_id, QuizGroupAttempt.item_id == item_id,
+            QuizGroupAttempt.deleted_at.is_(None),
+        )
+        for attempt in (await self.session.execute(stmt)).scalars().all():
+            attempt.mark_deleted()
+        await self.session.flush()
+
     # -- essay submissions -----------------------------------------------------
 
     async def get_essay_submission(self, user_id: uuid.UUID, item_id: uuid.UUID) -> EssaySubmission | None:
         stmt = select(EssaySubmission).where(
-            EssaySubmission.user_id == user_id, EssaySubmission.item_id == item_id
+            EssaySubmission.user_id == user_id, EssaySubmission.item_id == item_id,
+            EssaySubmission.deleted_at.is_(None),
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def soft_delete_essay_submission_for_item(self, user_id: uuid.UUID, item_id: uuid.UUID) -> None:
+        submission = await self.get_essay_submission(user_id, item_id)
+        if submission is not None:
+            submission.mark_deleted()
+            await self.session.flush()
 
     async def upsert_essay_submission(
         self,
@@ -202,8 +254,21 @@ class LearningRepository:
         content_text: str | None = None,
         document_storage_key: str | None = None,
         document_file_name: str | None = None,
+        reset_grade: bool = False,
     ) -> EssaySubmission:
-        submission = await self.get_essay_submission(user_id, item_id)
+        """`reset_grade=True` (used when resubmitting a *failed* final-assessment
+        essay - see `LearningService._authorize_essay_submission`) clears the prior
+        score/feedback back to "pending review" while keeping `graded_attempts` as
+        the running counter against `max_attempts`.
+
+        Row reuse note: `essay_submissions` has a DB-level unique (user_id, item_id)
+        - a section reset soft-deletes the row (see `soft_delete_essay_submission_for_item`)
+        rather than removing it, so a fresh submission after a reset must restore
+        that same row (not insert a new one) or it would violate the constraint."""
+        stmt = select(EssaySubmission).where(
+            EssaySubmission.user_id == user_id, EssaySubmission.item_id == item_id
+        )
+        submission = (await self.session.execute(stmt)).scalar_one_or_none()
         now = datetime.now(timezone.utc)
         if submission is None:
             submission = EssaySubmission(
@@ -216,6 +281,9 @@ class LearningRepository:
             )
             self.session.add(submission)
         else:
+            if submission.is_deleted:
+                submission.mark_restored()
+                submission.graded_attempts = 0
             if content_text is not None:
                 submission.content_text = content_text
                 submission.document_storage_key = None
@@ -225,6 +293,12 @@ class LearningRepository:
                 submission.document_file_name = document_file_name
                 submission.content_text = None
             submission.submitted_at = now
+            if reset_grade:
+                submission.score = None
+                submission.feedback = None
+                submission.is_published = False
+                submission.graded_by = None
+                submission.graded_at = None
         await self.session.flush()
         return submission
 
@@ -234,7 +308,7 @@ class LearningRepository:
         stmt = (
             select(EssaySubmission, User)
             .join(User, User.id == EssaySubmission.user_id)
-            .where(EssaySubmission.item_id == item_id)
+            .where(EssaySubmission.item_id == item_id, EssaySubmission.deleted_at.is_(None))
         )
         total_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(total_stmt)).scalar_one()
@@ -256,6 +330,7 @@ class LearningRepository:
         submission.is_published = is_published
         submission.graded_by = graded_by
         submission.graded_at = datetime.now(timezone.utc)
+        submission.graded_attempts += 1
         await self.session.flush()
         return submission
 
@@ -338,7 +413,7 @@ class LearningRepository:
                 QuizAttempt.item_id,
                 func.max(QuizAttempt.created_at).label("latest_attempt_at")
             )
-            .where(QuizAttempt.user_id == user_id)
+            .where(QuizAttempt.user_id == user_id, QuizAttempt.deleted_at.is_(None))
             .group_by(QuizAttempt.item_id)
             .subquery()
         )
@@ -347,7 +422,10 @@ class LearningRepository:
 
         attempt_count = (
             select(func.count(QuizAttempt.id))
-            .where(QuizAttempt.item_id == CourseItem.id, QuizAttempt.user_id == user_id)
+            .where(
+                QuizAttempt.item_id == CourseItem.id, QuizAttempt.user_id == user_id,
+                QuizAttempt.deleted_at.is_(None),
+            )
             .correlate(CourseItem)
             .scalar_subquery()
         )
@@ -360,6 +438,7 @@ class LearningRepository:
             .where(
                 QuizGroupAttempt.user_id == user_id,
                 QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+                QuizGroupAttempt.deleted_at.is_(None),
             )
             .group_by(QuizGroupAttempt.item_id)
             .subquery()
@@ -373,6 +452,7 @@ class LearningRepository:
                 QuizGroupAttempt.item_id == CourseItem.id,
                 QuizGroupAttempt.user_id == user_id,
                 QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+                QuizGroupAttempt.deleted_at.is_(None),
             )
             .correlate(CourseItem)
             .scalar_subquery()
@@ -401,6 +481,7 @@ class LearningRepository:
             .outerjoin(
                 EssaySubmission,
                 (EssaySubmission.item_id == CourseItem.id) & (EssaySubmission.user_id == user_id)
+                & (EssaySubmission.deleted_at.is_(None))
             )
             .outerjoin(CourseQuizGroupSettings, CourseQuizGroupSettings.assessment_id == CourseAssessment.id)
             .outerjoin(group_subq, CourseItem.id == group_subq.c.item_id)

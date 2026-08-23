@@ -115,3 +115,9 @@ class EssaySubmission(BaseEntity):
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     graded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Total number of times this submission has been graded. For a regular essay
+    # this only ever reaches 1 (grading locks further resubmission). For a *final*
+    # essay assessment, a failed grade (below CourseEssaySettings.pass_mark_percentage)
+    # re-opens the submission for another attempt as long as this stays below
+    # CourseEssaySettings.max_attempts - see LearningService._authorize_essay_submission.
+    graded_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

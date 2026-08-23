@@ -58,12 +58,19 @@ class CourseEssaySettingsInDTO(CreateDTO):
     question: str = Field(min_length=1)
     description: str = Field(min_length=1)
     submission_mode: EssaySubmissionModeEnum
+    # Only meaningfully enforced when this essay is a final assessment (see
+    # `is_final_assessment` on CourseItemCreateDTO) - a regular essay has no
+    # pass/fail concept and unlimited resubmission regardless of these.
+    pass_mark_percentage: int = Field(default=70, ge=0, le=100)
+    max_attempts: int | None = Field(default=None, ge=1)
 
 
 class CourseEssaySettingsPatchDTO(UpdateDTO):
     question: str | None = Field(default=None, min_length=1)
     description: str | None = Field(default=None, min_length=1)
     submission_mode: EssaySubmissionModeEnum | None = None
+    pass_mark_percentage: int | None = Field(default=None, ge=0, le=100)
+    max_attempts: int | None = Field(default=None, ge=1)
 
 
 class CourseQuizGroupSettingsInDTO(CreateDTO):
@@ -104,6 +111,14 @@ class CourseItemCreateDTO(CreateDTO):
     # quizzes) and their question pools are added afterward via their own
     # endpoints, same as standalone quiz questions.
     quiz_group_settings: CourseQuizGroupSettingsInDTO | None = None
+    # Marks this assessment as the section's gate: a student must pass it to
+    # unlock the next section, and exhausting its retries without passing resets
+    # the section (or the whole course, if this is the course's last section) -
+    # see the instructor-facing docs for the full flow. At most one per section.
+    # If true and the type's own `max_attempts` is left unset, it defaults to 1
+    # instead of unlimited - a final assessment needs *some* retry cap for the
+    # reset to ever trigger.
+    is_final_assessment: bool = False
 
 
 class CourseAssessmentUpdateDTO(UpdateDTO):
@@ -115,6 +130,7 @@ class CourseAssessmentUpdateDTO(UpdateDTO):
     quiz_settings: CourseQuizSettingsPatchDTO | None = None
     essay_settings: CourseEssaySettingsPatchDTO | None = None
     quiz_group_settings: CourseQuizGroupSettingsPatchDTO | None = None
+    is_final_assessment: bool | None = None
 
 
 class CourseItemUpdateDTO(UpdateDTO):
@@ -267,6 +283,8 @@ class CourseEssayDetailDTO(BaseDTO):
     question: str
     description: str
     submission_mode: EssaySubmissionModeEnum
+    pass_mark_percentage: int
+    max_attempts: int | None
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +350,7 @@ class CourseAssessmentPublicDTO(BaseDTO):
     id: uuid.UUID
     assessment_type: AssessmentTypeEnum
     due_date: datetime | None
+    is_final_assessment: bool
     quiz: CourseQuizDetailDTO | None = None
     essay: CourseEssayDetailDTO | None = None
     quiz_group: CourseQuizGroupDetailDTO | None = None
@@ -341,6 +360,7 @@ class CourseAssessmentManageDTO(BaseDTO):
     id: uuid.UUID
     assessment_type: AssessmentTypeEnum
     due_date: datetime | None
+    is_final_assessment: bool
     quiz: CourseQuizManageDetailDTO | None = None
     essay: CourseEssayDetailDTO | None = None
     quiz_group: CourseQuizGroupManageDetailDTO | None = None

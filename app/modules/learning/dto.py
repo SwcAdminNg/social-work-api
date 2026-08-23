@@ -29,6 +29,11 @@ class LearningSectionDTO(BaseDTO):
     id: uuid.UUID
     title: str
     items: list[LearningItemDTO]
+    # True when a previous section's final assessment hasn't been passed yet (see
+    # ASSESSMENTS_STUDENT_API.md's module-gating section). A locked section's items
+    # still list here (so you can render them, greyed out) but fetching/submitting
+    # them 403s until it unlocks.
+    is_locked: bool = False
 
 
 class CourseCurriculumDTO(BaseDTO):
@@ -57,8 +62,8 @@ class QuizAttemptDTO(BaseDTO):
 
 
 class EssaySubmissionDTO(BaseDTO):
-    """The student's own view of their essay submission. `score`/`feedback` are only
-    populated once the instructor sets `is_published=True`."""
+    """The student's own view of their essay submission. `score`/`feedback`/`passed`
+    are only populated once the instructor sets `is_published=True`."""
 
     content_text: str | None
     document_file_name: str | None
@@ -68,6 +73,10 @@ class EssaySubmissionDTO(BaseDTO):
     is_published: bool
     score: float | None
     feedback: str | None
+    # Only meaningful (non-null) once published and for essays used as a final
+    # assessment - `score >= pass_mark_percentage`. Null for a regular essay, since
+    # there's nothing to pass/fail there.
+    passed: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +137,9 @@ class QuizGroupResultDTO(BaseDTO):
     sections: list[QuizGroupSectionResultDTO] | None
     correct_answers: dict[uuid.UUID, list[uuid.UUID]] | None
     result_visible: bool
+    # See QuizResultDTO - same module-gating reset semantics apply here.
+    section_reset: bool = False
+    course_reset: bool = False
 
 
 class QuizGroupContentDTO(BaseDTO):
@@ -166,6 +178,7 @@ class LearningItemContentDTO(BaseDTO):
     # Assessment - common
     assessment_type: AssessmentTypeEnum | None = None
     due_date: datetime | None = None
+    is_final_assessment: bool | None = None
 
     # Assessment - quiz
     questions: list[QuizQuestionDTO] | None = None
@@ -181,6 +194,11 @@ class LearningItemContentDTO(BaseDTO):
     essay_description: str | None = None
     essay_submission_mode: EssaySubmissionModeEnum | None = None
     essay_submission: EssaySubmissionDTO | None = None
+    # Only meaningful when is_final_assessment - see §4.3/§2.3 in the student docs.
+    essay_pass_mark_percentage: int | None = None
+    essay_max_attempts: int | None = None
+    essay_attempts_used: int | None = None
+    essay_attempts_remaining: int | None = None
 
     # Assessment - quiz group (nested quizzes)
     quiz_group: QuizGroupContentDTO | None = None
@@ -199,6 +217,13 @@ class QuizResultDTO(BaseDTO):
     passed: bool | None
     correct_answers: dict[uuid.UUID, list[uuid.UUID]] | None  # Question ID -> List of correct Option IDs
     result_visible: bool
+    # True when this was a *final assessment* and failing it exhausted the
+    # student's retries - see the module-gating section of the student docs.
+    # `section_reset`: this module was reset (videos/documents/assessments all
+    # need redoing). `course_reset`: this was the course's last module, so the
+    # *entire* course was reset instead.
+    section_reset: bool = False
+    course_reset: bool = False
 
 
 class EssaySubmitTextDTO(BaseModel):

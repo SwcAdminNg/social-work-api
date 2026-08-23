@@ -124,7 +124,11 @@ async def submit_quiz(
 ) -> ApiResponse[QuizResultDTO]:
     service = LearningService(db)
     data = await service.submit_quiz(current_user.id, course_id, item_id, payload.answers)
-    if not data.result_visible:
+    if data.course_reset:
+        message = "Quiz failed - out of retries, the entire course has been reset"
+    elif data.section_reset:
+        message = "Quiz failed - out of retries, this module has been reset"
+    elif not data.result_visible:
         message = "Quiz submitted successfully"
     else:
         message = "Quiz passed successfully" if data.passed else "Quiz failed, please try again"
@@ -185,7 +189,11 @@ async def submit_quiz_group(
     data = await service.submit_quiz_group(
         current_user.id, course_id, item_id, payload.attempt_id, payload.answers
     )
-    if not data.result_visible:
+    if data.course_reset:
+        message = "Quiz group failed - out of retries, the entire course has been reset"
+    elif data.section_reset:
+        message = "Quiz group failed - out of retries, this module has been reset"
+    elif not data.result_visible:
         message = "Quiz group submitted successfully"
     elif data.auto_submitted:
         message = "Time's up - your quiz group was submitted automatically"

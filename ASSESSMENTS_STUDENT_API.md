@@ -33,6 +33,11 @@ or `ASSESSMENT`. When it's `ASSESSMENT`, check `assessment_type` (`"QUIZ"`, `"ES
 together in one sitting for a single overall score — with an optional countdown timer that
 auto-submits and scores whatever was answered if time runs out. See §3b.
 
+**Module gating**: a course's sections ("modules") can be sequential — some assessments are marked
+as a section's *final assessment*, and you must pass one to unlock the next section. Fail one out
+of retries and that section (or, if it's the last one, the *entire course*) resets and has to be
+redone. See §7.
+
 ---
 
 ## 2. Getting to an assessment item
@@ -59,6 +64,14 @@ build the sidebar/outline. Assessment items appear like any other item here:
   "estimated_minutes": 15
 }
 ```
+
+Each **section** also carries an `is_locked` flag (`LearningSectionDTO`) — see §7 for the full
+module-gating flow:
+```json
+{ "id": "section-uuid", "title": "Module 2", "items": [ /* ... */ ], "is_locked": true }
+```
+Render locked sections/items greyed out and non-clickable — the item-content and submit endpoints
+all 403 on a locked item anyway, but checking `is_locked` here lets you disable them proactively.
 `estimated_minutes` is an optional, instructor-entered estimate of how long the item takes to
 complete (in minutes) — a display hint only, not enforced or tracked against actual time spent.
 Applies to every item type (`VIDEO`/`DOCUMENT`/`ASSESSMENT`); omitted/absent when the instructor
@@ -72,7 +85,8 @@ that (next).
 **`GET /learning/courses/{course_id}/items/{item_id}`**
 
 This is the main endpoint for actually rendering an assessment. Shape is `LearningItemContentDTO`;
-fields present depend on `item_type`/`assessment_type`.
+fields present depend on `item_type`/`assessment_type`. `403` if the item's section is locked (§7)
+- check `is_locked` from the curriculum endpoint before navigating here to avoid relying on the 403.
 
 #### Quiz item response
 
@@ -85,6 +99,7 @@ fields present depend on `item_type`/`assessment_type`.
   "estimated_minutes": 15,
   "assessment_type": "QUIZ",
   "due_date": "2026-09-01T23:59:00Z",
+  "is_final_assessment": true,
   "max_attempts": 3,
   "attempts_used": 1,
   "attempts_remaining": 2,
@@ -117,6 +132,10 @@ Notes:
   `previous_attempt.answers`/the submit response's `correct_answers`, and only when
   `result_visible: true`.
 - `max_attempts`/`attempts_remaining` are `null` when the instructor set unlimited attempts.
+- `is_final_assessment: true` means passing this unlocks the next module (or, if this is the
+  course's last module, completes the course) - and running out of attempts without passing resets
+  a module (or the whole course) - see §7. Render some kind of "this is a required final
+  assessment, you have N attempts" banner when this is true.
 - `previous_attempt` reflects the **most recent** attempt, or is absent entirely if the student
   hasn't attempted yet.
 - If `show_result_to_student` is `false`, `previous_attempt` still appears (so you know they
@@ -135,9 +154,14 @@ Notes:
   "estimated_minutes": 45,
   "assessment_type": "ESSAY",
   "due_date": null,
+  "is_final_assessment": false,
   "essay_question": "Describe a trauma-informed intervention you would use.",
   "essay_description": "Write 500-800 words. Reference at least one framework covered in this module.",
   "essay_submission_mode": "TEXT",
+  "essay_pass_mark_percentage": 70,
+  "essay_max_attempts": null,
+  "essay_attempts_used": 0,
+  "essay_attempts_remaining": null,
   "essay_submission": {
     "content_text": "My draft answer...",
     "document_file_name": null,
@@ -146,18 +170,26 @@ Notes:
     "is_graded": false,
     "is_published": false,
     "score": null,
-    "feedback": null
+    "feedback": null,
+    "passed": null
   }
 }
 ```
 
 - `essay_submission` is absent if the student hasn't submitted anything yet.
-- `is_graded` = an instructor has scored it (`score` was set server-side) — **once true, you can no
-  longer resubmit** (see §4).
-- `score`/`feedback` are only ever non-null when `is_published: true` — even if `is_graded: true`,
-  a not-yet-published grade shows `score: null, feedback: null`. Show something like "Your
+- `is_graded` = an instructor has scored it (`score` was set server-side). For a **regular** essay
+  (`is_final_assessment: false` on the parent, same as before this feature), once graded you can no
+  longer resubmit — full stop. For a **final** essay assessment, a *failed* grade instead re-opens
+  it for another submission (as long as `essay_attempts_remaining` isn't `0`) — see §4.4.
+- `essay_pass_mark_percentage`/`essay_max_attempts`/`essay_attempts_used`/`essay_attempts_remaining`
+  are only meaningfully *enforced* when `is_final_assessment: true`, but are always present so you
+  can show them either way. `essay_attempts_used` counts graded cycles (how many times an instructor
+  has scored this submission), not raw resubmissions.
+- `score`/`feedback`/`passed` are only ever non-null when `is_published: true` — even if
+  `is_graded: true`, a not-yet-published grade shows them all `null`. Show something like "Your
   instructor is reviewing this" for `is_graded && !is_published`, vs "Submitted, awaiting review"
-  for `!is_graded`.
+  for `!is_graded`. `passed` is `score >= essay_pass_mark_percentage` - only meaningful for a final
+  essay assessment (always `null` on a regular essay, since there's nothing to pass/fail there).
 - `document_download_url` (when `submission_mode = DOCUMENT`) is a freshly generated, short-lived
   presigned URL each time you call this endpoint.
 
@@ -225,14 +257,20 @@ Response (`QuizResultDTO`):
     "score": 66.7,
     "passed": true,
     "correct_answers": { "question-1-uuid": ["opt-2-uuid"], "question-2-uuid": ["opt-1-uuid", "opt-3-uuid"] },
-    "result_visible": true
+    "result_visible": true,
+    "section_reset": false,
+    "course_reset": false
   }
 }
 ```
 
-- `message` is one of `"Quiz passed successfully"`, `"Quiz failed, please try again"`, or
-  `"Quiz submitted successfully"` (when `result_visible: false` — score is withheld, don't infer
-  pass/fail from the message in that case, there's nothing to infer).
+- `message` is one of `"Quiz passed successfully"`, `"Quiz failed, please try again"`,
+  `"Quiz submitted successfully"` (when `result_visible: false`), or — only when this quiz is a
+  *final assessment* and this failed attempt was the last one allowed — `"Quiz failed - out of
+  retries, this module has been reset"` / `"...the entire course has been reset"`.
+- `section_reset`/`course_reset` are `true` exactly when the corresponding message above fires —
+  see §7.2 for what to do when either is `true` (refresh the curriculum, redirect to the top of the
+  reset module/course, everything the student had done there is gone).
 - When `result_visible: false`, `score`/`passed`/`correct_answers` are all `null` — the submission
   is still recorded and counted against `attempts_used`, the student just doesn't get shown how
   they did.
@@ -254,7 +292,7 @@ Response (`QuizResultDTO`):
 
 | Status | When |
 |---|---|
-| `403` | Not enrolled in the course. |
+| `403` | Not enrolled in the course, or the item's section is locked (§7). |
 | `400` | Item isn't a quiz assessment; `due_date` has passed (`"The deadline for this quiz has passed"`); `max_attempts` reached (`"Maximum attempts (N) reached for this quiz"`). |
 | `404` | Item/course not found. |
 
@@ -352,7 +390,9 @@ Response (`QuizGroupResultDTO`):
       { "section_id": "section-2", "title": "De-escalation", "earned_points": 4.0, "total_questions": 5, "score_percent": 80.0 }
     ],
     "correct_answers": null,
-    "result_visible": true
+    "result_visible": true,
+    "section_reset": false,
+    "course_reset": false
   }
 }
 ```
@@ -369,6 +409,10 @@ Response (`QuizGroupResultDTO`):
 - `auto_submitted: true` means this call landed after the timer had already run out — same result
   shape either way, just a different `message` (`"Time's up - your quiz group was submitted
   automatically"`).
+- `section_reset`/`course_reset` — same module-gating semantics as a standalone quiz's result (see
+  §3.1/§7): `true` when this quiz group is a final assessment and this failed attempt was the last
+  one allowed, with the message text changed to match (`"Quiz group failed - out of retries, this
+  module has been reset"` etc.).
 - `result_visible: false` (when the instructor set `show_result_to_student: false`) nulls out
   `score`/`passed`/`sections` the same way a standalone quiz does — the submission still counts.
 - **Idempotent**: calling `submit` again with the same `attempt_id` after it's already been
@@ -423,8 +467,10 @@ one call, `DOCUMENT` uses a two-step upload-then-finalize flow (same pattern as 
 uploads elsewhere in this API).
 
 **You can resubmit/overwrite your answer as many times as you like — as long as `is_graded` is
-still `false` and (if set) `due_date` hasn't passed.** Once an instructor scores it, further
-submit calls return `400`. There's currently no way to reopen a graded essay from the student side.
+still `false` and (if set) `due_date` hasn't passed.** Once an instructor scores it, further submit
+calls return `400` — **unless** this essay is a *final assessment* (§2.3/§7) and the grade was a
+*failing* one with `essay_attempts_remaining` still above `0`, in which case your next submit call
+succeeds and re-opens it (see §4.4). Passing always locks it, same as before.
 
 ### 4.1 Text essay
 
@@ -487,9 +533,20 @@ document essay.
 
 | Status | When |
 |---|---|
-| `403` | Not enrolled in the course. |
-| `400` | Item isn't an essay assessment; you called `submit-text` on a `DOCUMENT`-mode essay (or vice versa) — `"This essay only accepts text/document submissions"`; `due_date` has passed — `"The deadline for this essay has passed"`; already graded — `"This essay has already been graded and can no longer be resubmitted"`. |
+| `403` | Not enrolled in the course, or the item's section is locked (§7). |
+| `400` | Item isn't an essay assessment; you called `submit-text` on a `DOCUMENT`-mode essay (or vice versa) — `"This essay only accepts text/document submissions"`; `due_date` has passed — `"The deadline for this essay has passed"`; already graded and not eligible for a retry — `"This essay has already been graded and can no longer be resubmitted"`. |
 | `404` | Item/course not found, or the essay itself isn't configured. |
+
+### 4.4 Resubmitting after a failed final-assessment grade
+
+Only relevant when `is_final_assessment: true` (§2.3). When the instructor grades it below
+`essay_pass_mark_percentage` and `essay_attempts_remaining > 0`, the submission goes back to an
+un-graded state as soon as you call `submit-text`/`submit-document` again — same request shape as
+your first submission, nothing special to send. The response's `is_graded`/`score`/`feedback` all
+reset to their "pending" values, and `essay_attempts_used` (from §2.3) stays at whatever it was —
+it only increments when an instructor grades it, not when you resubmit. If `essay_attempts_remaining`
+hits `0` on a failing grade, the module/course reset described in §7 fires instead, and your
+essay submission is wiped along with everything else in the reset scope.
 
 ---
 
@@ -631,7 +688,62 @@ Response (`AssessmentStatsDTO`):
 
 ---
 
-## 7. Marking non-assessment items complete (for contrast)
+## 7. Module gating and the redo-on-fail flow
+
+A course's sections ("modules") can be sequential: some assessments are marked by the instructor
+as their section's **final assessment** (`is_final_assessment: true`, visible per-assessment in
+§2.3). You must **pass** a section's final assessment to unlock the **next** section. A section
+with no final assessment configured just needs every item in it completed to unlock the next one —
+no pass/fail involved there.
+
+The final assessment on the course's **last** section doubles as the course final exam — passing it
+completes the course.
+
+### 7.1 Checking what's locked
+
+**`GET /learning/courses/{course_id}/curriculum`** (§2.2) - each section has `is_locked`:
+```json
+{ "id": "section-uuid", "title": "Module 2", "items": [ /* ... */ ], "is_locked": true }
+```
+Use this to grey out locked modules in your sidebar/outline before the student even tries to open
+one. If they navigate to a locked item directly anyway, `GET .../items/{item_id}` (§2.3) and every
+submit/complete endpoint for that item **403s**: `"This module is locked - pass the previous
+module's final assessment first"`.
+
+### 7.2 What happens on a fail
+
+Every final assessment has a retry cap (`max_attempts` for quiz/quiz-group, same field name on
+essays now too — see `essay_max_attempts` in §2.3). If the student **fails and has no attempts
+left**, one of two things happens automatically, as part of that submit/grade call:
+
+- **Not the last section**: that whole module resets - every video/document/assessment in it goes
+  back to not-completed, and every attempt/submission on its assessments is wiped (fresh attempt
+  counters). The student has to redo the entire module, not just the final assessment.
+- **The last section** (the course final exam): the **entire course** resets the same way, from
+  module 1 onward.
+
+You'll see this in the result of whatever action triggered it:
+- Quiz submit (§3.1) / quiz group submit (§3b.2): `section_reset`/`course_reset` on the result, plus
+  a matching `message`.
+- A final essay (§4) being graded doesn't return a result to the student synchronously (grading is
+  an instructor action) - the student finds out the next time they load the curriculum (§2.2, the
+  module they were on is `is_locked` again / back to not-completed) or the item content (§2.3, their
+  essay submission is simply gone - `essay_submission` absent again).
+
+If the student still has retries left after a fail, nothing resets - they just retry the final
+assessment itself, same as any other quiz retry.
+
+### 7.3 What to do in the UI when a reset happens
+
+Treat `section_reset`/`course_reset: true` (or noticing a module went from unlocked/completed back
+to locked/not-completed on your next curriculum fetch) as a hard redirect: re-fetch the curriculum
+(§2.2) and send the student back to the top of whatever got reset (the module, or module 1 if the
+whole course reset). Don't try to preserve any in-progress local state for that scope — it no
+longer matches the server, which has genuinely wiped it.
+
+---
+
+## 8. Marking non-assessment items complete (for contrast)
 
 **`POST /learning/courses/{course_id}/items/{item_id}/complete`** — only valid for `VIDEO`/`DOCUMENT`
 items. Calling it on an `ASSESSMENT` item returns `400 "Cannot manually complete an assessment
@@ -639,7 +751,7 @@ item"` — completion for quizzes/essays happens automatically on submit instead
 
 ---
 
-## 8. Quick reference — endpoint list
+## 9. Quick reference — endpoint list
 
 | Method | Path | Purpose |
 |---|---|---|

@@ -459,6 +459,94 @@ async def delete_course(
 
 
 # ---------------------------------------------------------------------------
+# Quiz group content (nested quizzes)
+# ---------------------------------------------------------------------------
+#
+# NOTE: these routes must stay registered before the "Sections" and "Items"
+# routes below. Starlette matches routes in registration order, and
+# "/{course_id}/sections/{section_id}" would otherwise greedily match paths
+# like "/quiz-group/sections/{id}" (binding course_id="quiz-group"), causing
+# a 422 UUID-parsing error instead of ever reaching these handlers.
+
+
+@router.post(
+    "/items/{item_id}/quiz-group/sections",
+    response_model=ApiResponse[CourseQuizGroupSectionManageDTO],
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a section (a nested quiz) to a quiz group item (admin or owning instructor)",
+)
+async def create_quiz_group_section(
+    item_id: uuid.UUID,
+    payload: QuizGroupSectionCreateDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CourseQuizGroupSectionManageDTO]:
+    section = await CourseContentService(db).create_quiz_group_section(item_id, payload, current_user)
+    data = CourseQuizGroupSectionManageDTO(
+        id=section.id, title=section.title, order_index=section.order_index,
+        questions_to_ask=section.questions_to_ask, questions=[],
+    )
+    return ApiResponse(message="Section created successfully", data=data)
+
+
+@router.patch(
+    "/quiz-group/sections/{section_id}",
+    response_model=ApiResponse[None],
+    summary="Update a quiz group section (admin or owning instructor)",
+)
+async def update_quiz_group_section(
+    section_id: uuid.UUID,
+    payload: QuizGroupSectionUpdateDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseContentService(db).update_quiz_group_section(section_id, payload, current_user)
+    return ApiResponse(message="Section updated successfully")
+
+
+@router.delete(
+    "/quiz-group/sections/{section_id}",
+    response_model=ApiResponse[None],
+    summary="Delete a quiz group section (admin or owning instructor)",
+)
+async def delete_quiz_group_section(
+    section_id: uuid.UUID,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseContentService(db).delete_quiz_group_section(section_id, current_user)
+    return ApiResponse(message="Section deleted successfully")
+
+
+@router.post(
+    "/quiz-group/sections/{section_id}/questions",
+    response_model=ApiResponse[CourseQuizQuestionManageDTO],
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a question (with options) to a quiz group section's question pool "
+    "(admin or owning instructor)",
+)
+async def create_quiz_group_question(
+    section_id: uuid.UUID,
+    payload: QuizQuestionCreateDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CourseQuizQuestionManageDTO]:
+    question, created_options = await CourseContentService(db).create_question_in_group_section(
+        section_id, payload, current_user
+    )
+    options = [
+        CourseQuizOptionManageDTO(id=o.id, text=o.text, order_index=o.order_index, is_correct=o.is_correct)
+        for o in created_options
+    ]
+    data = CourseQuizQuestionManageDTO(
+        id=question.id, text=question.text, order_index=question.order_index,
+        allow_multiple_answers=question.allow_multiple_answers,
+        multi_answer_mode=question.multi_answer_mode, options=options,
+    )
+    return ApiResponse(message="Question created successfully", data=data)
+
+
+# ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
 
@@ -784,88 +872,6 @@ async def delete_quiz_option(
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_option(option_id, current_user)
     return ApiResponse(message="Option deleted successfully")
-
-
-# ---------------------------------------------------------------------------
-# Quiz group content (nested quizzes)
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/items/{item_id}/quiz-group/sections",
-    response_model=ApiResponse[CourseQuizGroupSectionManageDTO],
-    status_code=status.HTTP_201_CREATED,
-    summary="Add a section (a nested quiz) to a quiz group item (admin or owning instructor)",
-)
-async def create_quiz_group_section(
-    item_id: uuid.UUID,
-    payload: QuizGroupSectionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[CourseQuizGroupSectionManageDTO]:
-    section = await CourseContentService(db).create_quiz_group_section(item_id, payload, current_user)
-    data = CourseQuizGroupSectionManageDTO(
-        id=section.id, title=section.title, order_index=section.order_index,
-        questions_to_ask=section.questions_to_ask, questions=[],
-    )
-    return ApiResponse(message="Section created successfully", data=data)
-
-
-@router.patch(
-    "/quiz-group/sections/{section_id}",
-    response_model=ApiResponse[None],
-    summary="Update a quiz group section (admin or owning instructor)",
-)
-async def update_quiz_group_section(
-    section_id: uuid.UUID,
-    payload: QuizGroupSectionUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[None]:
-    await CourseContentService(db).update_quiz_group_section(section_id, payload, current_user)
-    return ApiResponse(message="Section updated successfully")
-
-
-@router.delete(
-    "/quiz-group/sections/{section_id}",
-    response_model=ApiResponse[None],
-    summary="Delete a quiz group section (admin or owning instructor)",
-)
-async def delete_quiz_group_section(
-    section_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[None]:
-    await CourseContentService(db).delete_quiz_group_section(section_id, current_user)
-    return ApiResponse(message="Section deleted successfully")
-
-
-@router.post(
-    "/quiz-group/sections/{section_id}/questions",
-    response_model=ApiResponse[CourseQuizQuestionManageDTO],
-    status_code=status.HTTP_201_CREATED,
-    summary="Add a question (with options) to a quiz group section's question pool "
-    "(admin or owning instructor)",
-)
-async def create_quiz_group_question(
-    section_id: uuid.UUID,
-    payload: QuizQuestionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[CourseQuizQuestionManageDTO]:
-    question, created_options = await CourseContentService(db).create_question_in_group_section(
-        section_id, payload, current_user
-    )
-    options = [
-        CourseQuizOptionManageDTO(id=o.id, text=o.text, order_index=o.order_index, is_correct=o.is_correct)
-        for o in created_options
-    ]
-    data = CourseQuizQuestionManageDTO(
-        id=question.id, text=question.text, order_index=question.order_index,
-        allow_multiple_answers=question.allow_multiple_answers,
-        multi_answer_mode=question.multi_answer_mode, options=options,
-    )
-    return ApiResponse(message="Question created successfully", data=data)
 
 
 # Question/option updates, deletes, and option creation reuse the standalone-quiz
