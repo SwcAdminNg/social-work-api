@@ -38,6 +38,12 @@ as a section's *final assessment*, and you must pass one to unlock the next sect
 of retries and that section (or, if it's the last one, the *entire course*) resets and has to be
 redone. See §7.
 
+**Completion reflects reality, not just effort**: a *final* assessment only counts as done once you
+actually **pass** it — merely attempting/submitting one isn't enough (that's what makes the module
+gate meaningful; see §2.3/§7). And a course's overall completion isn't a one-time snapshot: if an
+instructor adds new material to a course you'd already finished, it stops showing as complete until
+you finish that too — see §2.4/§7.4.
+
 ---
 
 ## 2. Getting to an assessment item
@@ -136,6 +142,11 @@ Notes:
   course's last module, completes the course) - and running out of attempts without passing resets
   a module (or the whole course) - see §7. Render some kind of "this is a required final
   assessment, you have N attempts" banner when this is true.
+- **`is_completed` for a final assessment only flips to `true` once you actually pass it.** A
+  failed attempt (with retries still remaining) leaves `is_completed: false` even though you did
+  submit something - don't read "I attempted it" as "I completed it" for a final assessment. This
+  is *not* true for a regular (`is_final_assessment: false`) quiz - there, `is_completed` flips to
+  `true` the moment you submit, pass or fail, exactly as before.
 - `previous_attempt` reflects the **most recent** attempt, or is absent entirely if the student
   hasn't attempted yet.
 - If `show_result_to_student` is `false`, `previous_attempt` still appears (so you know they
@@ -192,6 +203,12 @@ Notes:
   essay assessment (always `null` on a regular essay, since there's nothing to pass/fail there).
 - `document_download_url` (when `submission_mode = DOCUMENT`) is a freshly generated, short-lived
   presigned URL each time you call this endpoint.
+- **`is_completed` (top-level, on the item) for a regular essay flips to `true` the moment you
+  submit** — grading is asynchronous, so completion can't wait on it. For a **final** essay
+  assessment, completion instead waits for a **passing** grade: it stays `false` through submission
+  and even through a failing grade (as long as retries remain), only becoming `true` once an
+  instructor grades it as passing. If a failing grade exhausts your retries, the module/course reset
+  fires instead (§7) and the item goes back to not-completed either way.
 
 #### Quiz group item response
 
@@ -226,6 +243,48 @@ Notes:
   includes `active_attempt` — see §3b.1, "resuming".
 - If the student has a **submitted** attempt, `quiz_group` also includes `previous_result` — same
   shape as the submit response (§3b.2), reflecting the most recent submitted attempt.
+- Same completion rule as a standalone quiz: if this is a **final assessment**, the top-level
+  `is_completed` only becomes `true` once you **pass** — a failed submission (with retries left)
+  leaves it `false`. A non-final quiz group counts as done on any submission, pass or fail.
+
+### 2.4 Listing enrolled courses (progress + "new content" flag)
+
+**`GET /learning/courses?page=1&page_size=8`**
+
+The list you'd show on a "my courses"/dashboard screen — every course the student is enrolled in,
+with their progress. Shape is `EnrolledCourseDTO` (a `CourseReadDTO` plus enrollment fields):
+
+```json
+{
+  "success": true,
+  "message": "OK",
+  "data": [
+    {
+      "id": "course-uuid",
+      "title": "Intro to Trauma-Informed Care",
+      "progress_percent": 100,
+      "is_completed": true,
+      "is_enrolled": true,
+      "content_updated_at": "2026-08-23T21:31:50Z",
+      "has_new_content": true
+    }
+  ],
+  "meta": { "page": 1, "page_size": 8, "total_items": 1, "total_pages": 1, "has_next": false, "has_previous": false }
+}
+```
+
+- `progress_percent`/`is_completed` are the course-wide rollup — `completed_items / total_items`
+  across every current, non-deleted item in the course. **This isn't a one-time snapshot**: if an
+  instructor adds a new item to a course you'd already finished (common for a course built out
+  week-by-week for an active cohort), `progress_percent` drops and `is_completed` flips back to
+  `false` immediately — no action from you required, and nothing was "undone" on your end, there's
+  just more course now than when you finished it. See §7.4 for the full behavior.
+- `content_updated_at` / `has_new_content` — see §7.4. `has_new_content: true` means there's
+  material added since you last opened this course; render it as an "New!"/"Updated" badge on the
+  course card. It clears automatically the next time you fetch that course's curriculum (§2.2) — no
+  separate "dismiss" call needed.
+- Same two fields also appear on the general course-catalog/browse endpoints (outside this doc's
+  scope) for any course you're enrolled in, not just this list.
 
 ---
 
@@ -741,6 +800,27 @@ to locked/not-completed on your next curriculum fetch) as a hard redirect: re-fe
 whole course reset). Don't try to preserve any in-progress local state for that scope — it no
 longer matches the server, which has genuinely wiped it.
 
+### 7.4 Course completion isn't a permanent snapshot
+
+Two related things worth building for, both driven by the instructor adding curriculum content
+rather than anything the student does:
+
+- **A "completed" course can un-complete itself.** `progress_percent`/`is_completed` (§2.4) always
+  reflect *every current item in the course*, not just what existed when the student finished it.
+  Add a new item to a course a student already completed, and their `progress_percent` drops below
+  100 / `is_completed` flips to `false` on the very next fetch — no student action involved. If your
+  UI caches these values (a query cache, local storage, a "Completed" chip computed once and
+  stored), make sure it's re-fetched rather than trusted indefinitely, especially right after
+  opening a "my courses" screen.
+- **A "new content" badge you don't have to build a read/unread system for.** `content_updated_at`/
+  `has_new_content` (§2.4) already do this: `has_new_content: true` means material was added since
+  the student's last visit. It clears itself the moment they open the curriculum (§2.2) again — no
+  "mark as read" call to implement.
+
+Neither of these interacts with module-gating state (§7.1-7.3) directly — a section that's already
+`is_locked: false` stays unlocked when new content is added elsewhere in the course; only the
+course-wide rollup and the new-content flag move.
+
 ---
 
 ## 8. Marking non-assessment items complete (for contrast)
@@ -756,6 +836,7 @@ item"` — completion for quizzes/essays happens automatically on submit instead
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/learning/courses/{course_id}/enroll` | Enroll in a course |
+| GET | `/learning/courses` | List enrolled courses with progress + new-content flag (§2.4) |
 | GET | `/learning/courses/{course_id}/curriculum` | Section/item outline |
 | GET | `/learning/courses/{course_id}/items/{item_id}` | Full item content (quiz/essay/video/document) |
 | POST | `/learning/courses/{course_id}/items/{item_id}/complete` | Complete a video/document item |
