@@ -29,14 +29,10 @@ class Settings(BaseSettings):
     # Frontend
     frontend_url: str = "http://localhost:3000"
 
-    # SMTP (Gmail)
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_username: str
-    smtp_password: str
-    smtp_from_email: str
-    smtp_from_name: str = "Social Workers"
-    smtp_use_tls: bool = True
+    # Resend (email)
+    resend_api_key: str
+    resend_from_email: str = "noreply@send.socialworknigeria.org"
+    resend_from_name: str = "Social Workers"
 
     # Cloudflare R2 (course documents)
     r2_account_id: str = ""

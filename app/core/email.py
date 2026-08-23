@@ -1,33 +1,30 @@
 import logging
-from email.message import EmailMessage
 
-import aiosmtplib
+import httpx
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+RESEND_API_URL = "https://api.resend.com/emails"
+
 
 class EmailService:
-    """Thin wrapper around aiosmtplib configured for Gmail SMTP (smtp.gmail.com:587,
-    STARTTLS). Requires a Google "App Password" in SMTP_PASSWORD, not the account
-    password, since Gmail rejects plain password auth for SMTP."""
+    """Thin wrapper around the Resend HTTP API."""
 
     async def _send(self, to_email: str, subject: str, html_body: str) -> None:
-        message = EmailMessage()
-        message["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>"
-        message["To"] = to_email
-        message["Subject"] = subject
-        message.set_content(html_body, subtype="html")
-
-        await aiosmtplib.send(
-            message,
-            hostname=settings.smtp_host,
-            port=settings.smtp_port,
-            username=settings.smtp_username,
-            password=settings.smtp_password,
-            start_tls=settings.smtp_use_tls,
-        )
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                RESEND_API_URL,
+                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                json={
+                    "from": f"{settings.resend_from_name} <{settings.resend_from_email}>",
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html_body,
+                },
+            )
+            response.raise_for_status()
 
     async def send_password_reset_email(self, to_email: str, first_name: str, reset_link: str) -> None:
         subject = "Reset your password"
