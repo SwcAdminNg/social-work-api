@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.common.base_dto import BaseDTO
 from app.modules.course.content_entity import AssessmentTypeEnum, EssaySubmissionModeEnum, MultiAnswerModeEnum
@@ -70,6 +70,88 @@ class EssaySubmissionDTO(BaseDTO):
     feedback: str | None
 
 
+# ---------------------------------------------------------------------------
+# Quiz group (nested quizzes) - student side
+# ---------------------------------------------------------------------------
+
+
+class QuizGroupSectionOverviewDTO(BaseDTO):
+    """Section metadata shown before an attempt starts. No questions here - the
+    pool is only revealed once an attempt is started/resumed, so it can't be
+    studied ahead of time and each attempt can draw a different subset."""
+
+    id: uuid.UUID
+    title: str
+    order_index: int
+    question_count: int  # how many questions this section will actually ask
+
+
+class QuizGroupSectionAttemptDTO(BaseDTO):
+    """One section's drawn questions for a specific (started) attempt."""
+
+    section_id: uuid.UUID
+    title: str
+    questions: list[QuizQuestionDTO]
+
+
+class QuizGroupActiveAttemptDTO(BaseDTO):
+    """The in-progress attempt, returned by start/resume and embedded in the
+    item-content response so a page reload picks up exactly where it left off -
+    same drawn questions, same timer, same saved answers."""
+
+    attempt_id: uuid.UUID
+    started_at: datetime
+    expires_at: datetime | None
+    sections: list[QuizGroupSectionAttemptDTO]
+    saved_answers: dict[uuid.UUID, list[uuid.UUID]]
+
+
+class QuizGroupSectionResultDTO(BaseDTO):
+    section_id: uuid.UUID
+    title: str
+    earned_points: float
+    total_questions: int
+    score_percent: float
+
+
+class QuizGroupResultDTO(BaseDTO):
+    """`score`/`sections`/`correct_answers` are nulled out (and `result_visible=False`)
+    when the group's `show_result_to_student` setting is off - the submission still
+    counts, the student just isn't shown how they did. `auto_submitted` is true when
+    the attempt was finalized because the timer ran out rather than by explicit
+    submission."""
+
+    attempt_id: uuid.UUID
+    score: float | None
+    passed: bool | None
+    auto_submitted: bool
+    sections: list[QuizGroupSectionResultDTO] | None
+    correct_answers: dict[uuid.UUID, list[uuid.UUID]] | None
+    result_visible: bool
+
+
+class QuizGroupContentDTO(BaseDTO):
+    max_attempts: int | None = None
+    attempts_used: int = 0
+    attempts_remaining: int | None = None
+    pass_mark_percentage: int | None = None
+    show_result_to_student: bool | None = None
+    time_limit_seconds: int | None = None
+    sections: list[QuizGroupSectionOverviewDTO] = Field(default_factory=list)
+    active_attempt: QuizGroupActiveAttemptDTO | None = None
+    previous_result: QuizGroupResultDTO | None = None
+
+
+class QuizGroupSaveProgressDTO(BaseModel):
+    attempt_id: uuid.UUID
+    answers: dict[uuid.UUID, list[uuid.UUID]]
+
+
+class QuizGroupSubmitDTO(BaseModel):
+    attempt_id: uuid.UUID
+    answers: dict[uuid.UUID, list[uuid.UUID]]
+
+
 class LearningItemContentDTO(BaseDTO):
     id: uuid.UUID
     title: str
@@ -99,6 +181,9 @@ class LearningItemContentDTO(BaseDTO):
     essay_description: str | None = None
     essay_submission_mode: EssaySubmissionModeEnum | None = None
     essay_submission: EssaySubmissionDTO | None = None
+
+    # Assessment - quiz group (nested quizzes)
+    quiz_group: QuizGroupContentDTO | None = None
 
 
 class QuizSubmitDTO(BaseModel):

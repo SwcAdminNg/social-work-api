@@ -1,7 +1,8 @@
+import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,6 +49,51 @@ class QuizAttempt(BaseEntity):
     score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     answers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class QuizGroupAttemptStatusEnum(str, enum.Enum):
+    IN_PROGRESS = "IN_PROGRESS"
+    SUBMITTED = "SUBMITTED"
+
+
+class QuizGroupAttempt(BaseEntity):
+    """A student's attempt at a QUIZ_GROUP assessment. Unlike `QuizAttempt` (which
+    is created in one shot on submit), this row is created up front when the
+    student starts the attempt, so that:
+    - the randomly-drawn question set per section can be persisted (`selected_questions`)
+      and stays stable across page reloads instead of reshuffling,
+    - an optional timer (`expires_at`) can be enforced and the attempt can be
+      auto-submitted/scored from whatever was last saved if the student runs out
+      of time without submitting.
+    """
+
+    __tablename__ = "quiz_group_attempts"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), nullable=False, index=True
+    )
+    status: Mapped[QuizGroupAttemptStatusEnum] = mapped_column(
+        Enum(QuizGroupAttemptStatusEnum, name="quiz_group_attempt_status_enum", native_enum=True),
+        nullable=False,
+        default=QuizGroupAttemptStatusEnum.IN_PROGRESS,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_submitted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # {section_id_str: [question_id_str, ...]} - the questions drawn from each
+    # section's pool for this specific attempt.
+    selected_questions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # {question_id_str: [option_id_str, ...]} - saved incrementally while
+    # IN_PROGRESS (see `save_progress`), then frozen once SUBMITTED.
+    answers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # [{"section_id": ..., "title": ..., "earned_points": ..., "total_questions": ..., "score_percent": ...}, ...]
+    section_scores: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
 
 class EssaySubmission(BaseEntity):

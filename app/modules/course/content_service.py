@@ -21,6 +21,10 @@ from app.modules.course.content_dto import (
     CourseItemReorderDTO,
     CourseItemUpdateDTO,
     CourseQuizDetailDTO,
+    CourseQuizGroupDetailDTO,
+    CourseQuizGroupManageDetailDTO,
+    CourseQuizGroupSectionManageDTO,
+    CourseQuizGroupSectionPublicDTO,
     CourseQuizManageDetailDTO,
     CourseQuizOptionManageDTO,
     CourseQuizOptionPublicDTO,
@@ -37,6 +41,8 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    QuizGroupSectionCreateDTO,
+    QuizGroupSectionUpdateDTO,
     QuizOptionCreateDTO,
     QuizOptionUpdateDTO,
     QuizQuestionCreateDTO,
@@ -48,6 +54,8 @@ from app.modules.course.content_entity import (
     CourseAssessment,
     CourseDocument,
     CourseEssaySettings,
+    CourseQuizGroupSection,
+    CourseQuizGroupSettings,
     CourseQuizOption,
     CourseQuizQuestion,
     CourseQuizSettings,
@@ -238,6 +246,17 @@ class CourseContentService:
                         submission_mode=payload.essay_settings.submission_mode,
                     )
                 )
+            elif payload.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
+                group_settings = payload.quiz_group_settings
+                self.session.add(
+                    CourseQuizGroupSettings(
+                        assessment_id=assessment.id,
+                        max_attempts=group_settings.max_attempts if group_settings else None,
+                        pass_mark_percentage=group_settings.pass_mark_percentage if group_settings else 70,
+                        show_result_to_student=group_settings.show_result_to_student if group_settings else True,
+                        time_limit_seconds=group_settings.time_limit_seconds if group_settings else None,
+                    )
+                )
 
         await self.session.commit()
         return item, video_credentials, document_credentials
@@ -369,9 +388,88 @@ class CourseContentService:
             for field, value in payload.essay_settings.model_dump(exclude_unset=True).items():
                 setattr(essay_settings, field, value)
 
+        if payload.quiz_group_settings is not None:
+            group_settings = await self.repo.get_quiz_group_settings(assessment.id)
+            if group_settings is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This is not a quiz group assessment")
+            for field, value in payload.quiz_group_settings.model_dump(exclude_unset=True).items():
+                setattr(group_settings, field, value)
+
         await self.session.flush()
         await self.session.commit()
         return assessment
+
+    # -- quiz group sections (nested quizzes) --------------------------------
+
+    async def create_quiz_group_section(
+        self, item_id: uuid.UUID, payload: QuizGroupSectionCreateDTO, current_user: User
+    ) -> CourseQuizGroupSection:
+        _, _, item = await self._authorize_item(item_id, current_user)
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ_GROUP:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz group not found for this item")
+
+        section = CourseQuizGroupSection(assessment_id=assessment.id, **payload.model_dump())
+        self.session.add(section)
+        await self.session.flush()
+        await self.session.commit()
+        return section
+
+    async def _course_for_group_section(self, section: CourseQuizGroupSection, current_user: User) -> None:
+        await self._course_for_assessment(section.assessment_id, current_user)
+
+    async def update_quiz_group_section(
+        self, section_id: uuid.UUID, payload: QuizGroupSectionUpdateDTO, current_user: User
+    ) -> CourseQuizGroupSection:
+        section = await self.repo.get_quiz_group_section(section_id)
+        if section is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
+        await self._course_for_group_section(section, current_user)
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(section, field, value)
+        await self.session.flush()
+        await self.session.commit()
+        return section
+
+    async def delete_quiz_group_section(self, section_id: uuid.UUID, current_user: User) -> None:
+        section = await self.repo.get_quiz_group_section(section_id)
+        if section is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
+        await self._course_for_group_section(section, current_user)
+        section.mark_deleted(current_user.id)
+        await self.session.commit()
+
+    async def create_question_in_group_section(
+        self, section_id: uuid.UUID, payload: QuizQuestionCreateDTO, current_user: User
+    ) -> tuple[CourseQuizQuestion, list[CourseQuizOption]]:
+        section = await self.repo.get_quiz_group_section(section_id)
+        if section is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
+        await self._course_for_group_section(section, current_user)
+
+        question = CourseQuizQuestion(
+            assessment_id=section.assessment_id,
+            section_id=section.id,
+            text=payload.text,
+            order_index=payload.order_index,
+            allow_multiple_answers=payload.allow_multiple_answers,
+            multi_answer_mode=self._resolve_multi_answer_mode(
+                payload.allow_multiple_answers, payload.multi_answer_mode
+            ),
+        )
+        self.session.add(question)
+        await self.session.flush()
+
+        options = [
+            CourseQuizOption(question_id=question.id, **option_payload.model_dump())
+            for option_payload in payload.options
+        ]
+        for option in options:
+            self.session.add(option)
+        await self.session.flush()
+
+        await self.session.commit()
+        return question, options
 
     # -- quiz questions/options ----------------------------------------------
 
@@ -574,11 +672,24 @@ class CourseContentService:
         essay_settings_by_assessment = {
             s.assessment_id: s for s in await self.repo.list_essay_settings(assessment_ids)
         }
+        quiz_group_settings_by_assessment = {
+            s.assessment_id: s for s in await self.repo.list_quiz_group_settings(assessment_ids)
+        }
+
+        sections = await self.repo.list_sections_for_groups(assessment_ids)
+        sections_by_assessment: dict[uuid.UUID, list[CourseQuizGroupSection]] = {}
+        for sec in sections:
+            sections_by_assessment.setdefault(sec.assessment_id, []).append(sec)
 
         questions = await self.repo.list_questions_for_quizzes(assessment_ids)
         questions_by_assessment: dict[uuid.UUID, list[CourseQuizQuestion]] = {}
         for q in questions:
             questions_by_assessment.setdefault(q.assessment_id, []).append(q)
+
+        questions_by_section: dict[uuid.UUID, list[CourseQuizQuestion]] = {}
+        for q in questions:
+            if q.section_id is not None:
+                questions_by_section.setdefault(q.section_id, []).append(q)
 
         question_ids = [q.id for q in questions]
         options = await self.repo.list_options_for_questions(question_ids)
@@ -600,7 +711,10 @@ class CourseContentService:
                     assessments.get(item.id),
                     quiz_settings_by_assessment,
                     essay_settings_by_assessment,
+                    quiz_group_settings_by_assessment,
+                    sections_by_assessment,
                     questions_by_assessment,
+                    questions_by_section,
                     options_by_question,
                     manage,
                     enrolled,
@@ -620,6 +734,38 @@ class CourseContentService:
             )
         return result_sections
 
+    @staticmethod
+    def _build_question_dtos(
+        questions: list[CourseQuizQuestion], options_by_question: dict, manage: bool
+    ) -> list:
+        question_dtos = []
+        for question in sorted(questions, key=lambda q: q.order_index):
+            option_dtos = []
+            for option in sorted(options_by_question.get(question.id, []), key=lambda o: o.order_index):
+                if manage:
+                    option_dtos.append(
+                        CourseQuizOptionManageDTO(
+                            id=option.id, text=option.text, order_index=option.order_index,
+                            is_correct=option.is_correct,
+                        )
+                    )
+                else:
+                    option_dtos.append(
+                        CourseQuizOptionPublicDTO(id=option.id, text=option.text, order_index=option.order_index)
+                    )
+            question_cls = CourseQuizQuestionManageDTO if manage else CourseQuizQuestionPublicDTO
+            question_dtos.append(
+                question_cls(
+                    id=question.id,
+                    text=question.text,
+                    order_index=question.order_index,
+                    allow_multiple_answers=question.allow_multiple_answers,
+                    multi_answer_mode=question.multi_answer_mode,
+                    options=option_dtos,
+                )
+            )
+        return question_dtos
+
     def _map_item(
         self,
         item: CourseItem,
@@ -628,7 +774,10 @@ class CourseContentService:
         assessment: CourseAssessment | None,
         quiz_settings_by_assessment: dict,
         essay_settings_by_assessment: dict,
+        quiz_group_settings_by_assessment: dict,
+        sections_by_assessment: dict,
         questions_by_assessment: dict,
+        questions_by_section: dict,
         options_by_question: dict,
         manage: bool,
         enrolled: bool,
@@ -667,38 +816,12 @@ class CourseContentService:
         if assessment is not None:
             quiz_detail = None
             essay_detail = None
+            quiz_group_detail = None
 
             if assessment.assessment_type == AssessmentTypeEnum.QUIZ:
-                question_dtos = []
-                for question in sorted(
-                    questions_by_assessment.get(assessment.id, []), key=lambda q: q.order_index
-                ):
-                    option_dtos = []
-                    for option in sorted(options_by_question.get(question.id, []), key=lambda o: o.order_index):
-                        if manage:
-                            option_dtos.append(
-                                CourseQuizOptionManageDTO(
-                                    id=option.id, text=option.text, order_index=option.order_index,
-                                    is_correct=option.is_correct,
-                                )
-                            )
-                        else:
-                            option_dtos.append(
-                                CourseQuizOptionPublicDTO(
-                                    id=option.id, text=option.text, order_index=option.order_index
-                                )
-                            )
-                    question_cls = CourseQuizQuestionManageDTO if manage else CourseQuizQuestionPublicDTO
-                    question_dtos.append(
-                        question_cls(
-                            id=question.id,
-                            text=question.text,
-                            order_index=question.order_index,
-                            allow_multiple_answers=question.allow_multiple_answers,
-                            multi_answer_mode=question.multi_answer_mode,
-                            options=option_dtos,
-                        )
-                    )
+                question_dtos = self._build_question_dtos(
+                    questions_by_assessment.get(assessment.id, []), options_by_question, manage
+                )
                 settings = quiz_settings_by_assessment.get(assessment.id)
                 quiz_cls = CourseQuizManageDetailDTO if manage else CourseQuizDetailDTO
                 quiz_detail = quiz_cls(
@@ -715,6 +838,41 @@ class CourseContentService:
                         description=essay_settings.description,
                         submission_mode=essay_settings.submission_mode,
                     )
+            elif assessment.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
+                section_dtos = []
+                for sec in sorted(
+                    sections_by_assessment.get(assessment.id, []), key=lambda s: s.order_index
+                ):
+                    pool = questions_by_section.get(sec.id, [])
+                    question_count = min(sec.questions_to_ask, len(pool)) if sec.questions_to_ask else len(pool)
+                    if manage:
+                        section_dtos.append(
+                            CourseQuizGroupSectionManageDTO(
+                                id=sec.id,
+                                title=sec.title,
+                                order_index=sec.order_index,
+                                questions_to_ask=sec.questions_to_ask,
+                                questions=self._build_question_dtos(pool, options_by_question, manage=True),
+                            )
+                        )
+                    else:
+                        section_dtos.append(
+                            CourseQuizGroupSectionPublicDTO(
+                                id=sec.id,
+                                title=sec.title,
+                                order_index=sec.order_index,
+                                question_count=question_count,
+                            )
+                        )
+                settings = quiz_group_settings_by_assessment.get(assessment.id)
+                group_cls = CourseQuizGroupManageDetailDTO if manage else CourseQuizGroupDetailDTO
+                quiz_group_detail = group_cls(
+                    max_attempts=settings.max_attempts if settings else None,
+                    pass_mark_percentage=settings.pass_mark_percentage if settings else 70,
+                    show_result_to_student=settings.show_result_to_student if settings else True,
+                    time_limit_seconds=settings.time_limit_seconds if settings else None,
+                    sections=section_dtos,
+                )
 
             assessment_cls = CourseAssessmentManageDTO if manage else CourseAssessmentPublicDTO
             assessment_dto = assessment_cls(
@@ -723,6 +881,7 @@ class CourseContentService:
                 due_date=assessment.due_date,
                 quiz=quiz_detail,
                 essay=essay_detail,
+                quiz_group=quiz_group_detail,
             )
 
         item_cls = CourseItemManageReadDTO if manage else CourseItemReadDTO

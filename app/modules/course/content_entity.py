@@ -62,6 +62,7 @@ class AssessmentTypeEnum(str, enum.Enum):
 
     QUIZ = "QUIZ"
     ESSAY = "ESSAY"
+    QUIZ_GROUP = "QUIZ_GROUP"
 
 
 class MultiAnswerModeEnum(str, enum.Enum):
@@ -115,11 +116,50 @@ class CourseEssaySettings(BaseEntity):
     )
 
 
+class CourseQuizGroupSettings(BaseEntity):
+    """Settings for a QUIZ_GROUP assessment - a set of named sections (each its own
+    nested quiz with its own question pool), taken together in one sitting with a
+    single overall score. Mirrors `CourseQuizSettings` plus an optional timer."""
+
+    __tablename__ = "course_quiz_group_settings"
+
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_assessments.id"), unique=True, nullable=False, index=True
+    )
+    max_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pass_mark_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=70)
+    show_result_to_student: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Null = untimed. Otherwise the attempt auto-submits (scoring whatever was
+    # saved) once `started_at + time_limit_seconds` has passed.
+    time_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class CourseQuizGroupSection(BaseEntity):
+    """One nested quiz within a QUIZ_GROUP - a named pool of questions. On each
+    attempt, `questions_to_ask` of them are drawn at random (favoring questions the
+    student hasn't seen yet on prior attempts); null/0 means "ask all of them"."""
+
+    __tablename__ = "course_quiz_group_sections"
+
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_assessments.id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    questions_to_ask: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class CourseQuizQuestion(BaseEntity):
     __tablename__ = "course_quiz_questions"
 
     assessment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("course_assessments.id"), nullable=False, index=True
+    )
+    # Set only for questions that belong to a QUIZ_GROUP section's pool (in which
+    # case `assessment_id` points at the group, not a standalone QUIZ). Null for
+    # ordinary standalone-quiz questions.
+    section_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_quiz_group_sections.id"), nullable=True, index=True
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

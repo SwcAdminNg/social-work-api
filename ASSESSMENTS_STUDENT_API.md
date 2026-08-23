@@ -1,9 +1,9 @@
-# Assessments (Quiz & Essay) — Student/User API Reference
+# Assessments (Quiz, Essay & Quiz Group) — Student/User API Reference
 
 This document covers the **student-facing** side of the generic Assessment system: taking a quiz,
-submitting an essay, and checking results. It's the companion to
-[`ASSESSMENTS_INSTRUCTOR_ADMIN_API.md`](./ASSESSMENTS_INSTRUCTOR_ADMIN_API.md), which covers how
-instructors configure these.
+submitting an essay, taking a quiz group (nested quizzes), and checking results. It's the
+companion to [`ASSESSMENTS_INSTRUCTOR_ADMIN_API.md`](./ASSESSMENTS_INSTRUCTOR_ADMIN_API.md), which
+covers how instructors configure these.
 
 Base URL prefix for everything below: `/learning`.
 
@@ -26,8 +26,12 @@ Base URL prefix for everything below: `/learning`.
 ## 1. The mental model (recap)
 
 A curriculum item you fetch via the curriculum/item-content endpoints can be `VIDEO`, `DOCUMENT`,
-or `ASSESSMENT`. When it's `ASSESSMENT`, check `assessment_type` (`"QUIZ"` or `"ESSAY"`) to know
-which set of fields/actions apply. `due_date` (if set) applies to both.
+or `ASSESSMENT`. When it's `ASSESSMENT`, check `assessment_type` (`"QUIZ"`, `"ESSAY"`, or
+`"QUIZ_GROUP"`) to know which set of fields/actions apply. `due_date` (if set) applies to all three.
+
+`QUIZ_GROUP` ("nested quizzes") is a set of named sections, each its own mini quiz, answered
+together in one sitting for a single overall score — with an optional countdown timer that
+auto-submits and scores whatever was answered if time runs out. See §3b.
 
 ---
 
@@ -157,6 +161,40 @@ Notes:
 - `document_download_url` (when `submission_mode = DOCUMENT`) is a freshly generated, short-lived
   presigned URL each time you call this endpoint.
 
+#### Quiz group item response
+
+```json
+{
+  "id": "item-uuid",
+  "title": "Module 1 Final",
+  "item_type": "ASSESSMENT",
+  "is_completed": false,
+  "assessment_type": "QUIZ_GROUP",
+  "due_date": "2026-09-01T23:59:00Z",
+  "quiz_group": {
+    "max_attempts": 2,
+    "attempts_used": 0,
+    "attempts_remaining": 2,
+    "pass_mark_percentage": 60,
+    "show_result_to_student": true,
+    "time_limit_seconds": 1800,
+    "sections": [
+      { "id": "section-1", "title": "Safety Principles", "order_index": 0, "question_count": 5 },
+      { "id": "section-2", "title": "De-escalation", "order_index": 1, "question_count": 5 }
+    ]
+  }
+}
+```
+
+Notes:
+- **No questions here.** `sections[].question_count` only tells you how many questions each
+  section will ask — the actual questions are only revealed once you start an attempt (§3b.1),
+  since they're drawn at random each time (see §3b.3).
+- If the student has an **in-progress** attempt (started but not yet submitted), `quiz_group` also
+  includes `active_attempt` — see §3b.1, "resuming".
+- If the student has a **submitted** attempt, `quiz_group` also includes `previous_result` — same
+  shape as the submit response (§3b.2), reflecting the most recent submitted attempt.
+
 ---
 
 ## 3. Taking a quiz
@@ -222,6 +260,159 @@ Response (`QuizResultDTO`):
 
 Check `attempts_remaining` from §2.3 before showing the "Submit" button/re-attempt option so you
 can disable it proactively instead of relying on the 400.
+
+---
+
+## 3b. Taking a quiz group (nested quizzes)
+
+Unlike a standalone quiz (one-shot: answer + submit in a single call), a quiz group attempt is
+**stateful** — you start it, optionally autosave progress as the student answers, then submit. This
+is what makes the timer/auto-submit and no-repeat-questions behavior possible.
+
+### 3b.1 Start (or resume) an attempt
+
+**`POST /learning/courses/{course_id}/items/{item_id}/quiz-group/start`**
+
+No body. Call this when the student clicks "Start" on a quiz group.
+
+```json
+{
+  "success": true,
+  "message": "Quiz group attempt started",
+  "data": {
+    "attempt_id": "attempt-uuid",
+    "started_at": "2026-08-23T10:00:00Z",
+    "expires_at": "2026-08-23T10:30:00Z",
+    "sections": [
+      {
+        "section_id": "section-1",
+        "title": "Safety Principles",
+        "questions": [
+          {
+            "id": "question-uuid",
+            "text": "What is the first priority in a trauma-informed response?",
+            "allow_multiple_answers": false,
+            "multi_answer_mode": null,
+            "options": [
+              { "id": "opt-1", "text": "Establishing safety" },
+              { "id": "opt-2", "text": "Documenting the incident" }
+            ]
+          }
+        ]
+      },
+      { "section_id": "section-2", "title": "De-escalation", "questions": [ /* ... */ ] }
+    ],
+    "saved_answers": {}
+  }
+}
+```
+
+- `expires_at` is `null` if the group is untimed. Otherwise, run your countdown UI off it (not off
+  `time_limit_seconds` + a client clock) so it stays correct even if the app was backgrounded.
+- **Resuming**: if the student already has an in-progress attempt (e.g. they closed the tab and
+  came back), calling `start` again returns **that same attempt** — same `attempt_id`, same drawn
+  questions, same `expires_at`, plus whatever was last saved in `saved_answers` — instead of
+  starting a new one. Always call `start` when the student opens the quiz group screen; don't try
+  to cache attempt state client-side across sessions.
+- If the previous attempt's timer had already run out by the time you call `start`, it gets
+  auto-submitted first (see §3b.4) and this call then starts a **new** attempt (attempt-count
+  permitting) with a fresh draw of questions.
+- `400` if `max_attempts` is already reached, the group has no sections/questions configured yet,
+  or the deadline (`due_date`) has passed.
+
+### 3b.2 Submit the attempt
+
+**`POST /learning/courses/{course_id}/items/{item_id}/quiz-group/submit`**
+
+```json
+{
+  "attempt_id": "attempt-uuid",
+  "answers": {
+    "question-1-uuid": ["opt-1-uuid"],
+    "question-2-uuid": ["opt-2-uuid", "opt-3-uuid"]
+  }
+}
+```
+
+Send **every** answer the student has given across **all** sections in one call — same
+UUID-keyed-object convention as a standalone quiz (§3.1). A skipped question scores 0.
+
+Response (`QuizGroupResultDTO`):
+```json
+{
+  "success": true,
+  "message": "Quiz group passed successfully",
+  "data": {
+    "attempt_id": "attempt-uuid",
+    "score": 80.0,
+    "passed": true,
+    "auto_submitted": false,
+    "sections": [
+      { "section_id": "section-1", "title": "Safety Principles", "earned_points": 4.0, "total_questions": 5, "score_percent": 80.0 },
+      { "section_id": "section-2", "title": "De-escalation", "earned_points": 4.0, "total_questions": 5, "score_percent": 80.0 }
+    ],
+    "correct_answers": null,
+    "result_visible": true
+  }
+}
+```
+
+- `score`/`passed` are the **overall** result across every section combined (not per-section pass/
+  fail — there's only one pass mark, at the group level).
+- `sections[]` gives the per-section breakdown so you can show "4/5 on Safety Principles, 4/5 on
+  De-escalation" alongside the overall score.
+- `correct_answers` is intentionally always `null` here (unlike the standalone-quiz submit
+  response) — since each attempt only sees a subset of a larger pool, showing the answer key would
+  leak pool questions the student hasn't been tested on yet. Use `previous_result` from §2.3/§3b
+  content if you need to review what was asked, or don't rely on a correct-answer key for quiz
+  groups.
+- `auto_submitted: true` means this call landed after the timer had already run out — same result
+  shape either way, just a different `message` (`"Time's up - your quiz group was submitted
+  automatically"`).
+- `result_visible: false` (when the instructor set `show_result_to_student: false`) nulls out
+  `score`/`passed`/`sections` the same way a standalone quiz does — the submission still counts.
+- **Idempotent**: calling `submit` again with the same `attempt_id` after it's already been
+  submitted (by you, or auto-submitted by the timer racing your call) just returns the existing
+  result instead of erroring — safe to retry on a flaky connection.
+
+### 3b.3 No repeated questions across retakes
+
+Each section draws `questions_to_ask` questions from its pool at random, favoring ones the student
+hasn't seen in any previous attempt on this item. You don't need to do anything for this — it's
+automatic on `start`. Just don't assume attempt 2 will show the same questions as attempt 1 (it
+usually won't, pool size permitting) — always render whatever `sections[].questions` the `start`/
+resume response gives you, never a cached set from an earlier attempt.
+
+### 3b.4 The timer and auto-submit
+
+If the group has `time_limit_seconds` configured (§2.3), the attempt has a hard deadline
+(`expires_at`). Two things you should implement:
+
+1. **Client-side countdown + auto-submit-on-zero**: run a timer off `expires_at`, and when it hits
+   zero, call the submit endpoint (§3b.2) automatically with whatever the student has answered so
+   far — exactly the same call a manual "Submit" click makes. This is the primary way timeouts get
+   scored promptly.
+2. **Periodic autosave**, so a submission still happens (with a real score, not zero) even if the
+   student's client crashes/loses connection before the auto-submit fires:
+
+   **`POST /learning/courses/{course_id}/items/{item_id}/quiz-group/progress`**
+   ```json
+   { "attempt_id": "attempt-uuid", "answers": { "question-1-uuid": ["opt-1-uuid"] } }
+   ```
+   ```json
+   { "success": true, "message": "Progress saved" }
+   ```
+   Call this periodically (e.g. every 10-30s, or on every answer change) while the student is
+   working. It overwrites the attempt's saved answers each time — always send the **full** current
+   answer set, not a diff. `400` (`"Time is up - this attempt was submitted automatically"`) if the
+   timer had already run out by the time this call lands — treat that the same as a submit
+   response: refresh the item content (§2.3) to show `previous_result`.
+
+If the student never calls submit and the client never gets the chance to auto-submit (app closed,
+etc.), the attempt isn't silently lost — the **next** time anything touches it (the student
+reopening the item, or their next `start` call) it's lazily finalized server-side using whatever
+was last saved via the progress endpoint, exactly as described above. There's no background job you
+need to poll for this; it just resolves itself on next access.
 
 ---
 
@@ -306,25 +497,29 @@ document essay.
 
 **`GET /learning/assessments/me?status=PASSED&course_id=...&assessment_type=QUIZ&page=1&page_size=20`**
 
-Lists **every assessment — quiz and essay — across courses the student has access to**, with its
-latest status, in one feed. All query params are optional filters. This replaces the old
-quiz-only `/learning/quizzes/me` endpoint (renamed and broadened).
+Lists **every assessment — quiz, essay, and quiz group — across courses the student has access
+to**, with its latest status, in one feed. All query params are optional filters. This replaces
+the old quiz-only `/learning/quizzes/me` endpoint (renamed and broadened).
 
 | Param | Type | Notes |
 |---|---|---|
 | `status` | `"NOT_STARTED" \| "PASSED" \| "FAILED" \| "SUBMITTED" \| "GRADED"` | Case-insensitive. See status meanings below. |
 | `course_id` | UUID | Restrict to one course. |
-| `assessment_type` | `"QUIZ" \| "ESSAY"` | Restrict to one assessment type. Case-insensitive. |
+| `assessment_type` | `"QUIZ" \| "ESSAY" \| "QUIZ_GROUP"` | Restrict to one assessment type. Case-insensitive. |
 
 ### Status values
 
 | Status | Applies to | Meaning |
 |---|---|---|
-| `NOT_STARTED` | quiz & essay | No attempt/submission yet. |
-| `PASSED` | quiz only | Latest attempt scored ≥ `pass_mark_percentage`, and results are visible. |
-| `FAILED` | quiz only | Latest attempt scored below the pass mark, and results are visible. |
-| `SUBMITTED` | quiz & essay | Quiz: attempted, but `show_result_to_student` is off so pass/fail is withheld. Essay: submitted, not yet graded by the instructor. |
+| `NOT_STARTED` | quiz, essay & quiz group | No attempt/submission yet. |
+| `PASSED` | quiz & quiz group | Latest attempt scored ≥ `pass_mark_percentage`, and results are visible. |
+| `FAILED` | quiz & quiz group | Latest attempt scored below the pass mark, and results are visible. |
+| `SUBMITTED` | quiz, essay & quiz group | Quiz/quiz group: attempted, but `show_result_to_student` is off so pass/fail is withheld. Essay: submitted, not yet graded by the instructor. |
 | `GRADED` | essay only | An instructor has scored the essay (regardless of whether the score is published yet — check `is_published`/`score` for that). |
+
+A quiz group row uses the exact same `max_attempts`/`attempts_used`/`attempts_remaining`/
+`pass_mark_percentage` fields as a quiz row (an in-progress, not-yet-submitted attempt doesn't
+count toward `attempts_used` — only submitted ones do, same as `max_attempts` enforcement in §3b.1).
 
 ### Response shape (`UserAssessmentDTO`)
 
@@ -387,7 +582,7 @@ e.g. `upcoming=true&completed=true` will just return nothing):
 |---|---|
 | `upcoming=true` | Has a `due_date` in the future **and** hasn't been started yet (`status: NOT_STARTED`). This is a to-do/deadline view, not "everything with a future due date" — something you've already submitted with a future due date doesn't count as "upcoming". |
 | `completed=true` | Shorthand for "`status` is not `NOT_STARTED`" — i.e. attempted/submitted at least once, regardless of pass/fail/graded state. |
-| `retakes=true` | Quiz items only, where you've used at least one attempt, the deadline (if any) hasn't passed, and either attempts are unlimited or `attempts_remaining > 0`. Essays never appear here — there's no "retake" concept for essays (see §4's resubmit-until-graded rule instead). |
+| `retakes=true` | Quiz and quiz-group items only, where you've used at least one attempt, the deadline (if any) hasn't passed, and either attempts are unlimited or `attempts_remaining > 0`. Essays never appear here — there's no "retake" concept for essays (see §4's resubmit-until-graded rule instead). |
 
 ### 5.2 Date-range filtering
 
@@ -453,8 +648,11 @@ item"` — completion for quizzes/essays happens automatically on submit instead
 | GET | `/learning/courses/{course_id}/items/{item_id}` | Full item content (quiz/essay/video/document) |
 | POST | `/learning/courses/{course_id}/items/{item_id}/complete` | Complete a video/document item |
 | POST | `/learning/courses/{course_id}/items/{item_id}/quiz/submit` | Submit quiz answers |
+| POST | `/learning/courses/{course_id}/items/{item_id}/quiz-group/start` | Start/resume a quiz group attempt (§3b.1) |
+| POST | `/learning/courses/{course_id}/items/{item_id}/quiz-group/progress` | Autosave in-progress quiz group answers (§3b.4) |
+| POST | `/learning/courses/{course_id}/items/{item_id}/quiz-group/submit` | Submit a quiz group attempt (§3b.2) |
 | POST | `/learning/courses/{course_id}/items/{item_id}/essay/submit-text` | Submit/resubmit a TEXT essay |
 | POST | `/learning/courses/{course_id}/items/{item_id}/essay/upload-url` | Get presigned upload URL (DOCUMENT essay) |
 | POST | `/learning/courses/{course_id}/items/{item_id}/essay/submit-document` | Finalize a DOCUMENT essay submission |
-| GET | `/learning/assessments/me` | List all quizzes + essays, with filters (§5) |
+| GET | `/learning/assessments/me` | List all quizzes + essays + quiz groups, with filters (§5) |
 | GET | `/learning/assessments/stats` | Dashboard summary stats (§6) |

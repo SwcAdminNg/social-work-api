@@ -19,6 +19,10 @@ from app.modules.learning.dto import (
     EssayUploadUrlRequestDTO,
     EssayUploadUrlResponseDTO,
     LearningItemContentDTO,
+    QuizGroupActiveAttemptDTO,
+    QuizGroupResultDTO,
+    QuizGroupSaveProgressDTO,
+    QuizGroupSubmitDTO,
     QuizResultDTO,
     QuizSubmitDTO,
     UserAssessmentDTO,
@@ -124,6 +128,69 @@ async def submit_quiz(
         message = "Quiz submitted successfully"
     else:
         message = "Quiz passed successfully" if data.passed else "Quiz failed, please try again"
+    return ApiResponse(message=message, data=data)
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/quiz-group/start",
+    response_model=ApiResponse[QuizGroupActiveAttemptDTO],
+    summary="Start (or resume) a quiz group attempt - draws questions per section "
+    "(favoring ones not seen before) and starts the timer if one is configured",
+)
+async def start_quiz_group(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizGroupActiveAttemptDTO]:
+    service = LearningService(db)
+    data = await service.start_quiz_group(current_user.id, course_id, item_id)
+    return ApiResponse(message="Quiz group attempt started", data=data)
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/quiz-group/progress",
+    response_model=ApiResponse[None],
+    summary="Autosave in-progress answers for a quiz group attempt (e.g. called "
+    "periodically by the client) so a timeout auto-submit has something to score",
+)
+async def save_quiz_group_progress(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: QuizGroupSaveProgressDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    service = LearningService(db)
+    await service.save_quiz_group_progress(
+        current_user.id, course_id, item_id, payload.attempt_id, payload.answers
+    )
+    return ApiResponse(message="Progress saved")
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/quiz-group/submit",
+    response_model=ApiResponse[QuizGroupResultDTO],
+    summary="Submit a quiz group attempt (called by the student, or automatically "
+    "by the client when the timer runs out) and get the overall grading result",
+)
+async def submit_quiz_group(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: QuizGroupSubmitDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizGroupResultDTO]:
+    service = LearningService(db)
+    data = await service.submit_quiz_group(
+        current_user.id, course_id, item_id, payload.attempt_id, payload.answers
+    )
+    if not data.result_visible:
+        message = "Quiz group submitted successfully"
+    elif data.auto_submitted:
+        message = "Time's up - your quiz group was submitted automatically"
+    else:
+        message = "Quiz group passed successfully" if data.passed else "Quiz group failed, please try again"
     return ApiResponse(message=message, data=data)
 
 

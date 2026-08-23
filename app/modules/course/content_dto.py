@@ -66,6 +66,21 @@ class CourseEssaySettingsPatchDTO(UpdateDTO):
     submission_mode: EssaySubmissionModeEnum | None = None
 
 
+class CourseQuizGroupSettingsInDTO(CreateDTO):
+    max_attempts: int | None = Field(default=None, ge=1)
+    pass_mark_percentage: int = Field(default=70, ge=0, le=100)
+    show_result_to_student: bool = True
+    # Null = untimed.
+    time_limit_seconds: int | None = Field(default=None, ge=30)
+
+
+class CourseQuizGroupSettingsPatchDTO(UpdateDTO):
+    max_attempts: int | None = Field(default=None, ge=1)
+    pass_mark_percentage: int | None = Field(default=None, ge=0, le=100)
+    show_result_to_student: bool | None = None
+    time_limit_seconds: int | None = Field(default=None, ge=30)
+
+
 # ---------------------------------------------------------------------------
 # Items - create/update payloads
 # ---------------------------------------------------------------------------
@@ -85,6 +100,10 @@ class CourseItemCreateDTO(CreateDTO):
     due_date: datetime | None = None
     quiz_settings: CourseQuizSettingsInDTO | None = None
     essay_settings: CourseEssaySettingsInDTO | None = None
+    # Required only when assessment_type == QUIZ_GROUP. Sections (the nested
+    # quizzes) and their question pools are added afterward via their own
+    # endpoints, same as standalone quiz questions.
+    quiz_group_settings: CourseQuizGroupSettingsInDTO | None = None
 
 
 class CourseAssessmentUpdateDTO(UpdateDTO):
@@ -95,6 +114,7 @@ class CourseAssessmentUpdateDTO(UpdateDTO):
     due_date: datetime | None = None
     quiz_settings: CourseQuizSettingsPatchDTO | None = None
     essay_settings: CourseEssaySettingsPatchDTO | None = None
+    quiz_group_settings: CourseQuizGroupSettingsPatchDTO | None = None
 
 
 class CourseItemUpdateDTO(UpdateDTO):
@@ -250,7 +270,61 @@ class CourseEssayDetailDTO(BaseDTO):
 
 
 # ---------------------------------------------------------------------------
-# Assessment - the item-level wrapper around quiz/essay settings
+# Quiz group (nested quizzes) - instructor/admin authoring side
+# ---------------------------------------------------------------------------
+
+
+class QuizGroupSectionCreateDTO(CreateDTO):
+    title: str = Field(min_length=1, max_length=255)
+    order_index: int = 0
+    # How many questions to randomly draw from this section's pool per attempt.
+    # Null/omitted = ask every question in the pool every time.
+    questions_to_ask: int | None = Field(default=None, ge=1)
+
+
+class QuizGroupSectionUpdateDTO(UpdateDTO):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    order_index: int | None = None
+    questions_to_ask: int | None = Field(default=None, ge=1)
+
+
+class CourseQuizGroupSectionManageDTO(BaseDTO):
+    id: uuid.UUID
+    title: str
+    order_index: int
+    questions_to_ask: int | None
+    questions: list[CourseQuizQuestionManageDTO]
+
+
+class CourseQuizGroupSectionPublicDTO(BaseDTO):
+    """Public view deliberately omits the question pool - questions are only
+    revealed once a student starts an attempt, so a fixed set can't be studied
+    ahead of time and repeat attempts can draw a different subset."""
+
+    id: uuid.UUID
+    title: str
+    order_index: int
+    question_count: int  # how many questions this section will actually ask
+
+
+class CourseQuizGroupManageDetailDTO(BaseDTO):
+    max_attempts: int | None
+    pass_mark_percentage: int
+    show_result_to_student: bool
+    time_limit_seconds: int | None
+    sections: list[CourseQuizGroupSectionManageDTO]
+
+
+class CourseQuizGroupDetailDTO(BaseDTO):
+    max_attempts: int | None
+    pass_mark_percentage: int
+    show_result_to_student: bool
+    time_limit_seconds: int | None
+    sections: list[CourseQuizGroupSectionPublicDTO]
+
+
+# ---------------------------------------------------------------------------
+# Assessment - the item-level wrapper around quiz/essay/quiz-group settings
 # ---------------------------------------------------------------------------
 
 
@@ -260,6 +334,7 @@ class CourseAssessmentPublicDTO(BaseDTO):
     due_date: datetime | None
     quiz: CourseQuizDetailDTO | None = None
     essay: CourseEssayDetailDTO | None = None
+    quiz_group: CourseQuizGroupDetailDTO | None = None
 
 
 class CourseAssessmentManageDTO(BaseDTO):
@@ -268,6 +343,7 @@ class CourseAssessmentManageDTO(BaseDTO):
     due_date: datetime | None
     quiz: CourseQuizManageDetailDTO | None = None
     essay: CourseEssayDetailDTO | None = None
+    quiz_group: CourseQuizGroupManageDetailDTO | None = None
 
 
 # ---------------------------------------------------------------------------

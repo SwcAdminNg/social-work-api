@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,14 @@ from app.common.pagination import PaginationParams
 
 from app.modules.course.access_entity import UserCourseAccess
 from app.modules.course.entity import Course, CourseItem, CourseSection
-from app.modules.learning.entity import EssaySubmission, QuizAttempt, UserCourseProgress, UserItemProgress
+from app.modules.learning.entity import (
+    EssaySubmission,
+    QuizAttempt,
+    QuizGroupAttempt,
+    QuizGroupAttemptStatusEnum,
+    UserCourseProgress,
+    UserItemProgress,
+)
 from app.modules.user.entity import User
 
 
@@ -84,6 +92,100 @@ class LearningRepository:
             QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id
         )
         return (await self.session.execute(stmt)).scalar() or 0
+
+    # -- quiz group attempts -----------------------------------------------------
+
+    async def get_in_progress_quiz_group_attempt(
+        self, user_id: uuid.UUID, item_id: uuid.UUID
+    ) -> QuizGroupAttempt | None:
+        stmt = select(QuizGroupAttempt).where(
+            QuizGroupAttempt.user_id == user_id,
+            QuizGroupAttempt.item_id == item_id,
+            QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.IN_PROGRESS,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_quiz_group_attempt(self, attempt_id: uuid.UUID) -> QuizGroupAttempt | None:
+        stmt = select(QuizGroupAttempt).where(QuizGroupAttempt.id == attempt_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def create_quiz_group_attempt(
+        self,
+        user_id: uuid.UUID,
+        item_id: uuid.UUID,
+        started_at: datetime,
+        expires_at: datetime | None,
+        selected_questions: dict,
+    ) -> QuizGroupAttempt:
+        attempt = QuizGroupAttempt(
+            user_id=user_id,
+            item_id=item_id,
+            started_at=started_at,
+            expires_at=expires_at,
+            selected_questions=selected_questions,
+        )
+        self.session.add(attempt)
+        await self.session.flush()
+        return attempt
+
+    async def save_quiz_group_progress(self, attempt: QuizGroupAttempt, answers: dict) -> QuizGroupAttempt:
+        attempt.answers = answers
+        await self.session.flush()
+        return attempt
+
+    async def finalize_quiz_group_attempt(
+        self,
+        attempt: QuizGroupAttempt,
+        score: float,
+        passed: bool,
+        section_scores: list,
+        answers: dict,
+        auto_submitted: bool,
+    ) -> QuizGroupAttempt:
+        attempt.status = QuizGroupAttemptStatusEnum.SUBMITTED
+        attempt.score = score
+        attempt.passed = passed
+        attempt.section_scores = section_scores
+        attempt.answers = answers
+        attempt.auto_submitted = auto_submitted
+        attempt.submitted_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return attempt
+
+    async def count_quiz_group_attempts(self, user_id: uuid.UUID, item_id: uuid.UUID) -> int:
+        stmt = select(func.count(QuizGroupAttempt.id)).where(
+            QuizGroupAttempt.user_id == user_id,
+            QuizGroupAttempt.item_id == item_id,
+            QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+        )
+        return (await self.session.execute(stmt)).scalar() or 0
+
+    async def list_quiz_group_attempts(
+        self, user_id: uuid.UUID, item_id: uuid.UUID
+    ) -> Sequence[QuizGroupAttempt]:
+        """All attempts (any status), oldest first - used to figure out which
+        questions the student has already been shown so a new attempt can favor
+        ones they haven't seen yet."""
+        stmt = (
+            select(QuizGroupAttempt)
+            .where(QuizGroupAttempt.user_id == user_id, QuizGroupAttempt.item_id == item_id)
+            .order_by(QuizGroupAttempt.created_at.asc())
+        )
+        return (await self.session.execute(stmt)).scalars().all()
+
+    async def get_latest_submitted_quiz_group_attempt(
+        self, user_id: uuid.UUID, item_id: uuid.UUID
+    ) -> QuizGroupAttempt | None:
+        stmt = (
+            select(QuizGroupAttempt)
+            .where(
+                QuizGroupAttempt.user_id == user_id,
+                QuizGroupAttempt.item_id == item_id,
+                QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+            )
+            .order_by(QuizGroupAttempt.created_at.desc())
+        )
+        return (await self.session.execute(stmt)).scalars().first()
 
     # -- essay submissions -----------------------------------------------------
 
@@ -228,7 +330,7 @@ class LearningRepository:
         how to apply, so the service paginates/filters the mapped DTOs instead."""
         from app.modules.course.entity import Course, CourseSection, CourseItem, CourseItemTypeEnum
         from app.modules.course.access_entity import UserCourseAccess
-        from app.modules.course.content_entity import CourseAssessment, CourseQuizSettings
+        from app.modules.course.content_entity import CourseAssessment, CourseQuizGroupSettings, CourseQuizSettings
         from sqlalchemy.orm import aliased
 
         subq = (
@@ -250,10 +352,36 @@ class LearningRepository:
             .scalar_subquery()
         )
 
+        group_subq = (
+            select(
+                QuizGroupAttempt.item_id,
+                func.max(QuizGroupAttempt.created_at).label("latest_attempt_at"),
+            )
+            .where(
+                QuizGroupAttempt.user_id == user_id,
+                QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+            )
+            .group_by(QuizGroupAttempt.item_id)
+            .subquery()
+        )
+
+        latest_group_attempt = aliased(QuizGroupAttempt)
+
+        group_attempt_count = (
+            select(func.count(QuizGroupAttempt.id))
+            .where(
+                QuizGroupAttempt.item_id == CourseItem.id,
+                QuizGroupAttempt.user_id == user_id,
+                QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+            )
+            .correlate(CourseItem)
+            .scalar_subquery()
+        )
+
         stmt = (
             select(
                 CourseItem, Course, CourseAssessment, CourseQuizSettings, latest_attempt, EssaySubmission,
-                attempt_count,
+                attempt_count, CourseQuizGroupSettings, latest_group_attempt, group_attempt_count,
             )
             .join(CourseSection, CourseItem.section_id == CourseSection.id)
             .join(Course, CourseSection.course_id == Course.id)
@@ -273,6 +401,14 @@ class LearningRepository:
             .outerjoin(
                 EssaySubmission,
                 (EssaySubmission.item_id == CourseItem.id) & (EssaySubmission.user_id == user_id)
+            )
+            .outerjoin(CourseQuizGroupSettings, CourseQuizGroupSettings.assessment_id == CourseAssessment.id)
+            .outerjoin(group_subq, CourseItem.id == group_subq.c.item_id)
+            .outerjoin(
+                latest_group_attempt,
+                (latest_group_attempt.item_id == CourseItem.id) &
+                (latest_group_attempt.user_id == user_id) &
+                (latest_group_attempt.created_at == group_subq.c.latest_attempt_at)
             )
             .where(
                 UserCourseAccess.user_id == user_id,

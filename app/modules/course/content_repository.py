@@ -8,6 +8,8 @@ from app.modules.course.content_entity import (
     CourseAssessment,
     CourseDocument,
     CourseEssaySettings,
+    CourseQuizGroupSection,
+    CourseQuizGroupSettings,
     CourseQuizOption,
     CourseQuizQuestion,
     CourseQuizSettings,
@@ -109,6 +111,52 @@ class CourseContentRepository:
         if not assessment_ids:
             return []
         stmt = select(CourseEssaySettings).where(CourseEssaySettings.assessment_id.in_(assessment_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    # -- quiz group (nested quizzes) ------------------------------------------
+
+    async def get_quiz_group_settings(self, assessment_id: uuid.UUID) -> CourseQuizGroupSettings | None:
+        stmt = select(CourseQuizGroupSettings).where(CourseQuizGroupSettings.assessment_id == assessment_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_quiz_group_settings(
+        self, assessment_ids: Sequence[uuid.UUID]
+    ) -> Sequence[CourseQuizGroupSettings]:
+        if not assessment_ids:
+            return []
+        stmt = select(CourseQuizGroupSettings).where(CourseQuizGroupSettings.assessment_id.in_(assessment_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    async def get_quiz_group_section(self, id: uuid.UUID) -> CourseQuizGroupSection | None:
+        stmt = select(CourseQuizGroupSection).where(
+            CourseQuizGroupSection.id == id, CourseQuizGroupSection.deleted_at.is_(None)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_sections_for_group(self, assessment_id: uuid.UUID) -> Sequence[CourseQuizGroupSection]:
+        stmt = (
+            select(CourseQuizGroupSection)
+            .where(
+                CourseQuizGroupSection.assessment_id == assessment_id,
+                CourseQuizGroupSection.deleted_at.is_(None),
+            )
+            .order_by(CourseQuizGroupSection.order_index)
+        )
+        return (await self.session.execute(stmt)).scalars().all()
+
+    async def list_sections_for_groups(
+        self, assessment_ids: Sequence[uuid.UUID]
+    ) -> Sequence[CourseQuizGroupSection]:
+        if not assessment_ids:
+            return []
+        stmt = (
+            select(CourseQuizGroupSection)
+            .where(
+                CourseQuizGroupSection.assessment_id.in_(assessment_ids),
+                CourseQuizGroupSection.deleted_at.is_(None),
+            )
+            .order_by(CourseQuizGroupSection.order_index)
+        )
         return (await self.session.execute(stmt)).scalars().all()
 
     async def list_questions_for_quizzes(self, assessment_ids: Sequence[uuid.UUID]) -> Sequence[CourseQuizQuestion]:
