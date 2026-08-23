@@ -730,7 +730,7 @@ class CourseContentService:
             from app.modules.learning.service import LearningService
 
             await LearningService(self.session)._handle_final_assessment_outcome(
-                user_id, course.id, section.id, passed, attempts_remaining
+                user_id, course.id, section.id, item.id, passed, attempts_remaining
             )
 
         await self.session.commit()

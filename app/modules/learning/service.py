@@ -192,12 +192,26 @@ class LearningService:
         user_id: uuid.UUID,
         course_id: uuid.UUID,
         section_id: uuid.UUID,
+        item_id: uuid.UUID,
         passed: bool,
         attempts_remaining: int | None,
     ) -> tuple[bool, bool]:
         """Call after any final-assessment scoring event (quiz submit, quiz-group
-        submit, or essay grading). Returns (section_reset, course_reset)."""
-        if passed or attempts_remaining is None or attempts_remaining > 0:
+        submit, or essay grading). Returns (section_reset, course_reset).
+
+        A final assessment only counts toward course completion once it's actually
+        **passed** - merely attempting/submitting it (the rule for a *regular*,
+        non-final assessment) isn't enough here, since that would let a course
+        show `is_completed: true` while its own gating exam was failed. So a pass
+        is what marks the item complete and recalculates progress; a fail leaves
+        the item not-completed (unless/until retries run out, which resets the
+        section/course instead - handled below)."""
+        if passed:
+            await self.repo.mark_item_completed(user_id, item_id)
+            await self._recalculate_progress(user_id, course_id)
+            return False, False
+
+        if attempts_remaining is None or attempts_remaining > 0:
             return False, False
 
         sections = await self.content_repo.list_sections(course_id)
@@ -501,8 +515,13 @@ class LearningService:
         answers_str_keys = {str(k): [str(v) for v in val] for k, val in answers.items()}
         await self.repo.save_quiz_attempt(user_id, item_id, score_percent, passed, answers_str_keys)
 
-        await self.repo.mark_item_completed(user_id, item_id)
-        await self._recalculate_progress(user_id, course_id)
+        # A regular quiz counts as "done" the moment it's attempted, same as before.
+        # A *final* assessment only counts once it's actually passed - see
+        # _handle_final_assessment_outcome, called below - so a course can't show
+        # 100%/is_completed off the back of a failed final exam.
+        if not assessment.is_final_assessment:
+            await self.repo.mark_item_completed(user_id, item_id)
+            await self._recalculate_progress(user_id, course_id)
 
         course = await self.course_repo.get_by_id(course_id)
         await self.activity_service.log_activity(
@@ -517,7 +536,7 @@ class LearningService:
                 None if max_attempts is None else max(max_attempts - (attempts_used_before + 1), 0)
             )
             section_reset, course_reset = await self._handle_final_assessment_outcome(
-                user_id, course_id, item.section_id, passed, attempts_remaining
+                user_id, course_id, item.section_id, item.id, passed, attempts_remaining
             )
 
         await self.session.commit()
@@ -598,7 +617,7 @@ class LearningService:
             attempts_used = await self.repo.count_quiz_group_attempts(attempt.user_id, attempt.item_id)
             attempts_remaining = None if max_attempts is None else max(max_attempts - attempts_used, 0)
             await self._handle_final_assessment_outcome(
-                attempt.user_id, course_id, section_id, bool(attempt.passed), attempts_remaining
+                attempt.user_id, course_id, section_id, attempt.item_id, bool(attempt.passed), attempts_remaining
             )
 
     async def _finalize_quiz_group_attempt(
@@ -916,8 +935,9 @@ class LearningService:
         auto_submitted = attempt.expires_at is not None and now >= attempt.expires_at
         await self._finalize_quiz_group_attempt(attempt, pass_mark_percentage, auto_submitted)
 
-        await self.repo.mark_item_completed(user_id, item_id)
-        await self._recalculate_progress(user_id, course_id)
+        if not assessment.is_final_assessment:
+            await self.repo.mark_item_completed(user_id, item_id)
+            await self._recalculate_progress(user_id, course_id)
 
         course = await self.course_repo.get_by_id(course_id)
         await self.activity_service.log_activity(
@@ -935,7 +955,7 @@ class LearningService:
             attempts_used = await self.repo.count_quiz_group_attempts(user_id, item_id)
             attempts_remaining = None if max_attempts is None else max(max_attempts - attempts_used, 0)
             section_reset, course_reset = await self._handle_final_assessment_outcome(
-                user_id, course_id, item.section_id, bool(attempt.passed), attempts_remaining
+                user_id, course_id, item.section_id, item.id, bool(attempt.passed), attempts_remaining
             )
 
         await self.session.commit()
@@ -951,8 +971,13 @@ class LearningService:
         submission = await self.repo.upsert_essay_submission(
             user_id, item_id, content_text=content_text, reset_grade=reset_grade
         )
-        await self.repo.mark_item_completed(user_id, item_id)
-        await self._recalculate_progress(user_id, course_id)
+        # A regular essay counts as "done" the moment it's submitted, same as
+        # before. A *final* essay assessment doesn't know pass/fail yet at
+        # submission time (an instructor grades it later) - it only gets marked
+        # complete once graded and passing, in CourseContentService.grade_essay_submission.
+        if not assessment.is_final_assessment:
+            await self.repo.mark_item_completed(user_id, item_id)
+            await self._recalculate_progress(user_id, course_id)
         await self._log_essay_submitted(user_id, course_id, item_id)
         await self.session.commit()
         return self._build_essay_submission_dto(submission)
@@ -967,15 +992,16 @@ class LearningService:
     async def finalize_essay_document(
         self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, storage_key: str, file_name: str
     ) -> EssaySubmissionDTO:
-        _, _, reset_grade = await self._authorize_essay_submission(
+        assessment, _, reset_grade = await self._authorize_essay_submission(
             user_id, course_id, item_id, EssaySubmissionModeEnum.DOCUMENT
         )
         submission = await self.repo.upsert_essay_submission(
             user_id, item_id, document_storage_key=storage_key, document_file_name=file_name,
             reset_grade=reset_grade,
         )
-        await self.repo.mark_item_completed(user_id, item_id)
-        await self._recalculate_progress(user_id, course_id)
+        if not assessment.is_final_assessment:
+            await self.repo.mark_item_completed(user_id, item_id)
+            await self._recalculate_progress(user_id, course_id)
         await self._log_essay_submitted(user_id, course_id, item_id)
         await self.session.commit()
         return self._build_essay_submission_dto(submission)
