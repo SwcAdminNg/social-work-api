@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     password_reset_token_expire_minutes: int = 30
     admin_invite_token_expire_minutes: int = 60 * 24 * 7  # 7 days
 
+    # Two-factor authentication (email OTP and authenticator app TOTP)
+    two_factor_challenge_expire_minutes: int = 10
+    totp_issuer_name: str = "Social Workers"
+    # Optional dedicated key for encrypting stored TOTP secrets. If unset, a key is
+    # derived from jwt_secret_key instead so no new required env var is introduced.
+    totp_secret_encryption_key: str = ""
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 

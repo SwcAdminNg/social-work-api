@@ -24,6 +24,11 @@ class UserTypeEnum(str, enum.Enum):
     ADMIN = "ADMIN"
 
 
+class TwoFactorMethodEnum(str, enum.Enum):
+    EMAIL = "EMAIL"
+    TOTP = "TOTP"
+
+
 class User(BaseEntity):
     __tablename__ = "users"
 
@@ -52,3 +57,14 @@ class User(BaseEntity):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Two-factor authentication. `two_factor_method` is null until the user completes
+    # setup for the first time; every login is then required to go through setup
+    # (see AuthService.login) until a method is confirmed.
+    two_factor_method: Mapped[TwoFactorMethodEnum | None] = mapped_column(
+        Enum(TwoFactorMethodEnum, name="two_factor_method_enum", native_enum=True), nullable=True
+    )
+    two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    # Encrypted (not hashed, since it must be decryptable to verify codes) TOTP seed.
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    two_factor_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

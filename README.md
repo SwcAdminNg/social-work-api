@@ -51,10 +51,11 @@ To roll back the last migration: `alembic downgrade -1`
 uvicorn app.main:app --reload
 ```
 
-6. **Start the API Server Worker:**
-   ```bash
-   arq app.worker.WorkerSettings
-   ```
+- **Seeding the certificate:**
+
+  ```bash
+  python -m app.scripts.seed_certificate_template --sample-out sample.pdf
+  ```
 
 - Swagger UI: http://127.0.0.1:8000/docs
 - ReDoc: http://127.0.0.1:8000/redoc

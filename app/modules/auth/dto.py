@@ -4,7 +4,9 @@ from pydantic import EmailStr, Field, model_validator
 
 from app.common.base_dto import BaseDTO, CreateDTO
 from app.modules.user.dto import UserReadDTO
-from app.modules.user.entity import PlatformEnum, UserTypeEnum
+from app.modules.user.entity import PlatformEnum, TwoFactorMethodEnum, UserTypeEnum
+
+OTP_CODE_PATTERN = r"^\d{6}$"
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9_.]{3,30}$")
 
@@ -81,6 +83,57 @@ class AuthSessionDTO(BaseDTO):
 
 class MessageDTO(BaseDTO):
     message: str
+
+
+class TwoFactorChallengeDTO(BaseDTO):
+    """Returned instead of a token pair when a login/signup can't complete yet because
+    2FA setup or verification is still required."""
+
+    challenge_token: str
+    method: TwoFactorMethodEnum | None = Field(
+        default=None, description="Set only when verification (not setup) is required"
+    )
+
+
+class LoginResponseDTO(BaseDTO):
+    status: str = Field(
+        description="'success', 'two_factor_setup_required', or 'two_factor_verification_required'"
+    )
+    session: AuthSessionDTO | None = None
+    challenge: TwoFactorChallengeDTO | None = None
+
+
+class TwoFactorSetupChallengeRequestDTO(BaseDTO):
+    challenge_token: str = Field(min_length=1)
+
+
+class TwoFactorSetupConfirmRequestDTO(BaseDTO):
+    challenge_token: str = Field(min_length=1)
+    code: str = Field(pattern=OTP_CODE_PATTERN, description="6-digit code")
+
+
+class TwoFactorLoginVerifyRequestDTO(BaseDTO):
+    challenge_token: str = Field(min_length=1)
+    code: str = Field(pattern=OTP_CODE_PATTERN, description="6-digit code")
+
+
+class TwoFactorLoginResendRequestDTO(BaseDTO):
+    challenge_token: str = Field(min_length=1)
+
+
+class TwoFactorConfirmCodeRequestDTO(BaseDTO):
+    code: str = Field(pattern=OTP_CODE_PATTERN, description="6-digit code")
+
+
+class TwoFactorTotpSetupResponseDTO(BaseDTO):
+    secret: str = Field(description="Manual-entry key for the authenticator app")
+    otpauth_url: str
+    qr_code_data_uri: str = Field(description="data: URI PNG the client can render directly in an <img> tag")
+
+
+class TwoFactorStatusDTO(BaseDTO):
+    two_factor_enabled: bool
+    two_factor_method: TwoFactorMethodEnum | None = None
 
 
 class UsernameSuggestionsResponseDTO(BaseDTO):

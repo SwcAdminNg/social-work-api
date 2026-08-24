@@ -52,6 +52,29 @@ class EmailService:
         """
         await self._send(to_email, subject, html_body)
 
+    async def send_two_factor_code_email(self, to_email: str, first_name: str, code: str) -> None:
+        subject = f"{code} is your verification code"
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
+          <h2 style="color: #111827;">Your verification code</h2>
+          <p>Hi {first_name},</p>
+          <p>Use the code below to continue. It expires in
+          {settings.two_factor_challenge_expire_minutes} minutes.</p>
+          <p style="text-align: center; margin: 32px 0;">
+            <span style="display: inline-block; font-size: 32px; font-weight: bold;
+                         letter-spacing: 8px; color: #111827; background-color: #f3f4f6;
+                         padding: 16px 24px; border-radius: 8px;">
+              {code}
+            </span>
+          </p>
+          <p>If you didn't request this code, you can safely ignore this email.</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 12px;">
+            Social Workers &mdash; this is an automated message, please don't reply.
+          </p>
+        </div>
+        """
+        await self._send(to_email, subject, html_body)
+
     async def send_admin_invite_email(self, to_email: str, first_name: str, invite_link: str) -> None:
         subject = "You've been invited as an admin"
         html_body = f"""

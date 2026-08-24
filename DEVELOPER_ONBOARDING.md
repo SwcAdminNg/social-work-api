@@ -119,12 +119,6 @@ Whenever you create a new feature/entity, create a folder in `app/modules/`. Mak
    uvicorn app.main:app --reload
    ```
 
-6. **Start the API Server Worker:**
-
-```bash
-arq app.worker.WorkerSettings
-```
-
 6. **Verify the API is running:**
    - Interactive API Docs (Swagger UI): http://127.0.0.1:8000/docs
    - API Documentation (ReDoc): http://127.0.0.1:8000/redoc
@@ -138,8 +132,14 @@ arq app.worker.WorkerSettings
   alembic revision --autogenerate -m "description of your changes"
   ```
 - **Rollback a Migration:**
+
   ```bash
   alembic downgrade -1
+  ```
+
+- **Seeding the certificate:**
+  ```bash
+  python -m app.scripts.seed_certificate_template --sample-out sample.pdf
   ```
 
 Welcome aboard and happy coding!

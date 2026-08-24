@@ -4,7 +4,7 @@ from fastapi import Query
 from pydantic import Field
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
-from app.modules.user.entity import GenderEnum, PlatformEnum, UserTypeEnum
+from app.modules.user.entity import GenderEnum, PlatformEnum, TwoFactorMethodEnum, UserTypeEnum
 
 
 class UserReadDTO(AuditDTO):
@@ -21,6 +21,17 @@ class UserReadDTO(AuditDTO):
     is_active: bool
     is_suspended: bool
     last_login_at: datetime | None = None
+    two_factor_enabled: bool = Field(
+        description="Whether two-factor authentication is set up. All users are required to set it up."
+    )
+    two_factor_method: TwoFactorMethodEnum | None = Field(
+        default=None,
+        description=(
+            "Current 2FA protocol: EMAIL (a code sent to your email) or TOTP (an authenticator "
+            "app like Google/Microsoft Authenticator). Change it via the /auth/2fa/email/* or "
+            "/auth/2fa/totp/* endpoints."
+        ),
+    )
 
 
 class UserUpdateDTO(UpdateDTO):

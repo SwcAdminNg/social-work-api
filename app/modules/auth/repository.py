@@ -5,7 +5,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.base_repository import BaseRepository
-from app.modules.auth.entity import AdminInviteToken, PasswordResetToken, RefreshToken
+from app.modules.auth.entity import (
+    AdminInviteToken,
+    EmailOtpToken,
+    PasswordResetToken,
+    RefreshToken,
+    TwoFactorPurposeEnum,
+)
 
 
 class RefreshTokenRepository(BaseRepository[RefreshToken]):
@@ -65,3 +71,37 @@ class AdminInviteTokenRepository(BaseRepository[AdminInviteToken]):
     async def mark_used(self, token: AdminInviteToken) -> None:
         token.used_at = datetime.now(timezone.utc)
         await self.session.flush()
+
+
+class EmailOtpTokenRepository(BaseRepository[EmailOtpToken]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, EmailOtpToken)
+
+    async def find_valid_by_hash(
+        self, user_id: uuid.UUID, purpose: TwoFactorPurposeEnum, code_hash: str
+    ) -> EmailOtpToken | None:
+        stmt = select(EmailOtpToken).where(
+            EmailOtpToken.user_id == user_id,
+            EmailOtpToken.purpose == purpose,
+            EmailOtpToken.code_hash == code_hash,
+            EmailOtpToken.used_at.is_(None),
+            EmailOtpToken.expires_at > datetime.now(timezone.utc),
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def mark_used(self, token: EmailOtpToken) -> None:
+        token.used_at = datetime.now(timezone.utc)
+        await self.session.flush()
+
+    async def invalidate_all(self, user_id: uuid.UUID, purpose: TwoFactorPurposeEnum) -> None:
+        stmt = (
+            update(EmailOtpToken)
+            .where(
+                EmailOtpToken.user_id == user_id,
+                EmailOtpToken.purpose == purpose,
+                EmailOtpToken.used_at.is_(None),
+            )
+            .values(used_at=datetime.now(timezone.utc))
+        )
+        await self.session.execute(stmt)
