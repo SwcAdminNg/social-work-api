@@ -8,10 +8,15 @@ Base URL prefix: `/support`.
 
 ## Conventions
 
-- **Auth**: every endpoint below requires `Authorization: Bearer <token>` for an `ADMIN` user
-  (`get_current_admin_user`), except `GET /support/tickets/{id}` and
-  `GET /support/tickets/{id}/messages`, which any authenticated user can call for their own tickets
-  (admins can call them for any ticket).
+- **Auth — who counts as "staff"**: `GET /support/tickets` (queue), `POST /tickets/{id}/assign`, and
+  `PATCH /tickets/{id}/status` require the caller to be **staff** — either an `ADMIN` user, or any
+  user (e.g. an `INSTRUCTOR`) who is an active member of the **"Support Desk"** group (see
+  [`GROUPS_ADMIN_API.md`](./GROUPS_ADMIN_API.md)). This is `get_current_support_staff` /
+  `is_support_staff` in code. FAQ management endpoints remain `ADMIN`-only. `GET /support/tickets/{id}`
+  and `GET /support/tickets/{id}/messages` are open to the ticket's owner in addition to staff.
+- **Instructors as staff**: an instructor gets ticket access, the ticket queue, and the chat
+  WebSocket the moment they're added to "Support Desk" — nothing else needs to change on their
+  account. Removing them from the group revokes it immediately.
 - **Response envelope**: `ApiResponse<T>` for single items, `PaginatedResponse<T>` for lists.
 
 ## 1. FAQ management
@@ -39,8 +44,9 @@ Both filters are optional. `status` is one of `OPEN` / `IN_PROGRESS` / `RESOLVED
 | GET | `/support/tickets` | Filtered/paginated ticket queue (admin only). |
 | GET | `/support/tickets/{ticket_id}` | Get a ticket. |
 | GET | `/support/tickets/{ticket_id}/messages` | Paginated message history. |
-| POST | `/support/tickets/{ticket_id}/messages` | Reply to a ticket over HTTP (same effect as replying over the WebSocket — see the user doc for the WS protocol). Replying as an admin auto-flips `OPEN` → `IN_PROGRESS` and clears any pending escalation. |
-| POST | `/support/tickets/{ticket_id}/assign` | Assign/reassign to an admin. Body: `{ "admin_id": uuid }`. `404` if `admin_id` isn't an `ADMIN` user. |
+| POST | `/support/tickets/{ticket_id}/messages` | Reply to a ticket over HTTP (same effect as replying over the WebSocket — see the user doc for the WS protocol and attachment flow). Replying as staff auto-flips `OPEN` → `IN_PROGRESS` and clears any pending escalation. |
+| POST | `/support/tickets/{ticket_id}/attachments/upload-url` | Get a presigned upload URL for an image/document to attach to your next reply — same flow as the user side, see [`HELP_SUPPORT_USER_API.md`](./HELP_SUPPORT_USER_API.md#31-attaching-an-image-or-document). |
+| POST | `/support/tickets/{ticket_id}/assign` | Assign/reassign to a staff member. Body: `{ "admin_id": uuid }` (the field is named `admin_id` for historical reasons, but accepts any staff user — see above). `404` if the target isn't staff. |
 | PATCH | `/support/tickets/{ticket_id}/status` | Set status directly. Body: `{ "status": "RESOLVED" }`. Typically used to resolve/close a ticket. Once `RESOLVED`/`CLOSED`, no more messages can be posted to it. |
 
 ## 3. Presence

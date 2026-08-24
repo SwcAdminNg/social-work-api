@@ -39,6 +39,9 @@ class R2Client:
     def build_certificate_pdf_key(self, course_id: uuid.UUID, user_id: uuid.UUID, certificate_id: uuid.UUID) -> str:
         return f"certificates/{course_id}/{user_id}/{certificate_id}.pdf"
 
+    def build_support_attachment_key(self, ticket_id: uuid.UUID, file_name: str) -> str:
+        return f"support-tickets/{ticket_id}/attachments/{uuid.uuid4()}-{file_name}"
+
     def upload_bytes(self, key: str, data: bytes, content_type: str) -> None:
         """Direct server-side upload, unlike `generate_upload_url` - used only for
         content we generate ourselves (e.g. rendered certificate PDFs), never for

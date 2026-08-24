@@ -81,11 +81,15 @@ Other event types you may receive on the same socket: `{"type": "assigned", "adm
 **Keeping the connection alive / marking yourself active**: optionally send `{"type": "ping"}`
 periodically — it refreshes your presence heartbeat but otherwise does nothing.
 
-**If your message is rejected** (e.g. the ticket was just closed), you'll receive an error frame
-instead of a `message` echo:
+**If your message is rejected** (e.g. the ticket was just closed, or the message has neither a body
+nor an attachment), you'll receive an error frame instead of a `message` echo:
 ```json
 { "type": "error", "detail": "This ticket is closed - please start a new ticket" }
 ```
+
+**Staff side of the socket**: an admin, or an instructor who's a member of the "Support Desk" group,
+connects to the exact same URL and protocol as you do — there's no separate staff endpoint. See
+[`HELP_SUPPORT_ADMIN_API.md`](./HELP_SUPPORT_ADMIN_API.md) for how staff access is determined.
 
 ### HTTP fallback
 
@@ -95,7 +99,43 @@ you can send and read messages over plain HTTP instead:
 | Method | Path | Description |
 |---|---|---|
 | GET | `/support/tickets/{ticket_id}/messages` | Paginated message history. |
-| POST | `/support/tickets/{ticket_id}/messages` | Send a message. Body: `{ "body": str }`. Same validation/escalation rules as the WebSocket path. |
+| POST | `/support/tickets/{ticket_id}/messages` | Send a message. Body: `{ "body": str, ...attachment fields }` — see §3.1. Same validation/escalation rules as the WebSocket path. |
+
+### 3.1 Attaching an image or document
+
+Attachments upload directly to storage — file bytes never pass through this API. Two steps:
+
+**Step 1 — get a presigned upload URL:**
+```
+POST /support/tickets/{ticket_id}/attachments/upload-url
+{ "file_name": "screenshot.png", "content_type": "image/png" }
+```
+Response:
+```json
+{ "success": true, "data": { "upload_url": "https://...", "storage_key": "support-tickets/.../screenshot.png" } }
+```
+
+**Step 2 — upload the file directly:**
+```bash
+curl -X PUT "<upload_url>" -H "Content-Type: image/png" --data-binary @screenshot.png
+```
+
+**Step 3 — send the message referencing the attachment** (over the WebSocket or HTTP fallback —
+`body` may be empty if the message is attachment-only, but at least one of `body`/`attachment_storage_key`
+is required):
+```json
+{ "type": "message", "body": "Here's a screenshot", "attachment_storage_key": "support-tickets/.../screenshot.png", "attachment_file_name": "screenshot.png", "attachment_mime_type": "image/png", "attachment_file_size_bytes": 48213 }
+```
+
+The message you get back (and everyone else sees over the socket) includes:
+```json
+{ "attachment_url": "https://.../screenshot.png", "attachment_file_name": "screenshot.png", "attachment_mime_type": "image/png", "attachment_file_size_bytes": 48213, "attachment_kind": "IMAGE" }
+```
+
+`attachment_kind` is `"IMAGE"` when `attachment_mime_type` starts with `image/`, otherwise
+`"DOCUMENT"` — use it to decide whether to render an inline image preview or a file/download card.
+There's no server-side file type or size restriction; enforce whatever limits your client needs
+before requesting the upload URL.
 
 ## 4. Managing your tickets
 

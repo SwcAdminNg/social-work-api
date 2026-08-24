@@ -20,7 +20,7 @@ Two groups are created automatically by migration `2ddcdef22856_create_groups_an
 
 | Name | Purpose |
 |---|---|
-| `Support Desk` | Members receive the escalation email when a Help & Support ticket goes unanswered — see [`HELP_SUPPORT_ADMIN_API.md`](./HELP_SUPPORT_ADMIN_API.md). This is the **only** group the code currently reads. |
+| `Support Desk` | Members (of any `user_type`) get **staff access** to every support ticket — the ticket queue, chat WebSocket, assign/resolve, and the escalation email when a ticket goes unanswered. `ADMIN` users always have this access regardless of group membership; adding an `INSTRUCTOR` here is what grants them the same access. See [`HELP_SUPPORT_ADMIN_API.md`](./HELP_SUPPORT_ADMIN_API.md). This is the **only** group the code currently reads. |
 | `Management` | A placeholder group with no wired behavior today — nothing in the codebase currently reacts to membership in it. Safe to repurpose or leave empty. |
 
 Deactivating or renaming "Support Desk" does not break anything, but the Help & Support escalation

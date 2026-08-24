@@ -9,6 +9,7 @@ from app.common.pagination import PaginationParams
 from app.core.config import settings
 from app.core.email import email_service
 from app.core.qstash import get_qstash_client
+from app.core.storage import get_r2_client
 from app.modules.group.repository import GroupMembershipRepository, GroupRepository
 from app.modules.support import presence
 from app.modules.support.dto import (
@@ -18,6 +19,9 @@ from app.modules.support.dto import (
     FAQItemCreateDTO,
     FAQItemReadDTO,
     FAQItemUpdateDTO,
+    SupportAttachmentKindEnum,
+    SupportAttachmentUploadRequestDTO,
+    SupportAttachmentUploadResponseDTO,
     SupportMessageCreateDTO,
     SupportMessageReadDTO,
     SupportTicketCreateDTO,
@@ -38,14 +42,13 @@ from app.modules.support.repository import (
     SupportMessageRepository,
     SupportTicketRepository,
 )
+from app.modules.support.staff import SUPPORT_DESK_GROUP_NAME, is_support_staff
 from app.modules.support.ws_manager import publish_ticket_event
 from app.modules.user.dto import UserReadDTO
-from app.modules.user.entity import User, UserTypeEnum
+from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
 
 logger = logging.getLogger(__name__)
-
-SUPPORT_DESK_GROUP_NAME = "Support Desk"
 
 
 class FAQService:
@@ -129,10 +132,10 @@ class SupportService:
         self.group_repo = GroupRepository(session)
         self.membership_repo = GroupMembershipRepository(session)
 
-    def _ensure_can_access(self, ticket: SupportTicket, current_user: User) -> None:
-        if current_user.user_type == UserTypeEnum.ADMIN:
+    async def _ensure_can_access(self, ticket: SupportTicket, current_user: User) -> None:
+        if ticket.user_id == current_user.id:
             return
-        if ticket.user_id != current_user.id:
+        if not await is_support_staff(current_user, self.session):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have access to this ticket")
 
     async def get_ticket_entity(self, ticket_id: uuid.UUID) -> SupportTicket | None:
@@ -149,6 +152,15 @@ class SupportService:
 
     async def _build_message_dto(self, message: SupportMessage) -> SupportMessageReadDTO:
         sender = await self.user_repo.get_by_id(message.sender_id)
+        attachment_url = None
+        attachment_kind = None
+        if message.attachment_storage_key:
+            attachment_url = get_r2_client().get_public_url(message.attachment_storage_key)
+            attachment_kind = (
+                SupportAttachmentKindEnum.IMAGE
+                if (message.attachment_mime_type or "").startswith("image/")
+                else SupportAttachmentKindEnum.DOCUMENT
+            )
         return SupportMessageReadDTO(
             id=message.id,
             ticket_id=message.ticket_id,
@@ -157,6 +169,11 @@ class SupportService:
             body=message.body,
             created_at=message.created_at,
             sender=UserReadDTO.model_validate(sender) if sender else None,
+            attachment_url=attachment_url,
+            attachment_file_name=message.attachment_file_name,
+            attachment_mime_type=message.attachment_mime_type,
+            attachment_file_size_bytes=message.attachment_file_size_bytes,
+            attachment_kind=attachment_kind,
         )
 
     async def _build_ticket_dto(self, ticket: SupportTicket) -> SupportTicketReadDTO:
@@ -211,25 +228,29 @@ class SupportService:
         self, ticket_id: uuid.UUID, payload: SupportMessageCreateDTO, current_user: User
     ) -> SupportMessageReadDTO:
         ticket = await self._get_ticket_or_404(ticket_id)
-        self._ensure_can_access(ticket, current_user)
+        await self._ensure_can_access(ticket, current_user)
 
         if ticket.status in (SupportTicketStatusEnum.RESOLVED, SupportTicketStatusEnum.CLOSED):
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "This ticket is closed - please start a new ticket"
             )
 
-        is_admin_sender = current_user.user_type == UserTypeEnum.ADMIN
+        is_staff_sender = await is_support_staff(current_user, self.session)
         now = datetime.now(timezone.utc)
 
         message = SupportMessage(
             ticket_id=ticket.id,
             sender_id=current_user.id,
-            sender_type=SupportSenderTypeEnum.ADMIN if is_admin_sender else SupportSenderTypeEnum.USER,
+            sender_type=SupportSenderTypeEnum.ADMIN if is_staff_sender else SupportSenderTypeEnum.USER,
             body=payload.body,
+            attachment_storage_key=payload.attachment_storage_key,
+            attachment_file_name=payload.attachment_file_name,
+            attachment_mime_type=payload.attachment_mime_type,
+            attachment_file_size_bytes=payload.attachment_file_size_bytes,
         )
         await self.message_repo.create(message)
 
-        if is_admin_sender:
+        if is_staff_sender:
             ticket.last_admin_reply_at = now
             ticket.escalated_at = None
             if ticket.status == SupportTicketStatusEnum.OPEN:
@@ -239,7 +260,7 @@ class SupportService:
         await self.ticket_repo.update(ticket)
         await self.session.commit()
 
-        if not is_admin_sender:
+        if not is_staff_sender:
             await self._check_and_maybe_escalate(ticket)
 
         message_dto = await self._build_message_dto(message)
@@ -249,14 +270,16 @@ class SupportService:
     # -- admin management --------------------------------------------------------
 
     async def assign_ticket(self, ticket_id: uuid.UUID, admin_id: uuid.UUID) -> SupportTicketReadDTO:
+        """`admin_id` may be an ADMIN or an INSTRUCTOR who is a Support Desk member -
+        anyone `is_support_staff` accepts, not just literal admins."""
         ticket = await self._get_ticket_or_404(ticket_id)
-        admin = await self.user_repo.get_by_id(admin_id)
-        if admin is None or admin.user_type != UserTypeEnum.ADMIN:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Admin user not found")
-        ticket.assigned_admin_id = admin.id
+        assignee = await self.user_repo.get_by_id(admin_id)
+        if assignee is None or not await is_support_staff(assignee, self.session):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Support staff user not found")
+        ticket.assigned_admin_id = assignee.id
         await self.ticket_repo.update(ticket)
         await self.session.commit()
-        await publish_ticket_event(ticket.id, {"type": "assigned", "admin_id": str(admin.id)})
+        await publish_ticket_event(ticket.id, {"type": "assigned", "admin_id": str(assignee.id)})
         return await self._build_ticket_dto(ticket)
 
     async def update_status(self, ticket_id: uuid.UUID, status_value: SupportTicketStatusEnum) -> SupportTicketReadDTO:
@@ -286,16 +309,31 @@ class SupportService:
 
     async def get_ticket(self, ticket_id: uuid.UUID, current_user: User) -> SupportTicketReadDTO:
         ticket = await self._get_ticket_or_404(ticket_id)
-        self._ensure_can_access(ticket, current_user)
+        await self._ensure_can_access(ticket, current_user)
         return await self._build_ticket_dto(ticket)
 
     async def list_messages(
         self, ticket_id: uuid.UUID, current_user: User, pagination: PaginationParams
     ) -> tuple[list[SupportMessageReadDTO], int]:
         ticket = await self._get_ticket_or_404(ticket_id)
-        self._ensure_can_access(ticket, current_user)
+        await self._ensure_can_access(ticket, current_user)
         items, total = await self.message_repo.list_for_ticket(ticket_id, pagination)
         return [await self._build_message_dto(m) for m in items], total
+
+    async def get_attachment_upload_url(
+        self, ticket_id: uuid.UUID, payload: SupportAttachmentUploadRequestDTO, current_user: User
+    ) -> SupportAttachmentUploadResponseDTO:
+        """Mints a presigned R2 upload URL for a file the caller is about to attach
+        to their next message - same two-step flow as `CourseDocument`: the client
+        PUTs bytes directly to `upload_url`, then references `storage_key` in the
+        `SupportMessageCreateDTO` it sends over HTTP or the WebSocket."""
+        ticket = await self._get_ticket_or_404(ticket_id)
+        await self._ensure_can_access(ticket, current_user)
+
+        r2 = get_r2_client()
+        storage_key = r2.build_support_attachment_key(ticket.id, payload.file_name)
+        upload_url = r2.generate_upload_url(storage_key, payload.content_type)
+        return SupportAttachmentUploadResponseDTO(upload_url=upload_url, storage_key=storage_key)
 
     async def submit_rating(
         self, ticket_id: uuid.UUID, payload: SupportTicketRatingDTO, current_user: User

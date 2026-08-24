@@ -11,6 +11,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.cache as cache_module
@@ -21,6 +22,7 @@ from app.core.database import AsyncSessionLocal, get_db
 from app.core.qstash import verify_qstash_signature
 from app.modules.auth.dependencies import get_current_admin_user, get_current_user, get_user_from_token
 from app.modules.support import presence
+from app.modules.support.dependencies import get_current_support_staff
 from app.modules.support.dto import (
     FAQCategoryCreateDTO,
     FAQCategoryReadDTO,
@@ -29,6 +31,8 @@ from app.modules.support.dto import (
     FAQItemCreateDTO,
     FAQItemReadDTO,
     FAQItemUpdateDTO,
+    SupportAttachmentUploadRequestDTO,
+    SupportAttachmentUploadResponseDTO,
     SupportMessageCreateDTO,
     SupportMessageReadDTO,
     SupportTicketAssignDTO,
@@ -39,8 +43,9 @@ from app.modules.support.dto import (
 )
 from app.modules.support.entity import SupportTicketStatusEnum
 from app.modules.support.service import FAQService, SupportService
+from app.modules.support.staff import is_support_staff
 from app.modules.support.ws_manager import ticket_channel
-from app.modules.user.entity import User, UserTypeEnum
+from app.modules.user.entity import User
 
 router = APIRouter(prefix="/support", tags=["Support"], route_class=NoNullAPIRoute)
 
@@ -187,13 +192,13 @@ async def create_ticket(
 @router.get(
     "/tickets",
     response_model=PaginatedResponse[SupportTicketReadDTO],
-    summary="List/filter the support ticket queue (admin only)",
+    summary="List/filter the support ticket queue (admin or Support Desk member)",
 )
 async def list_tickets(
     pagination: PaginationParams = Depends(),
     status_filter: SupportTicketStatusEnum | None = Query(default=None, alias="status"),
     assigned_admin_id: uuid.UUID | None = Query(default=None),
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_support_staff),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[SupportTicketReadDTO]:
     items, total = await SupportService(db).list_for_admin(pagination, status_filter, assigned_admin_id)
@@ -260,14 +265,30 @@ async def post_ticket_message(
 
 
 @router.post(
+    "/tickets/{ticket_id}/attachments/upload-url",
+    response_model=ApiResponse[SupportAttachmentUploadResponseDTO],
+    summary="Get a pre-signed URL to upload an image/document to attach to a message "
+    "(owner or admin/Support Desk member)",
+)
+async def get_attachment_upload_url(
+    ticket_id: uuid.UUID,
+    payload: SupportAttachmentUploadRequestDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[SupportAttachmentUploadResponseDTO]:
+    data = await SupportService(db).get_attachment_upload_url(ticket_id, payload, current_user)
+    return ApiResponse(message="Upload URL generated successfully", data=data)
+
+
+@router.post(
     "/tickets/{ticket_id}/assign",
     response_model=ApiResponse[SupportTicketReadDTO],
-    summary="Assign/reassign a ticket to an admin (admin only)",
+    summary="Assign/reassign a ticket to a staff member (admin or Support Desk member)",
 )
 async def assign_ticket(
     ticket_id: uuid.UUID,
     payload: SupportTicketAssignDTO,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_support_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SupportTicketReadDTO]:
     ticket = await SupportService(db).assign_ticket(ticket_id, payload.admin_id)
@@ -277,12 +298,12 @@ async def assign_ticket(
 @router.patch(
     "/tickets/{ticket_id}/status",
     response_model=ApiResponse[SupportTicketReadDTO],
-    summary="Update a ticket's status, e.g. resolve/close (admin only)",
+    summary="Update a ticket's status, e.g. resolve/close (admin or Support Desk member)",
 )
 async def update_ticket_status(
     ticket_id: uuid.UUID,
     payload: SupportTicketStatusUpdateDTO,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_support_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SupportTicketReadDTO]:
     ticket = await SupportService(db).update_status(ticket_id, payload.status)
@@ -337,7 +358,7 @@ async def ticket_chat_ws(websocket: WebSocket, ticket_id: uuid.UUID, token: str 
         if ticket is None:
             await websocket.close(code=4404)
             return
-        if user.user_type != UserTypeEnum.ADMIN and ticket.user_id != user.id:
+        if ticket.user_id != user.id and not await is_support_staff(user, db):
             await websocket.close(code=4403)
             return
 
@@ -345,10 +366,11 @@ async def ticket_chat_ws(websocket: WebSocket, ticket_id: uuid.UUID, token: str 
     await presence.mark_online(user.id)
 
     async def reader() -> None:
-        # HTTPException (e.g. 409 "ticket is closed") must never escape into
-        # Starlette's HTTP exception middleware here - it doesn't know how to turn
-        # that into a websocket frame and crashes the ASGI connection instead. Send
-        # a plain error frame and keep the socket open so the client can react.
+        # HTTPException (e.g. 409 "ticket is closed") and pydantic ValidationError
+        # (e.g. an empty body with no attachment) must never escape into Starlette's
+        # HTTP exception middleware here - it doesn't know how to turn either into a
+        # websocket frame and crashes the ASGI connection instead. Send a plain
+        # error frame and keep the socket open so the client can react.
         async with AsyncSessionLocal() as reader_db:
             reader_service = SupportService(reader_db)
             while True:
@@ -360,13 +382,20 @@ async def ticket_chat_ws(websocket: WebSocket, ticket_id: uuid.UUID, token: str 
                 await presence.mark_online(user.id)
                 if payload.get("type") == "ping":
                     continue
-                body = payload.get("body")
-                if not body:
+                if payload.get("type") != "message":
                     continue
                 try:
-                    await reader_service.post_message(ticket_id, SupportMessageCreateDTO(body=body), user)
-                except HTTPException as exc:
-                    await websocket.send_text(json.dumps({"type": "error", "detail": exc.detail}))
+                    message_payload = SupportMessageCreateDTO(
+                        body=payload.get("body", ""),
+                        attachment_storage_key=payload.get("attachment_storage_key"),
+                        attachment_file_name=payload.get("attachment_file_name"),
+                        attachment_mime_type=payload.get("attachment_mime_type"),
+                        attachment_file_size_bytes=payload.get("attachment_file_size_bytes"),
+                    )
+                    await reader_service.post_message(ticket_id, message_payload, user)
+                except (HTTPException, ValidationError) as exc:
+                    detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                    await websocket.send_text(json.dumps({"type": "error", "detail": detail}))
 
     async def subscriber() -> None:
         """Relays every message published to this ticket's Redis channel - including

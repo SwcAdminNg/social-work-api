@@ -1,11 +1,17 @@
+import enum
 import uuid
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.support.entity import SupportSenderTypeEnum, SupportTicketStatusEnum
 from app.modules.user.dto import UserReadDTO
+
+
+class SupportAttachmentKindEnum(str, enum.Enum):
+    IMAGE = "IMAGE"
+    DOCUMENT = "DOCUMENT"
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +75,28 @@ class SupportTicketCreateDTO(CreateDTO):
     message: str = Field(min_length=1)
 
 
+class SupportAttachmentUploadRequestDTO(CreateDTO):
+    file_name: str = Field(max_length=255)
+    content_type: str | None = None
+
+
+class SupportAttachmentUploadResponseDTO(BaseDTO):
+    upload_url: str
+    storage_key: str
+
+
 class SupportMessageCreateDTO(CreateDTO):
-    body: str = Field(min_length=1)
+    body: str = Field(default="", max_length=5000)
+    attachment_storage_key: str | None = Field(default=None, max_length=1000)
+    attachment_file_name: str | None = Field(default=None, max_length=255)
+    attachment_mime_type: str | None = Field(default=None, max_length=255)
+    attachment_file_size_bytes: int | None = None
+
+    @model_validator(mode="after")
+    def _require_body_or_attachment(self) -> "SupportMessageCreateDTO":
+        if not self.body.strip() and not self.attachment_storage_key:
+            raise ValueError("A message needs a body, an attachment, or both")
+        return self
 
 
 class SupportMessageReadDTO(BaseDTO):
@@ -81,6 +107,11 @@ class SupportMessageReadDTO(BaseDTO):
     body: str
     created_at: datetime
     sender: UserReadDTO | None = None
+    attachment_url: str | None = None
+    attachment_file_name: str | None = None
+    attachment_mime_type: str | None = None
+    attachment_file_size_bytes: int | None = None
+    attachment_kind: SupportAttachmentKindEnum | None = None
 
 
 class SupportTicketReadDTO(BaseDTO):
