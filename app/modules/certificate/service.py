@@ -20,7 +20,7 @@ from app.modules.certificate.dto import (
 from app.modules.certificate.entity import Certificate, CertificateTemplate
 from app.modules.certificate.renderer import render_certificate_pdf
 from app.modules.certificate.repository import CertificateRepository, CertificateTemplateRepository
-from app.modules.course.entity import Course
+from app.modules.course.entity import Course, CourseAccessModeEnum
 from app.modules.course.repository import CourseRepository
 from app.modules.user.entity import User, UserTypeEnum
 
@@ -146,12 +146,30 @@ class CertificateService:
     def _generate_certificate_number(issued_at: datetime) -> str:
         return f"SW-{issued_at:%Y}-{secrets.token_hex(4).upper()}"
 
+    @staticmethod
+    def _is_awaiting_scheduled_deadline(course: Course) -> bool:
+        """A SCHEDULED course (one with a configured access_start_date/
+        access_end_date "term") withholds certificates until its scheduled
+        window actually closes, even for a student who finishes every item
+        early - mirrors a cohort course where everyone is certified together at
+        the course's official end date, not the moment they personally finish.
+        A SELF_PACED course (or a SCHEDULED one with no end date set) has no
+        such deadline and issues immediately, as before."""
+        if course.access_mode != CourseAccessModeEnum.SCHEDULED or course.access_end_date is None:
+            return False
+        return datetime.now(timezone.utc) < course.access_end_date
+
     async def ensure_issued(self, user: User, course: Course) -> Certificate | None:
         """Idempotently issues a certificate the moment a course is completed.
-        Called from `LearningService._recalculate_progress`. Returns None (no-op)
-        when certificates are disabled for the course or no template is
-        configured/available - completion itself is unaffected either way."""
+        Called from `LearningService._recalculate_progress`, and again by
+        `process_scheduled_course_certificates` (the daily cron sweep) once a
+        SCHEDULED course's deadline actually passes. Returns None (no-op) when
+        certificates are disabled for the course, the course's scheduled window
+        hasn't closed yet (see `_is_awaiting_scheduled_deadline`), or no template
+        is configured/available - completion itself is unaffected either way."""
         if not course.certificate_enabled:
+            return None
+        if self._is_awaiting_scheduled_deadline(course):
             return None
 
         existing = await self.repo.get_for_user_course(user.id, course.id)
@@ -180,6 +198,23 @@ class CertificateService:
         await self.repo.create(certificate)
         await self.session.commit()
         return certificate
+
+    async def process_scheduled_course_certificates(self) -> dict:
+        """Daily cron sweep (see `/certificates/cron/process-scheduled-certificates`)
+        that catches students who completed a SCHEDULED course *before* its
+        access_end_date - `ensure_issued` withholds their certificate at
+        completion time (`_is_awaiting_scheduled_deadline`), so nothing else
+        ever revisits them once they've stopped interacting with the course.
+        This finds every such course whose deadline has now passed and issues
+        the backlog in one pass."""
+        now = datetime.now(timezone.utc)
+        pending = await self.repo.list_pending_scheduled_completions(now)
+        issued = 0
+        for user, course in pending:
+            certificate = await self.ensure_issued(user, course)
+            if certificate is not None:
+                issued += 1
+        return {"checked": len(pending), "issued": issued}
 
     # -- rendering / delivery ---------------------------------------------------
 

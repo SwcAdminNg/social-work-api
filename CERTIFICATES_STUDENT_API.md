@@ -26,6 +26,12 @@ Base URL prefix for everything below: `/certificates`.
   you need to request or trigger. "Complete" means every curriculum item is done and, if the course
   has module gating, its final assessment(s) were passed (see the Assessments docs for exactly what
   counts as completion).
+- **Exception — scheduled/cohort courses**: if the course has a defined end date (a "scheduled"
+  course, as opposed to a self-paced one), finishing early doesn't get you the certificate right
+  away. It's issued once the course's official end date arrives, same as everyone else in your
+  cohort — even if you personally finished weeks ahead of it. `GET /certificates/mine/{course_id}`
+  will keep 404ing until that date passes, then start working automatically with no action needed
+  from you.
 - One certificate per (you, course) — completing a course you already have a certificate for (e.g.
   after a module reset and redo, per the Assessments docs' §11) does **not** create a second one;
   the original certificate stands.

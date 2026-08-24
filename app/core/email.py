@@ -160,5 +160,32 @@ class EmailService:
         """
         await self._send(to_email, subject, html_body)
 
+    async def send_support_escalation_email(
+        self, to_email: str, first_name: str, ticket_subject: str, dashboard_link: str
+    ) -> None:
+        subject = f"Support ticket needs attention: {ticket_subject}"
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
+          <h2 style="color: #dc2626;">A support ticket needs attention</h2>
+          <p>Hi {first_name},</p>
+          <p>A user opened a support ticket &mdash; <strong>{ticket_subject}</strong> &mdash;
+          and no one from the Support Desk has responded yet. Please jump in as soon as
+          you can.</p>
+          <p style="text-align: center; margin: 32px 0;">
+            <a href="{dashboard_link}"
+               style="background-color: #2563eb; color: #ffffff; padding: 12px 24px;
+                      border-radius: 6px; text-decoration: none; font-weight: bold;">
+              Open Ticket
+            </a>
+          </p>
+          <p>If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="word-break: break-all; color: #2563eb;">{dashboard_link}</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 12px;">
+            Social Workers &mdash; this is an automated message, please don't reply.
+          </p>
+        </div>
+        """
+        await self._send(to_email, subject, html_body)
+
 
 email_service = EmailService()

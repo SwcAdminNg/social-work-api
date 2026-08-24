@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
+    # Help & Support
+    # Base URL this API is publicly reachable at, used to build the absolute QStash
+    # callback URL for delayed escalation checks (see app/modules/support/service.py).
+    api_base_url: str = "http://localhost:8000"
+    support_escalation_minutes: int = 5
+
 
     @property
     def database_url(self) -> str:

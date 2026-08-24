@@ -40,6 +40,7 @@ CertificateTemplate (owner_id = null → "global", visible to every instructor a
 Course ──── certificate_enabled (bool, default true)
         │
         │ the moment a student's course progress hits 100%...
+        │ (for a SCHEDULED course, only once access_end_date has also passed — see §1.1)
         ▼
 Certificate (one per student per course, issued automatically)
   - certificate_number, verification_code
@@ -59,6 +60,29 @@ Certificate (one per student per course, issued automatically)
 - **You never render a PDF yourself.** Templates are pure configuration (colors, copy, images).
   Rendering happens lazily server-side the first time a student (or the public verify page) actually
   requests the certificate — see the student doc.
+
+### 1.1 SCHEDULED courses: certificates wait for the course's deadline, not the student's
+
+A course's `access_mode` (set via the regular course-management endpoints, not this API) can be
+`SELF_PACED` or `SCHEDULED`. A `SCHEDULED` course carries `access_start_date`/`access_end_date` — a
+defined "term" for the whole cohort.
+
+- **`SELF_PACED` course** (or a `SCHEDULED` course with no `access_end_date` set): unchanged —
+  the certificate is issued the instant the student finishes.
+- **`SCHEDULED` course with `access_end_date` set**: even if a student finishes every item well
+  before that date, **no certificate is issued yet**. It's held back until `access_end_date`
+  actually passes — mirroring a cohort where everyone is certified together at the course's
+  official end, not the moment each person personally finishes. Nothing is lost or needs
+  re-triggering on your side: a daily background sweep
+  (`POST /certificates/cron/process-scheduled-certificates`, QStash-triggered, not something you
+  call directly — same pattern as the subscription-renewal cron) finds every student who already
+  completed such a course and issues the backlog the day its deadline passes.
+- This check is re-evaluated fresh every time issuance is attempted, so pushing
+  `access_end_date` further out (via the course-management API) after a student has already
+  finished will correctly keep withholding their certificate until the new date passes; pulling it
+  earlier (into the past) makes it eligible on the very next sweep.
+- `certificate_enabled: false` (§3) still wins over everything above — a disabled course never
+  issues certificates regardless of schedule.
 
 ---
 

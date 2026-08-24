@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Sequence
 
 from sqlalchemy import func, or_, select
@@ -7,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
 from app.modules.certificate.entity import Certificate, CertificateTemplate
+from app.modules.course.entity import Course, CourseAccessModeEnum
+from app.modules.learning.entity import UserCourseProgress
+from app.modules.user.entity import User
 
 
 class CertificateTemplateRepository(BaseRepository[CertificateTemplate]):
@@ -58,3 +62,30 @@ class CertificateRepository(BaseRepository[Certificate]):
     async def exists_certificate_number(self, certificate_number: str) -> bool:
         stmt = select(Certificate.id).where(Certificate.certificate_number == certificate_number)
         return (await self.session.execute(stmt)).scalar_one_or_none() is not None
+
+    async def list_pending_scheduled_completions(self, now: datetime) -> Sequence[tuple[User, Course]]:
+        """Every (user, course) pair where the student has completed a SCHEDULED
+        course whose access_end_date has now passed, but no certificate has been
+        issued yet - i.e. the backlog `CertificateService.ensure_issued` withheld
+        at completion time because the course's deadline hadn't closed yet."""
+        stmt = (
+            select(User, Course)
+            .select_from(UserCourseProgress)
+            .join(Course, Course.id == UserCourseProgress.course_id)
+            .join(User, User.id == UserCourseProgress.user_id)
+            .outerjoin(
+                Certificate,
+                (Certificate.user_id == UserCourseProgress.user_id)
+                & (Certificate.course_id == UserCourseProgress.course_id),
+            )
+            .where(
+                UserCourseProgress.is_completed.is_(True),
+                Course.access_mode == CourseAccessModeEnum.SCHEDULED,
+                Course.certificate_enabled.is_(True),
+                Course.access_end_date.is_not(None),
+                Course.access_end_date <= now,
+                Course.deleted_at.is_(None),
+                Certificate.id.is_(None),
+            )
+        )
+        return (await self.session.execute(stmt)).all()

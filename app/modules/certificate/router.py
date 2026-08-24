@@ -7,6 +7,7 @@ from app.common.api_route import NoNullAPIRoute
 from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
+from app.core.qstash import verify_qstash_signature
 from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user
 from app.modules.certificate.dto import (
     CertificateImageUploadRequestDTO,
@@ -212,3 +213,22 @@ async def verify_certificate(
     data = await CertificateService(db).verify(verification_code)
     message = "Certificate is valid" if data.valid else "Certificate could not be verified"
     return ApiResponse(message=message, data=data)
+
+
+# ---------------------------------------------------------------------------
+# Cron (QStash)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/cron/process-scheduled-certificates",
+    summary="Cron endpoint that issues certificates for SCHEDULED courses whose "
+    "access_end_date has passed (via QStash)",
+    include_in_schema=False,
+)
+async def process_scheduled_certificates_cron(
+    raw_body: bytes = Depends(verify_qstash_signature),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await CertificateService(db).process_scheduled_course_certificates()
+    return {"status": "ok", "data": result}
