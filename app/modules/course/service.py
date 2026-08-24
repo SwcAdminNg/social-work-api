@@ -33,7 +33,15 @@ from app.modules.user.entity import User, UserTypeEnum
 
 # Fields on the create/update DTOs that don't map to a Course column - handled
 # separately (instructors -> course_instructors table).
-_NON_COLUMN_FIELDS = {"instructors"}
+_NON_COLUMN_FIELDS = {
+    "instructors",
+    "estimated_total_minutes",
+    "estimated_duration",
+    "is_bookmarked",
+    "is_enrolled",
+    "progress_status",
+    "has_new_content",
+}
 
 
 class CourseService:
