@@ -41,6 +41,8 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    QuizAIGenerateRequestDTO,
+    QuizAIGenerateResponseDTO,
     QuizAIAutocompleteResponseDTO,
     QuizGroupSectionCreateDTO,
     QuizGroupSectionUpdateDTO,
@@ -65,7 +67,11 @@ from app.modules.course.content_entity import (
     MultiAnswerModeEnum,
     VideoStatusEnum,
 )
-from app.modules.course.assessment_ai import extract_assessment_text, generate_quiz_questions_from_text
+from app.modules.course.assessment_ai import (
+    extract_assessment_text,
+    generate_quiz_questions_from_prompt,
+    generate_quiz_questions_from_text,
+)
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.entity import Course, CourseItem, CourseItemTypeEnum, CourseSection
 from app.modules.course.repository import CourseRepository
@@ -606,30 +612,9 @@ class CourseContentService:
             item_title=item.title,
         )
 
-        created_question_dtos: list[CourseQuizQuestionManageDTO] = []
-        if persist:
-            for payload in generated.questions:
-                question, created_options = await self._create_quiz_question(assessment.id, payload)
-                created_question_dtos.append(
-                    CourseQuizQuestionManageDTO(
-                        id=question.id,
-                        text=question.text,
-                        order_index=question.order_index,
-                        allow_multiple_answers=question.allow_multiple_answers,
-                        multi_answer_mode=question.multi_answer_mode,
-                        options=[
-                            CourseQuizOptionManageDTO(
-                                id=option.id,
-                                text=option.text,
-                                order_index=option.order_index,
-                                is_correct=option.is_correct,
-                            )
-                            for option in created_options
-                        ],
-                    )
-                )
-            course.content_updated_at = datetime.now(timezone.utc)
-            await self.session.commit()
+        created_question_dtos = await self._maybe_persist_generated_questions(
+            course, assessment.id, generated.questions, persist
+        )
 
         return QuizAIAutocompleteResponseDTO(
             source_file_name=file_name,
@@ -640,6 +625,72 @@ class CourseContentService:
             generated_questions=generated.questions,
             created_questions=created_question_dtos,
         )
+
+    async def generate_quiz_from_prompt(
+        self,
+        item_id: uuid.UUID,
+        payload: QuizAIGenerateRequestDTO,
+        current_user: User,
+    ) -> QuizAIGenerateResponseDTO:
+        course, section, item = await self._authorize_item(item_id, current_user)
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found for this item")
+
+        generated = await generate_quiz_questions_from_prompt(
+            instructor_prompt=payload.prompt,
+            question_count=payload.question_count,
+            options_per_question=payload.options_per_question,
+            course_title=course.title,
+            section_title=section.title,
+            item_title=item.title,
+        )
+        created_question_dtos = await self._maybe_persist_generated_questions(
+            course, assessment.id, generated.questions, payload.persist
+        )
+
+        return QuizAIGenerateResponseDTO(
+            prompt=payload.prompt,
+            model=settings.gemini_model,
+            persisted=payload.persist,
+            generated_questions=generated.questions,
+            created_questions=created_question_dtos,
+        )
+
+    async def _maybe_persist_generated_questions(
+        self,
+        course: Course,
+        assessment_id: uuid.UUID,
+        questions: list[QuizQuestionCreateDTO],
+        persist: bool,
+    ) -> list[CourseQuizQuestionManageDTO]:
+        if not persist:
+            return []
+
+        created_question_dtos: list[CourseQuizQuestionManageDTO] = []
+        for payload in questions:
+            question, created_options = await self._create_quiz_question(assessment_id, payload)
+            created_question_dtos.append(
+                CourseQuizQuestionManageDTO(
+                    id=question.id,
+                    text=question.text,
+                    order_index=question.order_index,
+                    allow_multiple_answers=question.allow_multiple_answers,
+                    multi_answer_mode=question.multi_answer_mode,
+                    options=[
+                        CourseQuizOptionManageDTO(
+                            id=option.id,
+                            text=option.text,
+                            order_index=option.order_index,
+                            is_correct=option.is_correct,
+                        )
+                        for option in created_options
+                    ],
+                )
+            )
+        course.content_updated_at = datetime.now(timezone.utc)
+        await self.session.commit()
+        return created_question_dtos
 
     @staticmethod
     def _resolve_multi_answer_mode(

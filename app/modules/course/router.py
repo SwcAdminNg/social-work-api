@@ -27,6 +27,8 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    QuizAIGenerateRequestDTO,
+    QuizAIGenerateResponseDTO,
     QuizAIAutocompleteResponseDTO,
     QuizGroupSectionCreateDTO,
     QuizGroupSectionUpdateDTO,
@@ -823,6 +825,22 @@ async def autocomplete_quiz_from_document(
         persist=persist,
         current_user=current_user,
     )
+    return ApiResponse(message="Quiz generated successfully", data=data)
+
+
+@router.post(
+    "/items/{item_id}/quiz/ai-generate",
+    response_model=ApiResponse[QuizAIGenerateResponseDTO],
+    summary="Use Gemini to generate quiz questions from instructor-provided topics "
+    "(admin or owning instructor)",
+)
+async def generate_quiz_from_prompt(
+    item_id: uuid.UUID,
+    payload: QuizAIGenerateRequestDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizAIGenerateResponseDTO]:
+    data = await CourseContentService(db).generate_quiz_from_prompt(item_id, payload, current_user)
     return ApiResponse(message="Quiz generated successfully", data=data)
 
 

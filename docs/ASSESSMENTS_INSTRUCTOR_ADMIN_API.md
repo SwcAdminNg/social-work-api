@@ -433,7 +433,74 @@ for update/delete, matching the pattern used elsewhere in this API.
 
 ---
 
-## 5a. AI autocomplete from PDF/DOCX
+## 5a. AI-generated quiz questions
+
+There are two Gemini-powered authoring helpers for standalone `QUIZ` items:
+
+- `ai-generate`: create questions from an instructor prompt, topics, or learning outcomes.
+- `ai-autocomplete`: upload a PDF/DOCX and create questions from extracted document text.
+
+Both return `generated_questions` in the same shape as the manual question-create endpoint
+(`QuizQuestionCreateDTO`), and both optionally save the questions immediately. Saved questions
+remain fully editable with the normal update/delete endpoints in §5.3-5.4.
+
+### 5a.1 Generate from a prompt
+
+**`POST /courses/items/{item_id}/quiz/ai-generate`**
+
+Use this when the instructor wants to say something like "Create questions on child protection,
+case notes, confidentiality, and ethical referrals". The user must be an admin or the owning
+instructor. This endpoint does not support `ESSAY` or `QUIZ_GROUP` items yet.
+
+Request body:
+
+```json
+{
+  "prompt": "Create practical questions on confidentiality, mandated reporting, case documentation, and referral ethics for beginner social workers.",
+  "question_count": 10,
+  "options_per_question": 4,
+  "persist": false
+}
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `prompt` | string, 1-5000 chars | required | Describe the topics, learning outcomes, difficulty, scenario style, or anything else the AI should follow. |
+| `question_count` | int, 1-50 | `10` | The target number of generated questions. Gemini may return fewer if the prompt is too narrow. |
+| `options_per_question` | int, 2-6 | `4` | Every generated question gets this many options. |
+| `persist` | bool | `true` | If `true`, generated questions are saved immediately. If `false`, the response is preview-only. |
+
+Response:
+
+```json
+{
+  "success": true,
+  "message": "Quiz generated successfully",
+  "data": {
+    "prompt": "Create practical questions on confidentiality, mandated reporting, case documentation, and referral ethics for beginner social workers.",
+    "model": "gemini-3.7-flash",
+    "persisted": false,
+    "generated_questions": [
+      {
+        "text": "Which action best protects client confidentiality during case documentation?",
+        "order_index": 0,
+        "allow_multiple_answers": false,
+        "options": [
+          { "text": "Record only relevant professional information", "is_correct": true, "order_index": 0 },
+          { "text": "Include informal opinions about the client", "is_correct": false, "order_index": 1 },
+          { "text": "Share notes in a public messaging group", "is_correct": false, "order_index": 2 },
+          { "text": "Avoid recording any risk concerns", "is_correct": false, "order_index": 3 }
+        ]
+      }
+    ],
+    "created_questions": []
+  }
+}
+```
+
+When `persist=true`, `created_questions` contains the saved question/option IDs.
+
+### 5a.2 Autocomplete from PDF/DOCX
 
 **`POST /courses/items/{item_id}/quiz/ai-autocomplete`**
 

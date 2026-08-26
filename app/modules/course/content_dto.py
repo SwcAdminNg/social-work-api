@@ -237,6 +237,13 @@ class QuizQuestionUpdateDTO(UpdateDTO):
     multi_answer_mode: MultiAnswerModeEnum | None = None
 
 
+class QuizAIGenerateRequestDTO(CreateDTO):
+    prompt: str = Field(min_length=1, max_length=5000)
+    question_count: int = Field(default=10, ge=1, le=50)
+    options_per_question: int = Field(default=4, ge=2, le=6)
+    persist: bool = True
+
+
 class CourseQuizOptionPublicDTO(BaseDTO):
     id: uuid.UUID
     text: str
@@ -269,6 +276,14 @@ class QuizAIAutocompleteResponseDTO(BaseDTO):
     source_file_name: str
     source_mime_type: str | None = None
     extracted_text_preview: str
+    model: str
+    persisted: bool
+    generated_questions: list[QuizQuestionCreateDTO]
+    created_questions: list[CourseQuizQuestionManageDTO] = Field(default_factory=list)
+
+
+class QuizAIGenerateResponseDTO(BaseDTO):
+    prompt: str
     model: str
     persisted: bool
     generated_questions: list[QuizQuestionCreateDTO]

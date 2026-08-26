@@ -61,16 +61,55 @@ async def generate_quiz_questions_from_text(
     section_title: str,
     item_title: str,
 ) -> QuizAIGenerationResult:
-    if not settings.gemini_api_key:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "GEMINI_API_KEY is not configured")
-
-    payload = _build_gemini_payload(
+    prompt = _build_document_generation_prompt(
         source_text=source_text,
         question_count=question_count,
         options_per_question=options_per_question,
         course_title=course_title,
         section_title=section_title,
         item_title=item_title,
+    )
+    return await _generate_quiz_questions(
+        prompt=prompt,
+        question_count=question_count,
+        options_per_question=options_per_question,
+    )
+
+
+async def generate_quiz_questions_from_prompt(
+    *,
+    instructor_prompt: str,
+    question_count: int,
+    options_per_question: int,
+    course_title: str,
+    section_title: str,
+    item_title: str,
+) -> QuizAIGenerationResult:
+    prompt = _build_prompt_generation_prompt(
+        instructor_prompt=instructor_prompt,
+        question_count=question_count,
+        options_per_question=options_per_question,
+        course_title=course_title,
+        section_title=section_title,
+        item_title=item_title,
+    )
+    return await _generate_quiz_questions(
+        prompt=prompt,
+        question_count=question_count,
+        options_per_question=options_per_question,
+    )
+
+
+async def _generate_quiz_questions(
+    *, prompt: str, question_count: int, options_per_question: int
+) -> QuizAIGenerationResult:
+    if not settings.gemini_api_key:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "GEMINI_API_KEY is not configured")
+
+    payload = _build_gemini_payload(
+        prompt=prompt,
+        question_count=question_count,
+        options_per_question=options_per_question,
     )
 
     model = _normalize_model_name(settings.gemini_model)
@@ -130,7 +169,7 @@ def _normalize_model_name(model: str) -> str:
     return model if model.startswith("models/") else f"models/{model}"
 
 
-def _build_gemini_payload(
+def _build_document_generation_prompt(
     *,
     source_text: str,
     question_count: int,
@@ -138,8 +177,8 @@ def _build_gemini_payload(
     course_title: str,
     section_title: str,
     item_title: str,
-) -> dict[str, Any]:
-    prompt = f"""
+) -> str:
+    return f"""
 Create a high-quality multiple-choice quiz from the assessment document text.
 
 Course: {course_title}
@@ -160,6 +199,44 @@ Assessment document text:
 {source_text}
 """.strip()
 
+
+def _build_prompt_generation_prompt(
+    *,
+    instructor_prompt: str,
+    question_count: int,
+    options_per_question: int,
+    course_title: str,
+    section_title: str,
+    item_title: str,
+) -> str:
+    return f"""
+Create a high-quality multiple-choice quiz from the instructor's requested topics and learning goals.
+
+Course: {course_title}
+Module: {section_title}
+Assessment item: {item_title}
+
+Instructor request:
+{instructor_prompt}
+
+Rules:
+- Generate exactly {question_count} questions unless the request has too little material.
+- Each question must test meaningful understanding and practical application, not wording trivia.
+- Each question must have exactly {options_per_question} answer options.
+- Most questions should have one correct answer. Use multiple correct answers only when it improves the assessment.
+- For a single-correct question, set allow_multiple_answers=false and exactly one option is_correct=true.
+- For a multi-correct question, set allow_multiple_answers=true, multi_answer_mode="OR", and at least two options are is_correct=true.
+- Stay within the instructor's requested areas. Where the request is broad, use standard social work education knowledge.
+- Keep wording clear for social work learners.
+""".strip()
+
+
+def _build_gemini_payload(
+    *,
+    prompt: str,
+    question_count: int,
+    options_per_question: int,
+) -> dict[str, Any]:
     return {
         "systemInstruction": {
             "parts": [
