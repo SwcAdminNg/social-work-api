@@ -37,6 +37,7 @@ from app.modules.support.dto import (
     SupportMessageReadDTO,
     SupportTicketAssignDTO,
     SupportTicketCreateDTO,
+    SupportTicketFilterParams,
     SupportTicketRatingDTO,
     SupportTicketReadDTO,
     SupportTicketStatusUpdateDTO,
@@ -196,12 +197,11 @@ async def create_ticket(
 )
 async def list_tickets(
     pagination: PaginationParams = Depends(),
-    status_filter: SupportTicketStatusEnum | None = Query(default=None, alias="status"),
-    assigned_admin_id: uuid.UUID | None = Query(default=None),
+    filters: SupportTicketFilterParams = Depends(),
     current_user: User = Depends(get_current_support_staff),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[SupportTicketReadDTO]:
-    items, total = await SupportService(db).list_for_admin(pagination, status_filter, assigned_admin_id)
+    items, total = await SupportService(db).list_for_admin(pagination, filters)
     return PaginatedResponse.create(items=items, total_items=total, params=pagination)
 
 

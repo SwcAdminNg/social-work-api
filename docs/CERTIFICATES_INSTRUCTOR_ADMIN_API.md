@@ -44,6 +44,7 @@ Course ──── certificate_enabled (bool, default true)
         ▼
 Certificate (one per student per course, issued automatically)
   - certificate_number, verification_code
+  - student_profile_picture_url (snapshotted at issuance and shown on the PDF)
   - pdf_url (rendered lazily on first view/download — see student doc)
 ```
 
@@ -57,6 +58,9 @@ Certificate (one per student per course, issued automatically)
   course "just works" the moment at least one global template exists, with zero configuration
   needed. If there is no global template *and* the course has none assigned, no certificate is
   issued (silently — course completion itself is unaffected either way).
+- **Student profile picture is required**: no new certificate is issued unless the student has a
+  profile picture URL on their account. If they completed the course first, they can upload a
+  profile picture and request their certificate again; issuance will be attempted then.
 - **You never render a PDF yourself.** Templates are pure configuration (colors, copy, images).
   Rendering happens lazily server-side the first time a student (or the public verify page) actually
   requests the certificate — see the student doc.

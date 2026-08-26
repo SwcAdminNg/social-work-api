@@ -176,6 +176,9 @@ class CertificateService:
         if existing is not None:
             return existing
 
+        if not user.profile_picture_url:
+            return None
+
         template = await self._resolve_template(course)
         if template is None:
             return None
@@ -194,6 +197,7 @@ class CertificateService:
             issued_at=issued_at,
             recipient_name=f"{user.first_name} {user.last_name}".strip(),
             course_title=course.title,
+            student_profile_picture_url=user.profile_picture_url,
         )
         await self.repo.create(certificate)
         await self.session.commit()
@@ -239,6 +243,7 @@ class CertificateService:
             certificate_number=certificate.certificate_number,
             verification_code=certificate.verification_code,
             verify_url=self._verify_url(certificate.verification_code),
+            student_profile_picture_url=certificate.student_profile_picture_url,
         )
 
         r2_client = get_r2_client()
@@ -253,12 +258,28 @@ class CertificateService:
 
     async def get_my_certificate(self, user: User, course_id: uuid.UUID) -> CertificateReadDTO:
         certificate = await self.repo.get_for_user_course(user.id, course_id)
-        if certificate is None:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND,
-                "No certificate has been issued for this course yet - complete the course to earn one",
-            )
-        return await self._build_read_dto(certificate)
+        if certificate is not None:
+            return await self._build_read_dto(certificate)
+
+        course = await self.course_repo.get_by_id(course_id)
+        if course is not None:
+            from app.modules.learning.repository import LearningRepository
+
+            progress = await LearningRepository(self.session).get_user_course_progress(user.id, course_id)
+            if progress is not None and progress.is_completed:
+                if not user.profile_picture_url:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        "Add a profile picture to your profile before this certificate can be issued",
+                    )
+                certificate = await self.ensure_issued(user, course)
+                if certificate is not None:
+                    return await self._build_read_dto(certificate)
+
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No certificate has been issued for this course yet - complete the course to earn one",
+        )
 
     async def _build_read_dto(self, certificate: Certificate) -> CertificateReadDTO:
         pdf_url = certificate.pdf_url

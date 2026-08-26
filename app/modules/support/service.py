@@ -25,6 +25,7 @@ from app.modules.support.dto import (
     SupportMessageCreateDTO,
     SupportMessageReadDTO,
     SupportTicketCreateDTO,
+    SupportTicketFilterParams,
     SupportTicketRatingDTO,
     SupportTicketReadDTO,
 )
@@ -293,10 +294,9 @@ class SupportService:
     async def list_for_admin(
         self,
         pagination: PaginationParams,
-        status_filter: SupportTicketStatusEnum | None,
-        assigned_admin_id: uuid.UUID | None,
+        filters: SupportTicketFilterParams,
     ) -> tuple[list[SupportTicketReadDTO], int]:
-        items, total = await self.ticket_repo.list_for_admin(pagination, status_filter, assigned_admin_id)
+        items, total = await self.ticket_repo.list_for_admin(pagination, filters)
         return [await self._build_ticket_dto(t) for t in items], total
 
     # -- user-facing -------------------------------------------------------------

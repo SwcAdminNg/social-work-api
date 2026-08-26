@@ -97,3 +97,4 @@ class Certificate(BaseEntity):
     pdf_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     recipient_name: Mapped[str] = mapped_column(String(200), nullable=False)
     course_title: Mapped[str] = mapped_column(String(255), nullable=False)
+    student_profile_picture_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)

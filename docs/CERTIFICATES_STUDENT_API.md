@@ -32,6 +32,10 @@ Base URL prefix for everything below: `/certificates`.
   cohort — even if you personally finished weeks ahead of it. `GET /certificates/mine/{course_id}`
   will keep 404ing until that date passes, then start working automatically with no action needed
   from you.
+- **Profile picture required**: your account must have a profile picture before a certificate can
+  be issued. If you completed a course before adding one, upload a profile picture and then request
+  the certificate again; the system will issue it if all other rules are satisfied. The certificate
+  PDF includes the profile picture saved on your account at the moment of issuance.
 - One certificate per (you, course) — completing a course you already have a certificate for (e.g.
   after a module reset and redo, per the Assessments docs' §11) does **not** create a second one;
   the original certificate stands.
@@ -50,6 +54,9 @@ Base URL prefix for everything below: `/certificates`.
 ### 2.1 Get your certificate for one course
 
 **`GET /certificates/mine/{course_id}`**
+
+`400` if the course is complete but your profile has no picture yet:
+`"Add a profile picture to your profile before this certificate can be issued"`.
 
 `404` if you haven't earned a certificate for this course yet (course not completed, certificates
 disabled for it, or no template available) — the message explains why:
@@ -78,6 +85,7 @@ disabled for it, or no template available) — the message explains why:
 | Field | Notes |
 |---|---|
 | `course_title` / `recipient_name` | Snapshotted **at the moment of issuance** — if the course is later renamed, or your account name changes, this certificate keeps showing what was true when you earned it. |
+| Profile picture | Snapshotted from your account at issuance and rendered at the top right of the PDF. |
 | `pdf_url` | A plain, publicly-accessible URL — download it directly (`GET` the URL itself, not this API), share it, embed it, whatever you like. It doesn't expire. |
 | `verify_url` | A shareable link (e.g. for a resume or LinkedIn) that lets **anyone** — no login needed — confirm this certificate is genuine. See §3. |
 | `certificate_number` | A human-readable reference, e.g. for support requests. Not secret. |
@@ -148,6 +156,7 @@ user — it's intentionally open, the same way scanning a QR code on a physical 
 | Status | When |
 |---|---|
 | `401` | Missing/invalid bearer token on `GET /certificates/mine` or `GET /certificates/mine/{course_id}` (verify is exempt — it's public). |
+| `400` | `GET /certificates/mine/{course_id}` when the course is complete but the student has no profile picture yet. |
 | `404` | `GET /certificates/mine/{course_id}` for a course you haven't earned a certificate for. |
 
 `GET /certificates/verify/{code}` never 404s for an unknown code — see §3, it returns `valid: false`

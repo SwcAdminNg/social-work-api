@@ -1,7 +1,8 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
+from fastapi import Query
 from pydantic import Field, model_validator
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
@@ -128,6 +129,27 @@ class SupportTicketReadDTO(BaseDTO):
     created_at: datetime
     user: UserReadDTO | None = None
     assigned_admin: UserReadDTO | None = None
+
+
+class SupportTicketFilterParams:
+    """Shared filter query params for the staff support ticket queue."""
+
+    def __init__(
+        self,
+        status: SupportTicketStatusEnum | None = Query(None, description="Filter by ticket status"),
+        assigned_admin_id: uuid.UUID | None = Query(None, description="Filter by assigned support staff user"),
+        search: str | None = Query(
+            None,
+            description="Search by requester username, full name, email, phone number, or ticket subject",
+        ),
+        start_date: date | None = Query(None, description="Filter tickets created on or after this date"),
+        end_date: date | None = Query(None, description="Filter tickets created on or before this date"),
+    ) -> None:
+        self.status = status
+        self.assigned_admin_id = assigned_admin_id
+        self.search = search.strip() if search and search.strip() else None
+        self.start_date = start_date
+        self.end_date = end_date
 
 
 class SupportTicketAssignDTO(BaseDTO):

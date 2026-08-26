@@ -80,6 +80,37 @@ def _draw_border(pdf: canvas.Canvas, primary: colors.Color, accent: colors.Color
         pdf.line(cx, cy, cx, cy + dy * corner)
 
 
+def _draw_circular_image(
+    pdf: canvas.Canvas,
+    image: ImageReader,
+    center_x: float,
+    center_y: float,
+    diameter: float,
+    border_color: colors.Color,
+) -> None:
+    image_width, image_height = image.getSize()
+    if not image_width or not image_height:
+        return
+
+    scale = max(diameter / image_width, diameter / image_height)
+    draw_width = image_width * scale
+    draw_height = image_height * scale
+    draw_x = center_x - draw_width / 2
+    draw_y = center_y - draw_height / 2
+    radius = diameter / 2
+
+    pdf.saveState()
+    clip_path = pdf.beginPath()
+    clip_path.circle(center_x, center_y, radius)
+    pdf.clipPath(clip_path, stroke=0, fill=0)
+    pdf.drawImage(image, draw_x, draw_y, width=draw_width, height=draw_height, mask="auto")
+    pdf.restoreState()
+
+    pdf.setStrokeColor(border_color)
+    pdf.setLineWidth(2)
+    pdf.circle(center_x, center_y, radius, stroke=1, fill=0)
+
+
 def render_certificate_pdf(
     template,
     recipient_name: str,
@@ -89,6 +120,7 @@ def render_certificate_pdf(
     certificate_number: str,
     verification_code: str,
     verify_url: str,
+    student_profile_picture_url: str | None = None,
 ) -> bytes:
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=PAGE_SIZE)
@@ -108,6 +140,17 @@ def render_certificate_pdf(
     pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, fill=1, stroke=0)
 
     _draw_border(pdf, primary, accent, template.border_style)
+
+    student_image = _fetch_image(student_profile_picture_url)
+    if student_image is not None:
+        _draw_circular_image(
+            pdf,
+            student_image,
+            center_x=PAGE_WIDTH - 86,
+            center_y=PAGE_HEIGHT - 86,
+            diameter=72,
+            border_color=accent,
+        )
 
     center_x = PAGE_WIDTH / 2
     cursor_y = PAGE_HEIGHT - 90
