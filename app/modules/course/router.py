@@ -9,6 +9,7 @@ from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user, get_current_user_optional, get_current_admin_user
 from app.modules.course.content_dto import (
+    AssessmentAIProviderEnum,
     CourseAssessmentUpdateDTO,
     CourseDetailDTO,
     CourseItemCreateDTO,
@@ -803,7 +804,7 @@ async def create_quiz_question(
 @router.post(
     "/items/{item_id}/quiz/ai-autocomplete",
     response_model=ApiResponse[QuizAIAutocompleteResponseDTO],
-    summary="Upload a PDF/DOCX assessment and use Gemini to generate quiz questions "
+    summary="Upload a PDF/DOCX assessment and use a selected AI provider to generate quiz questions "
     "(admin or owning instructor)",
 )
 async def autocomplete_quiz_from_document(
@@ -812,6 +813,8 @@ async def autocomplete_quiz_from_document(
     question_count: int = Form(default=10, ge=1, le=50),
     options_per_question: int = Form(default=4, ge=2, le=6),
     persist: bool = Form(default=True),
+    provider: AssessmentAIProviderEnum = Form(default=AssessmentAIProviderEnum.GEMINI),
+    model: str | None = Form(default=None, min_length=1, max_length=100),
     current_user: User = Depends(get_current_admin_or_instructor),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[QuizAIAutocompleteResponseDTO]:
@@ -823,6 +826,8 @@ async def autocomplete_quiz_from_document(
         question_count=question_count,
         options_per_question=options_per_question,
         persist=persist,
+        provider=provider,
+        model=model,
         current_user=current_user,
     )
     return ApiResponse(message="Quiz generated successfully", data=data)
@@ -831,7 +836,7 @@ async def autocomplete_quiz_from_document(
 @router.post(
     "/items/{item_id}/quiz/ai-generate",
     response_model=ApiResponse[QuizAIGenerateResponseDTO],
-    summary="Use Gemini to generate quiz questions from instructor-provided topics "
+    summary="Use a selected AI provider to generate quiz questions from instructor-provided topics "
     "(admin or owning instructor)",
 )
 async def generate_quiz_from_prompt(

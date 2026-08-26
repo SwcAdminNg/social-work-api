@@ -9,6 +9,7 @@ from app.common.pagination import PaginationParams
 from app.core.bunny import get_bunny_client
 from app.core.storage import get_r2_client
 from app.modules.course.content_dto import (
+    AssessmentAIProviderEnum,
     CourseAssessmentManageDTO,
     CourseAssessmentPublicDTO,
     CourseAssessmentUpdateDTO,
@@ -52,7 +53,6 @@ from app.modules.course.content_dto import (
     QuizQuestionUpdateDTO,
     VideoUploadCredentialsDTO,
 )
-from app.core.config import settings
 from app.modules.course.content_entity import (
     AssessmentTypeEnum,
     CourseAssessment,
@@ -595,6 +595,8 @@ class CourseContentService:
         question_count: int,
         options_per_question: int,
         persist: bool,
+        provider: AssessmentAIProviderEnum,
+        model: str | None,
         current_user: User,
     ) -> QuizAIAutocompleteResponseDTO:
         course, section, item = await self._authorize_item(item_id, current_user)
@@ -610,6 +612,8 @@ class CourseContentService:
             course_title=course.title,
             section_title=section.title,
             item_title=item.title,
+            provider=provider,
+            model=model,
         )
 
         created_question_dtos = await self._maybe_persist_generated_questions(
@@ -620,7 +624,8 @@ class CourseContentService:
             source_file_name=file_name,
             source_mime_type=content_type,
             extracted_text_preview=extracted_text[:1000],
-            model=settings.gemini_model,
+            provider=generated.provider,
+            model=generated.model,
             persisted=persist,
             generated_questions=generated.questions,
             created_questions=created_question_dtos,
@@ -644,6 +649,8 @@ class CourseContentService:
             course_title=course.title,
             section_title=section.title,
             item_title=item.title,
+            provider=payload.provider,
+            model=payload.model,
         )
         created_question_dtos = await self._maybe_persist_generated_questions(
             course, assessment.id, generated.questions, payload.persist
@@ -651,7 +658,8 @@ class CourseContentService:
 
         return QuizAIGenerateResponseDTO(
             prompt=payload.prompt,
-            model=settings.gemini_model,
+            provider=generated.provider,
+            model=generated.model,
             persisted=payload.persist,
             generated_questions=generated.questions,
             created_questions=created_question_dtos,

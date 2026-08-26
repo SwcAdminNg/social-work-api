@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.7-flash"
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_api_base_url: str = "https://api.openai.com/v1"
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_api_base_url: str = "https://api.deepseek.com"
     gemini_timeout_seconds: int = 60
     assessment_ai_max_file_size_bytes: int = 10 * 1024 * 1024
     assessment_ai_max_input_chars: int = 40000

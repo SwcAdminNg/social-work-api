@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 from pypdf import PdfReader
 
 from app.core.config import settings
-from app.modules.course.content_dto import QuizOptionCreateDTO, QuizQuestionCreateDTO
+from app.modules.course.content_dto import AssessmentAIProviderEnum, QuizOptionCreateDTO, QuizQuestionCreateDTO
 from app.modules.course.content_entity import MultiAnswerModeEnum
 
 
@@ -18,8 +18,13 @@ PDF_CONTENT_TYPE = "application/pdf"
 DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-class QuizAIGenerationResult(BaseModel):
+class RawQuizAIGenerationResult(BaseModel):
     questions: list[QuizQuestionCreateDTO] = Field(default_factory=list)
+
+
+class QuizAIGenerationResult(RawQuizAIGenerationResult):
+    provider: AssessmentAIProviderEnum
+    model: str
 
 
 def extract_assessment_text(file_name: str, content_type: str | None, data: bytes) -> str:
@@ -60,6 +65,8 @@ async def generate_quiz_questions_from_text(
     course_title: str,
     section_title: str,
     item_title: str,
+    provider: AssessmentAIProviderEnum,
+    model: str | None,
 ) -> QuizAIGenerationResult:
     prompt = _build_document_generation_prompt(
         source_text=source_text,
@@ -73,6 +80,8 @@ async def generate_quiz_questions_from_text(
         prompt=prompt,
         question_count=question_count,
         options_per_question=options_per_question,
+        provider=provider,
+        model=model,
     )
 
 
@@ -84,6 +93,8 @@ async def generate_quiz_questions_from_prompt(
     course_title: str,
     section_title: str,
     item_title: str,
+    provider: AssessmentAIProviderEnum,
+    model: str | None,
 ) -> QuizAIGenerationResult:
     prompt = _build_prompt_generation_prompt(
         instructor_prompt=instructor_prompt,
@@ -97,12 +108,56 @@ async def generate_quiz_questions_from_prompt(
         prompt=prompt,
         question_count=question_count,
         options_per_question=options_per_question,
+        provider=provider,
+        model=model,
     )
 
 
 async def _generate_quiz_questions(
-    *, prompt: str, question_count: int, options_per_question: int
+    *,
+    prompt: str,
+    question_count: int,
+    options_per_question: int,
+    provider: AssessmentAIProviderEnum,
+    model: str | None,
 ) -> QuizAIGenerationResult:
+    if provider == AssessmentAIProviderEnum.GEMINI:
+        selected_model = (model or settings.gemini_model).strip()
+        response_text = await _call_gemini(prompt, question_count, options_per_question, selected_model)
+    elif provider == AssessmentAIProviderEnum.OPENAI:
+        selected_model = (model or settings.openai_model).strip()
+        response_text = await _call_responses_api(
+            provider_label="OpenAI",
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_api_base_url,
+            model=selected_model,
+            prompt=prompt,
+            question_count=question_count,
+            options_per_question=options_per_question,
+            include_strict=True,
+        )
+    elif provider == AssessmentAIProviderEnum.DEEPSEEK:
+        selected_model = (model or settings.deepseek_model).strip()
+        response_text = await _call_responses_api(
+            provider_label="DeepSeek",
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_api_base_url,
+            model=selected_model,
+            prompt=prompt,
+            question_count=question_count,
+            options_per_question=options_per_question,
+            include_strict=False,
+        )
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unsupported assessment AI provider")
+
+    validated = _validate_generation(response_text, question_count, options_per_question)
+    return QuizAIGenerationResult(provider=provider, model=selected_model, questions=validated.questions)
+
+
+async def _call_gemini(
+    prompt: str, question_count: int, options_per_question: int, model: str
+) -> str:
     if not settings.gemini_api_key:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "GEMINI_API_KEY is not configured")
 
@@ -112,21 +167,61 @@ async def _generate_quiz_questions(
         options_per_question=options_per_question,
     )
 
-    model = _normalize_model_name(settings.gemini_model)
-    url = f"{settings.gemini_api_base_url.rstrip('/')}/{model}:generateContent"
+    normalized_model = _normalize_gemini_model_name(model)
+    url = f"{settings.gemini_api_base_url.rstrip('/')}/{normalized_model}:generateContent"
 
     try:
         async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
             response = await client.post(url, params={"key": settings.gemini_api_key}, json=payload)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        detail = _gemini_error_message(exc.response)
+        detail = _provider_error_message(exc.response)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Gemini could not generate quiz questions: {detail}") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini request failed") from exc
 
-    response_text = _extract_gemini_text(response.json())
-    return _validate_generation(response_text, question_count, options_per_question)
+    return _extract_gemini_text(response.json())
+
+
+async def _call_responses_api(
+    *,
+    provider_label: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    prompt: str,
+    question_count: int,
+    options_per_question: int,
+    include_strict: bool,
+) -> str:
+    if not api_key:
+        env_name = "OPENAI_API_KEY" if provider_label == "OpenAI" else "DEEPSEEK_API_KEY"
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"{env_name} is not configured")
+
+    payload = _build_responses_payload(
+        prompt=prompt,
+        question_count=question_count,
+        options_per_question=options_per_question,
+        model=model,
+        include_strict=include_strict,
+    )
+    url = f"{base_url.rstrip('/')}/responses"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = _provider_error_message(exc.response)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"{provider_label} could not generate quiz questions: {detail}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"{provider_label} request failed") from exc
+
+    return _extract_responses_text(response.json(), provider_label)
 
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -164,7 +259,7 @@ def _file_extension(file_name: str) -> str:
     return ""
 
 
-def _normalize_model_name(model: str) -> str:
+def _normalize_gemini_model_name(model: str) -> str:
     model = (model or "gemini-3.7-flash").strip()
     return model if model.startswith("models/") else f"models/{model}"
 
@@ -257,6 +352,33 @@ def _build_gemini_payload(
     }
 
 
+def _build_responses_payload(
+    *,
+    prompt: str,
+    question_count: int,
+    options_per_question: int,
+    model: str,
+    include_strict: bool,
+) -> dict[str, Any]:
+    text_format = {
+        "type": "json_schema",
+        "name": "quiz_questions",
+        "schema": _strict_quiz_response_schema(question_count, options_per_question),
+    }
+    if include_strict:
+        text_format["strict"] = True
+
+    return {
+        "model": model,
+        "instructions": (
+            "You are an expert assessment designer. Return only valid JSON that matches the schema. "
+            "Do not include markdown, commentary, citations, or explanations."
+        ),
+        "input": prompt,
+        "text": {"format": text_format},
+    }
+
+
 def _quiz_response_schema(question_count: int, options_per_question: int) -> dict[str, Any]:
     return {
         "type": "object",
@@ -295,6 +417,53 @@ def _quiz_response_schema(question_count: int, options_per_question: int) -> dic
     }
 
 
+def _strict_quiz_response_schema(question_count: int, options_per_question: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": question_count,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "text": {"type": "string"},
+                        "order_index": {"type": "integer"},
+                        "allow_multiple_answers": {"type": "boolean"},
+                        "multi_answer_mode": {"type": "string", "enum": ["AND", "OR"]},
+                        "options": {
+                            "type": "array",
+                            "minItems": options_per_question,
+                            "maxItems": options_per_question,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "is_correct": {"type": "boolean"},
+                                    "order_index": {"type": "integer"},
+                                },
+                                "required": ["text", "is_correct", "order_index"],
+                            },
+                        },
+                    },
+                    "required": [
+                        "text",
+                        "order_index",
+                        "allow_multiple_answers",
+                        "multi_answer_mode",
+                        "options",
+                    ],
+                },
+            }
+        },
+        "required": ["questions"],
+    }
+
+
 def _extract_gemini_text(payload: dict[str, Any]) -> str:
     candidates = payload.get("candidates") or []
     for candidate in candidates:
@@ -306,29 +475,48 @@ def _extract_gemini_text(payload: dict[str, Any]) -> str:
     raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini returned no quiz content")
 
 
-def _validate_generation(response_text: str, question_count: int, options_per_question: int) -> QuizAIGenerationResult:
+def _extract_responses_text(payload: dict[str, Any], provider_label: str) -> str:
+    if payload.get("status") == "failed":
+        error = payload.get("error") or {}
+        detail = error.get("message") or "response failed"
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"{provider_label} response failed: {detail}")
+
+    for item in payload.get("output") or []:
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content") or []:
+            if content.get("type") == "output_text" and content.get("text"):
+                return content["text"]
+
+    raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"{provider_label} returned no quiz content")
+
+
+def _validate_generation(response_text: str, question_count: int, options_per_question: int) -> RawQuizAIGenerationResult:
     try:
         raw = json.loads(_strip_json_fence(response_text))
     except json.JSONDecodeError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini returned invalid JSON") from exc
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "AI provider returned invalid JSON") from exc
 
     try:
-        generated = QuizAIGenerationResult.model_validate(raw)
+        generated = RawQuizAIGenerationResult.model_validate(raw)
     except ValidationError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini returned quiz data in an unexpected shape") from exc
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "AI provider returned quiz data in an unexpected shape") from exc
 
     if not generated.questions:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini did not generate any quiz questions")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "AI provider did not generate any quiz questions")
 
     normalized_questions: list[QuizQuestionCreateDTO] = []
     for question_index, question in enumerate(generated.questions[:question_count]):
         options = question.options[:options_per_question]
-        if len(options) < 2:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini generated a question with too few options")
+        if len(options) < options_per_question:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"AI provider generated a question with fewer than {options_per_question} options",
+            )
 
         correct_count = sum(1 for option in options if option.is_correct)
         if correct_count == 0:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini generated a question with no correct answer")
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "AI provider generated a question with no correct answer")
 
         allow_multiple_answers = correct_count > 1
         normalized_options = [
@@ -349,7 +537,7 @@ def _validate_generation(response_text: str, question_count: int, options_per_qu
             )
         )
 
-    return QuizAIGenerationResult(questions=normalized_questions)
+    return RawQuizAIGenerationResult(questions=normalized_questions)
 
 
 def _strip_json_fence(text: str) -> str:
@@ -360,7 +548,7 @@ def _strip_json_fence(text: str) -> str:
     return stripped.strip()
 
 
-def _gemini_error_message(response: httpx.Response) -> str:
+def _provider_error_message(response: httpx.Response) -> str:
     try:
         payload = response.json()
     except ValueError:

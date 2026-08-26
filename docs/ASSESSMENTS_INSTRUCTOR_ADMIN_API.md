@@ -435,7 +435,7 @@ for update/delete, matching the pattern used elsewhere in this API.
 
 ## 5a. AI-generated quiz questions
 
-There are two Gemini-powered authoring helpers for standalone `QUIZ` items:
+There are two AI-powered authoring helpers for standalone `QUIZ` items:
 
 - `ai-generate`: create questions from an instructor prompt, topics, or learning outcomes.
 - `ai-autocomplete`: upload a PDF/DOCX and create questions from extracted document text.
@@ -443,6 +443,16 @@ There are two Gemini-powered authoring helpers for standalone `QUIZ` items:
 Both return `generated_questions` in the same shape as the manual question-create endpoint
 (`QuizQuestionCreateDTO`), and both optionally save the questions immediately. Saved questions
 remain fully editable with the normal update/delete endpoints in §5.3-5.4.
+
+Both endpoints support selectable AI providers:
+
+| Provider value | Default model | Required env var |
+|---|---|---|
+| `GEMINI` | `gemini-3.7-flash` | `GEMINI_API_KEY` |
+| `OPENAI` | `gpt-4o-mini` | `OPENAI_API_KEY` |
+| `DEEPSEEK` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
+
+You can also send a `model` override when the frontend wants to expose a provider's model picker.
 
 ### 5a.1 Generate from a prompt
 
@@ -459,16 +469,20 @@ Request body:
   "prompt": "Create practical questions on confidentiality, mandated reporting, case documentation, and referral ethics for beginner social workers.",
   "question_count": 10,
   "options_per_question": 4,
-  "persist": false
+  "persist": false,
+  "provider": "OPENAI",
+  "model": "gpt-4o-mini"
 }
 ```
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `prompt` | string, 1-5000 chars | required | Describe the topics, learning outcomes, difficulty, scenario style, or anything else the AI should follow. |
-| `question_count` | int, 1-50 | `10` | The target number of generated questions. Gemini may return fewer if the prompt is too narrow. |
+| `question_count` | int, 1-50 | `10` | The target number of generated questions. The AI provider may return fewer if the prompt is too narrow. |
 | `options_per_question` | int, 2-6 | `4` | Every generated question gets this many options. |
 | `persist` | bool | `true` | If `true`, generated questions are saved immediately. If `false`, the response is preview-only. |
+| `provider` | `"GEMINI" \| "OPENAI" \| "DEEPSEEK"` | `"GEMINI"` | Which AI provider to call. |
+| `model` | string \| null | provider default | Optional provider-specific model override. |
 
 Response:
 
@@ -478,7 +492,8 @@ Response:
   "message": "Quiz generated successfully",
   "data": {
     "prompt": "Create practical questions on confidentiality, mandated reporting, case documentation, and referral ethics for beginner social workers.",
-    "model": "gemini-3.7-flash",
+    "provider": "OPENAI",
+    "model": "gpt-4o-mini",
     "persisted": false,
     "generated_questions": [
       {
@@ -504,7 +519,7 @@ When `persist=true`, `created_questions` contains the saved question/option IDs.
 
 **`POST /courses/items/{item_id}/quiz/ai-autocomplete`**
 
-Upload an existing assessment document and let Gemini extract the readable text and generate
+Upload an existing assessment document and let the selected AI provider generate
 quiz questions/options for an existing standalone `QUIZ` item. The user must be an admin or the
 owning instructor. This endpoint does not support `ESSAY` or `QUIZ_GROUP` items yet.
 
@@ -513,9 +528,11 @@ Content type: `multipart/form-data`
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `file` | PDF or DOCX file | required | Max size defaults to 10MB. Scanned PDFs must be OCR'd first. |
-| `question_count` | int, 1-50 | `10` | The target number of generated questions. Gemini may return fewer if the document is thin. |
+| `question_count` | int, 1-50 | `10` | The target number of generated questions. The AI provider may return fewer if the document is thin. |
 | `options_per_question` | int, 2-6 | `4` | Every generated question gets this many options. |
 | `persist` | bool | `true` | If `true`, generated questions are saved immediately. If `false`, the response is preview-only. |
+| `provider` | `"GEMINI" \| "OPENAI" \| "DEEPSEEK"` | `"GEMINI"` | Which AI provider to call. |
+| `model` | string \| null | provider default | Optional provider-specific model override. |
 
 Example:
 
@@ -534,6 +551,7 @@ Response:
     "source_file_name": "module-1-assessment.pdf",
     "source_mime_type": "application/pdf",
     "extracted_text_preview": "Readable text extracted from the document...",
+    "provider": "GEMINI",
     "model": "gemini-3.7-flash",
     "persisted": true,
     "generated_questions": [
@@ -564,17 +582,23 @@ Response:
 }
 ```
 
-Environment required:
+Environment:
 
 ```dotenv
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-3.7-flash
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o-mini
+DEEPSEEK_API_KEY=your-deepseek-api-key
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
 Optional limits/config:
 
 ```dotenv
 GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+OPENAI_API_BASE_URL=https://api.openai.com/v1
+DEEPSEEK_API_BASE_URL=https://api.deepseek.com
 GEMINI_TIMEOUT_SECONDS=60
 ASSESSMENT_AI_MAX_FILE_SIZE_BYTES=10485760
 ASSESSMENT_AI_MAX_INPUT_CHARS=40000
@@ -587,8 +611,8 @@ Error responses to handle:
 | `400` | Unsupported file type, unreadable/corrupt document, empty document, or no extractable text. |
 | `404` | `item_id` is not a standalone quiz item. |
 | `413` | Uploaded file exceeds `ASSESSMENT_AI_MAX_FILE_SIZE_BYTES`. |
-| `500` | `GEMINI_API_KEY` is not configured. |
-| `502` | Gemini request failed, timed out, or returned invalid quiz JSON. |
+| `500` | The selected provider's API key is not configured. |
+| `502` | The selected provider request failed, timed out, or returned invalid quiz JSON. |
 
 ---
 

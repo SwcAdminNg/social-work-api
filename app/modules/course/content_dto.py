@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from enum import Enum
 
 from pydantic import Field
 
@@ -237,11 +238,19 @@ class QuizQuestionUpdateDTO(UpdateDTO):
     multi_answer_mode: MultiAnswerModeEnum | None = None
 
 
+class AssessmentAIProviderEnum(str, Enum):
+    GEMINI = "GEMINI"
+    OPENAI = "OPENAI"
+    DEEPSEEK = "DEEPSEEK"
+
+
 class QuizAIGenerateRequestDTO(CreateDTO):
     prompt: str = Field(min_length=1, max_length=5000)
     question_count: int = Field(default=10, ge=1, le=50)
     options_per_question: int = Field(default=4, ge=2, le=6)
     persist: bool = True
+    provider: AssessmentAIProviderEnum = AssessmentAIProviderEnum.GEMINI
+    model: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class CourseQuizOptionPublicDTO(BaseDTO):
@@ -276,6 +285,7 @@ class QuizAIAutocompleteResponseDTO(BaseDTO):
     source_file_name: str
     source_mime_type: str | None = None
     extracted_text_preview: str
+    provider: AssessmentAIProviderEnum
     model: str
     persisted: bool
     generated_questions: list[QuizQuestionCreateDTO]
@@ -284,6 +294,7 @@ class QuizAIAutocompleteResponseDTO(BaseDTO):
 
 class QuizAIGenerateResponseDTO(BaseDTO):
     prompt: str
+    provider: AssessmentAIProviderEnum
     model: str
     persisted: bool
     generated_questions: list[QuizQuestionCreateDTO]
