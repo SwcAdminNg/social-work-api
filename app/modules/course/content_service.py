@@ -41,6 +41,7 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    QuizAIAutocompleteResponseDTO,
     QuizGroupSectionCreateDTO,
     QuizGroupSectionUpdateDTO,
     QuizOptionCreateDTO,
@@ -49,6 +50,7 @@ from app.modules.course.content_dto import (
     QuizQuestionUpdateDTO,
     VideoUploadCredentialsDTO,
 )
+from app.core.config import settings
 from app.modules.course.content_entity import (
     AssessmentTypeEnum,
     CourseAssessment,
@@ -63,6 +65,7 @@ from app.modules.course.content_entity import (
     MultiAnswerModeEnum,
     VideoStatusEnum,
 )
+from app.modules.course.assessment_ai import extract_assessment_text, generate_quiz_questions_from_text
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.entity import Course, CourseItem, CourseItemTypeEnum, CourseSection
 from app.modules.course.repository import CourseRepository
@@ -547,8 +550,15 @@ class CourseContentService:
         if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found for this item")
 
+        question, options = await self._create_quiz_question(assessment.id, payload)
+        await self.session.commit()
+        return question, options
+
+    async def _create_quiz_question(
+        self, assessment_id: uuid.UUID, payload: QuizQuestionCreateDTO
+    ) -> tuple[CourseQuizQuestion, list[CourseQuizOption]]:
         question = CourseQuizQuestion(
-            assessment_id=assessment.id,
+            assessment_id=assessment_id,
             text=payload.text,
             order_index=payload.order_index,
             allow_multiple_answers=payload.allow_multiple_answers,
@@ -567,8 +577,69 @@ class CourseContentService:
             self.session.add(option)
         await self.session.flush()
 
-        await self.session.commit()
         return question, options
+
+    async def autocomplete_quiz_from_document(
+        self,
+        item_id: uuid.UUID,
+        *,
+        file_name: str,
+        content_type: str | None,
+        file_bytes: bytes,
+        question_count: int,
+        options_per_question: int,
+        persist: bool,
+        current_user: User,
+    ) -> QuizAIAutocompleteResponseDTO:
+        course, section, item = await self._authorize_item(item_id, current_user)
+        assessment = await self.repo.get_assessment_by_item(item.id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found for this item")
+
+        extracted_text = extract_assessment_text(file_name, content_type, file_bytes)
+        generated = await generate_quiz_questions_from_text(
+            source_text=extracted_text,
+            question_count=question_count,
+            options_per_question=options_per_question,
+            course_title=course.title,
+            section_title=section.title,
+            item_title=item.title,
+        )
+
+        created_question_dtos: list[CourseQuizQuestionManageDTO] = []
+        if persist:
+            for payload in generated.questions:
+                question, created_options = await self._create_quiz_question(assessment.id, payload)
+                created_question_dtos.append(
+                    CourseQuizQuestionManageDTO(
+                        id=question.id,
+                        text=question.text,
+                        order_index=question.order_index,
+                        allow_multiple_answers=question.allow_multiple_answers,
+                        multi_answer_mode=question.multi_answer_mode,
+                        options=[
+                            CourseQuizOptionManageDTO(
+                                id=option.id,
+                                text=option.text,
+                                order_index=option.order_index,
+                                is_correct=option.is_correct,
+                            )
+                            for option in created_options
+                        ],
+                    )
+                )
+            course.content_updated_at = datetime.now(timezone.utc)
+            await self.session.commit()
+
+        return QuizAIAutocompleteResponseDTO(
+            source_file_name=file_name,
+            source_mime_type=content_type,
+            extracted_text_preview=extracted_text[:1000],
+            model=settings.gemini_model,
+            persisted=persist,
+            generated_questions=generated.questions,
+            created_questions=created_question_dtos,
+        )
 
     @staticmethod
     def _resolve_multi_answer_mode(

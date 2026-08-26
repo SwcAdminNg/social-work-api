@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.api_route import NoNullAPIRoute
@@ -27,6 +27,7 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    QuizAIAutocompleteResponseDTO,
     QuizGroupSectionCreateDTO,
     QuizGroupSectionUpdateDTO,
     QuizOptionCreateDTO,
@@ -795,6 +796,34 @@ async def create_quiz_question(
         multi_answer_mode=question.multi_answer_mode, options=options,
     )
     return ApiResponse(message="Question created successfully", data=data)
+
+
+@router.post(
+    "/items/{item_id}/quiz/ai-autocomplete",
+    response_model=ApiResponse[QuizAIAutocompleteResponseDTO],
+    summary="Upload a PDF/DOCX assessment and use Gemini to generate quiz questions "
+    "(admin or owning instructor)",
+)
+async def autocomplete_quiz_from_document(
+    item_id: uuid.UUID,
+    file: UploadFile = File(...),
+    question_count: int = Form(default=10, ge=1, le=50),
+    options_per_question: int = Form(default=4, ge=2, le=6),
+    persist: bool = Form(default=True),
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizAIAutocompleteResponseDTO]:
+    data = await CourseContentService(db).autocomplete_quiz_from_document(
+        item_id,
+        file_name=file.filename or "assessment",
+        content_type=file.content_type,
+        file_bytes=await file.read(),
+        question_count=question_count,
+        options_per_question=options_per_question,
+        persist=persist,
+        current_user=current_user,
+    )
+    return ApiResponse(message="Quiz generated successfully", data=data)
 
 
 @router.patch(

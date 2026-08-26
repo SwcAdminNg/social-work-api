@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
     support_escalation_minutes: int = 5
 
+    # Gemini-powered assessment authoring
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.7-flash"
+    gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_timeout_seconds: int = 60
+    assessment_ai_max_file_size_bytes: int = 10 * 1024 * 1024
+    assessment_ai_max_input_chars: int = 40000
+
 
     @property
     def database_url(self) -> str:

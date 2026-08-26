@@ -1,0 +1,292 @@
+import io
+import json
+import re
+from typing import Any
+
+import httpx
+from docx import Document
+from fastapi import HTTPException, status
+from pydantic import BaseModel, Field, ValidationError
+from pypdf import PdfReader
+
+from app.core.config import settings
+from app.modules.course.content_dto import QuizOptionCreateDTO, QuizQuestionCreateDTO
+from app.modules.course.content_entity import MultiAnswerModeEnum
+
+
+PDF_CONTENT_TYPE = "application/pdf"
+DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+class QuizAIGenerationResult(BaseModel):
+    questions: list[QuizQuestionCreateDTO] = Field(default_factory=list)
+
+
+def extract_assessment_text(file_name: str, content_type: str | None, data: bytes) -> str:
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded assessment document is empty")
+
+    if len(data) > settings.assessment_ai_max_file_size_bytes:
+        max_mb = settings.assessment_ai_max_file_size_bytes // (1024 * 1024)
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"Assessment document must be {max_mb}MB or smaller")
+
+    extension = _file_extension(file_name)
+    normalized_content_type = (content_type or "").split(";")[0].strip().lower()
+    is_pdf = extension == ".pdf" or normalized_content_type == PDF_CONTENT_TYPE
+    is_docx = extension == ".docx" or normalized_content_type == DOCX_CONTENT_TYPE
+
+    if is_pdf:
+        text = _extract_pdf_text(data)
+    elif is_docx:
+        text = _extract_docx_text(data)
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only PDF and DOCX assessment documents are supported")
+
+    normalized = _normalize_text(text)
+    if not normalized:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No readable text was found in the document. Scanned PDFs need OCR before upload.",
+        )
+
+    return normalized[: settings.assessment_ai_max_input_chars]
+
+
+async def generate_quiz_questions_from_text(
+    *,
+    source_text: str,
+    question_count: int,
+    options_per_question: int,
+    course_title: str,
+    section_title: str,
+    item_title: str,
+) -> QuizAIGenerationResult:
+    if not settings.gemini_api_key:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "GEMINI_API_KEY is not configured")
+
+    payload = _build_gemini_payload(
+        source_text=source_text,
+        question_count=question_count,
+        options_per_question=options_per_question,
+        course_title=course_title,
+        section_title=section_title,
+        item_title=item_title,
+    )
+
+    model = _normalize_model_name(settings.gemini_model)
+    url = f"{settings.gemini_api_base_url.rstrip('/')}/{model}:generateContent"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
+            response = await client.post(url, params={"key": settings.gemini_api_key}, json=payload)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = _gemini_error_message(exc.response)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Gemini could not generate quiz questions: {detail}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini request failed") from exc
+
+    response_text = _extract_gemini_text(response.json())
+    return _validate_generation(response_text, question_count, options_per_question)
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not read the PDF assessment document") from exc
+
+
+def _extract_docx_text(data: bytes) -> str:
+    try:
+        document = Document(io.BytesIO(data))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Could not read the DOCX assessment document") from exc
+
+    parts = [paragraph.text for paragraph in document.paragraphs]
+    for table in document.tables:
+        for row in table.rows:
+            parts.append(" | ".join(cell.text for cell in row.cells))
+    return "\n".join(parts)
+
+
+def _normalize_text(text: str) -> str:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _file_extension(file_name: str) -> str:
+    lower_name = (file_name or "").lower()
+    if lower_name.endswith(".pdf"):
+        return ".pdf"
+    if lower_name.endswith(".docx"):
+        return ".docx"
+    return ""
+
+
+def _normalize_model_name(model: str) -> str:
+    model = (model or "gemini-3.7-flash").strip()
+    return model if model.startswith("models/") else f"models/{model}"
+
+
+def _build_gemini_payload(
+    *,
+    source_text: str,
+    question_count: int,
+    options_per_question: int,
+    course_title: str,
+    section_title: str,
+    item_title: str,
+) -> dict[str, Any]:
+    prompt = f"""
+Create a high-quality multiple-choice quiz from the assessment document text.
+
+Course: {course_title}
+Module: {section_title}
+Assessment item: {item_title}
+
+Rules:
+- Generate exactly {question_count} questions unless the document has too little material.
+- Each question must test meaningful understanding, not wording trivia.
+- Each question must have exactly {options_per_question} answer options.
+- Most questions should have one correct answer. Use multiple correct answers only when the source clearly supports it.
+- For a single-correct question, set allow_multiple_answers=false and exactly one option is_correct=true.
+- For a multi-correct question, set allow_multiple_answers=true, multi_answer_mode="OR", and at least two options are is_correct=true.
+- Do not invent facts that are not supported by the document.
+- Keep wording clear for social work learners.
+
+Assessment document text:
+{source_text}
+""".strip()
+
+    return {
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": (
+                        "You are an expert assessment designer. Return only valid JSON that matches the schema. "
+                        "Do not include markdown, commentary, citations, or explanations."
+                    )
+                }
+            ]
+        },
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.25,
+            "responseMimeType": "application/json",
+            "responseSchema": _quiz_response_schema(question_count, options_per_question),
+        },
+    }
+
+
+def _quiz_response_schema(question_count: int, options_per_question: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": question_count,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "order_index": {"type": "integer"},
+                        "allow_multiple_answers": {"type": "boolean"},
+                        "multi_answer_mode": {"type": "string", "enum": ["AND", "OR"]},
+                        "options": {
+                            "type": "array",
+                            "minItems": options_per_question,
+                            "maxItems": options_per_question,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "is_correct": {"type": "boolean"},
+                                    "order_index": {"type": "integer"},
+                                },
+                                "required": ["text", "is_correct", "order_index"],
+                            },
+                        },
+                    },
+                    "required": ["text", "order_index", "allow_multiple_answers", "options"],
+                },
+            }
+        },
+        "required": ["questions"],
+    }
+
+
+def _extract_gemini_text(payload: dict[str, Any]) -> str:
+    candidates = payload.get("candidates") or []
+    for candidate in candidates:
+        content = candidate.get("content") or {}
+        for part in content.get("parts") or []:
+            text = part.get("text")
+            if text:
+                return text
+    raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini returned no quiz content")
+
+
+def _validate_generation(response_text: str, question_count: int, options_per_question: int) -> QuizAIGenerationResult:
+    try:
+        raw = json.loads(_strip_json_fence(response_text))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini returned invalid JSON") from exc
+
+    try:
+        generated = QuizAIGenerationResult.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini returned quiz data in an unexpected shape") from exc
+
+    if not generated.questions:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini did not generate any quiz questions")
+
+    normalized_questions: list[QuizQuestionCreateDTO] = []
+    for question_index, question in enumerate(generated.questions[:question_count]):
+        options = question.options[:options_per_question]
+        if len(options) < 2:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini generated a question with too few options")
+
+        correct_count = sum(1 for option in options if option.is_correct)
+        if correct_count == 0:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Gemini generated a question with no correct answer")
+
+        allow_multiple_answers = correct_count > 1
+        normalized_options = [
+            QuizOptionCreateDTO(
+                text=option.text.strip(),
+                is_correct=option.is_correct,
+                order_index=option_index,
+            )
+            for option_index, option in enumerate(options)
+        ]
+        normalized_questions.append(
+            QuizQuestionCreateDTO(
+                text=question.text.strip(),
+                order_index=question_index,
+                allow_multiple_answers=allow_multiple_answers,
+                multi_answer_mode=MultiAnswerModeEnum.OR if allow_multiple_answers else None,
+                options=normalized_options,
+            )
+        )
+
+    return QuizAIGenerationResult(questions=normalized_questions)
+
+
+def _strip_json_fence(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    return stripped.strip()
+
+
+def _gemini_error_message(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text[:300] or response.reason_phrase
+    error = payload.get("error") or {}
+    return error.get("message") or response.reason_phrase

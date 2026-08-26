@@ -265,6 +265,16 @@ class CourseQuizQuestionManageDTO(BaseDTO):
     options: list[CourseQuizOptionManageDTO]
 
 
+class QuizAIAutocompleteResponseDTO(BaseDTO):
+    source_file_name: str
+    source_mime_type: str | None = None
+    extracted_text_preview: str
+    model: str
+    persisted: bool
+    generated_questions: list[QuizQuestionCreateDTO]
+    created_questions: list[CourseQuizQuestionManageDTO] = Field(default_factory=list)
+
+
 class CourseQuizDetailDTO(BaseDTO):
     max_attempts: int | None
     pass_mark_percentage: int

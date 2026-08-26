@@ -433,6 +433,98 @@ for update/delete, matching the pattern used elsewhere in this API.
 
 ---
 
+## 5a. AI autocomplete from PDF/DOCX
+
+**`POST /courses/items/{item_id}/quiz/ai-autocomplete`**
+
+Upload an existing assessment document and let Gemini extract the readable text and generate
+quiz questions/options for an existing standalone `QUIZ` item. The user must be an admin or the
+owning instructor. This endpoint does not support `ESSAY` or `QUIZ_GROUP` items yet.
+
+Content type: `multipart/form-data`
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `file` | PDF or DOCX file | required | Max size defaults to 10MB. Scanned PDFs must be OCR'd first. |
+| `question_count` | int, 1-50 | `10` | The target number of generated questions. Gemini may return fewer if the document is thin. |
+| `options_per_question` | int, 2-6 | `4` | Every generated question gets this many options. |
+| `persist` | bool | `true` | If `true`, generated questions are saved immediately. If `false`, the response is preview-only. |
+
+Example:
+
+```http
+POST /courses/items/{item_id}/quiz/ai-autocomplete
+Content-Type: multipart/form-data
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "message": "Quiz generated successfully",
+  "data": {
+    "source_file_name": "module-1-assessment.pdf",
+    "source_mime_type": "application/pdf",
+    "extracted_text_preview": "Readable text extracted from the document...",
+    "model": "gemini-3.7-flash",
+    "persisted": true,
+    "generated_questions": [
+      {
+        "text": "Which action best reflects trauma-informed practice?",
+        "order_index": 0,
+        "allow_multiple_answers": false,
+        "options": [
+          { "text": "Prioritizing safety and consent", "is_correct": true, "order_index": 0 },
+          { "text": "Pressuring the client to disclose", "is_correct": false, "order_index": 1 },
+          { "text": "Ignoring cultural context", "is_correct": false, "order_index": 2 },
+          { "text": "Making decisions without the client", "is_correct": false, "order_index": 3 }
+        ]
+      }
+    ],
+    "created_questions": [
+      {
+        "id": "question-uuid",
+        "text": "Which action best reflects trauma-informed practice?",
+        "order_index": 0,
+        "allow_multiple_answers": false,
+        "options": [
+          { "id": "option-uuid", "text": "Prioritizing safety and consent", "order_index": 0, "is_correct": true }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Environment required:
+
+```dotenv
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-3.7-flash
+```
+
+Optional limits/config:
+
+```dotenv
+GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_TIMEOUT_SECONDS=60
+ASSESSMENT_AI_MAX_FILE_SIZE_BYTES=10485760
+ASSESSMENT_AI_MAX_INPUT_CHARS=40000
+```
+
+Error responses to handle:
+
+| Status | When |
+|---|---|
+| `400` | Unsupported file type, unreadable/corrupt document, empty document, or no extractable text. |
+| `404` | `item_id` is not a standalone quiz item. |
+| `413` | Uploaded file exceeds `ASSESSMENT_AI_MAX_FILE_SIZE_BYTES`. |
+| `500` | `GEMINI_API_KEY` is not configured. |
+| `502` | Gemini request failed, timed out, or returned invalid quiz JSON. |
+
+---
+
 ## 5b. Quiz group sections (nested quizzes)
 
 A `QUIZ_GROUP` assessment is a set of named **sections** — each one is its own mini quiz with its
