@@ -42,7 +42,6 @@ from app.modules.support.dto import (
     SupportTicketReadDTO,
     SupportTicketStatusUpdateDTO,
 )
-from app.modules.support.entity import SupportTicketStatusEnum
 from app.modules.support.service import FAQService, SupportService
 from app.modules.support.staff import is_support_staff
 from app.modules.support.ws_manager import ticket_channel

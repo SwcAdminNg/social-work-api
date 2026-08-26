@@ -34,10 +34,13 @@ Base URL prefix: `/support`.
 ## 2. Ticket queue
 
 ```
-GET /support/tickets?status=OPEN&assigned_admin_id=<uuid>&page=1&page_size=20
+GET /support/tickets?status=OPEN&assigned_admin_id=<uuid>&search=ada&start_date=2026-08-01&end_date=2026-08-31&page=1&page_size=20
 ```
 
-Both filters are optional. `status` is one of `OPEN` / `IN_PROGRESS` / `RESOLVED` / `CLOSED`.
+All filters are optional. `status` is one of `OPEN` / `IN_PROGRESS` / `RESOLVED` / `CLOSED`.
+`search` matches the ticket subject or the requester's username, first name, last name, full name,
+email, or phone number. `start_date` and `end_date` filter by ticket creation date; the end date
+includes the entire day.
 
 | Method | Path | Description |
 |---|---|---|

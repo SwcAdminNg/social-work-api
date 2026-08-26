@@ -1,11 +1,13 @@
 import uuid
+from datetime import datetime, time, timedelta
 from typing import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
+from app.modules.support.dto import SupportTicketFilterParams
 from app.modules.support.entity import (
     FAQCategory,
     FAQItem,
@@ -13,6 +15,7 @@ from app.modules.support.entity import (
     SupportTicket,
     SupportTicketStatusEnum,
 )
+from app.modules.user.entity import User
 
 
 class FAQCategoryRepository(BaseRepository[FAQCategory]):
@@ -60,14 +63,38 @@ class SupportTicketRepository(BaseRepository[SupportTicket]):
     async def list_for_admin(
         self,
         pagination: PaginationParams,
-        status: SupportTicketStatusEnum | None = None,
-        assigned_admin_id: uuid.UUID | None = None,
+        filters: SupportTicketFilterParams | None = None,
     ) -> tuple[Sequence[SupportTicket], int]:
         stmt = self._base_select()
-        if status is not None:
-            stmt = stmt.where(SupportTicket.status == status)
-        if assigned_admin_id is not None:
-            stmt = stmt.where(SupportTicket.assigned_admin_id == assigned_admin_id)
+
+        if filters is not None:
+            if filters.status is not None:
+                stmt = stmt.where(SupportTicket.status == filters.status)
+            if filters.assigned_admin_id is not None:
+                stmt = stmt.where(SupportTicket.assigned_admin_id == filters.assigned_admin_id)
+            if filters.search is not None:
+                term = f"%{filters.search}%"
+                stmt = stmt.join(User, SupportTicket.user_id == User.id).where(
+                    or_(
+                        SupportTicket.subject.ilike(term),
+                        User.username.ilike(term),
+                        User.first_name.ilike(term),
+                        User.last_name.ilike(term),
+                        func.concat(User.first_name, " ", User.last_name).ilike(term),
+                        User.email.ilike(term),
+                        User.phone_number.ilike(term),
+                    )
+                )
+            if filters.start_date is not None:
+                stmt = stmt.where(
+                    SupportTicket.created_at >= datetime.combine(filters.start_date, time.min)
+                )
+            if filters.end_date is not None:
+                stmt = stmt.where(
+                    SupportTicket.created_at
+                    < datetime.combine(filters.end_date, time.min) + timedelta(days=1)
+                )
+
         stmt = stmt.order_by(SupportTicket.created_at.desc())
 
         total = (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
