@@ -87,6 +87,10 @@ class CourseContentRepository:
         stmt = select(CourseAssessment).where(CourseAssessment.course_item_id == item_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_assessment(self, assessment_id: uuid.UUID) -> CourseAssessment | None:
+        stmt = select(CourseAssessment).where(CourseAssessment.id == assessment_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_assessments_for_items(self, item_ids: Sequence[uuid.UUID]) -> Sequence[CourseAssessment]:
         if not item_ids:
             return []

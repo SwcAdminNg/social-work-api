@@ -550,6 +550,56 @@ async def create_quiz_group_question(
     return ApiResponse(message="Question created successfully", data=data)
 
 
+@router.post(
+    "/quiz-group/sections/{section_id}/ai-autocomplete",
+    response_model=ApiResponse[QuizAIAutocompleteResponseDTO],
+    summary="Upload a PDF/DOCX assessment and use a selected AI provider to generate quiz questions for a group section "
+    "(admin or owning instructor)",
+)
+async def autocomplete_quiz_from_document_for_group_section(
+    section_id: uuid.UUID,
+    file: UploadFile = File(...),
+    question_count: int = Form(default=10, ge=1, le=50),
+    options_per_question: int = Form(default=4, ge=2, le=6),
+    persist: bool = Form(default=True),
+    provider: AssessmentAIProviderEnum = Form(default=AssessmentAIProviderEnum.GEMINI),
+    model: str | None = Form(default=None, min_length=1, max_length=100),
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizAIAutocompleteResponseDTO]:
+    data = await CourseContentService(db).autocomplete_quiz_from_document_for_group_section(
+        section_id,
+        file_name=file.filename or "assessment",
+        content_type=file.content_type,
+        file_bytes=await file.read(),
+        question_count=question_count,
+        options_per_question=options_per_question,
+        persist=persist,
+        provider=provider,
+        model=model,
+        current_user=current_user,
+    )
+    return ApiResponse(message="Quiz generated successfully", data=data)
+
+
+@router.post(
+    "/quiz-group/sections/{section_id}/ai-generate",
+    response_model=ApiResponse[QuizAIGenerateResponseDTO],
+    summary="Use a selected AI provider to generate quiz questions from instructor-provided topics for a group section "
+    "(admin or owning instructor)",
+)
+async def generate_quiz_from_prompt_for_group_section(
+    section_id: uuid.UUID,
+    payload: QuizAIGenerateRequestDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizAIGenerateResponseDTO]:
+    data = await CourseContentService(db).generate_quiz_from_prompt_for_group_section(
+        section_id, payload, current_user
+    )
+    return ApiResponse(message="Quiz generated successfully", data=data)
+
+
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------

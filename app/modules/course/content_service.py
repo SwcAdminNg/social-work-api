@@ -522,27 +522,7 @@ class CourseContentService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
         await self._course_for_group_section(section, current_user)
 
-        question = CourseQuizQuestion(
-            assessment_id=section.assessment_id,
-            section_id=section.id,
-            text=payload.text,
-            order_index=payload.order_index,
-            allow_multiple_answers=payload.allow_multiple_answers,
-            multi_answer_mode=self._resolve_multi_answer_mode(
-                payload.allow_multiple_answers, payload.multi_answer_mode
-            ),
-        )
-        self.session.add(question)
-        await self.session.flush()
-
-        options = [
-            CourseQuizOption(question_id=question.id, **option_payload.model_dump())
-            for option_payload in payload.options
-        ]
-        for option in options:
-            self.session.add(option)
-        await self.session.flush()
-
+        question, options = await self._create_quiz_question(section.assessment_id, payload, section_id=section.id)
         await self.session.commit()
         return question, options
 
@@ -561,10 +541,11 @@ class CourseContentService:
         return question, options
 
     async def _create_quiz_question(
-        self, assessment_id: uuid.UUID, payload: QuizQuestionCreateDTO
+        self, assessment_id: uuid.UUID, payload: QuizQuestionCreateDTO, section_id: uuid.UUID | None = None
     ) -> tuple[CourseQuizQuestion, list[CourseQuizOption]]:
         question = CourseQuizQuestion(
             assessment_id=assessment_id,
+            section_id=section_id,
             text=payload.text,
             order_index=payload.order_index,
             allow_multiple_answers=payload.allow_multiple_answers,
@@ -665,19 +646,112 @@ class CourseContentService:
             created_questions=created_question_dtos,
         )
 
+    async def autocomplete_quiz_from_document_for_group_section(
+        self,
+        section_id: uuid.UUID,
+        *,
+        file_name: str,
+        content_type: str | None,
+        file_bytes: bytes,
+        question_count: int,
+        options_per_question: int,
+        persist: bool,
+        provider: AssessmentAIProviderEnum,
+        model: str | None,
+        current_user: User,
+    ) -> QuizAIAutocompleteResponseDTO:
+        group_section = await self.repo.get_quiz_group_section(section_id)
+        if group_section is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
+            
+        assessment = await self.repo.get_assessment(group_section.assessment_id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ_GROUP:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz group not found for this section")
+            
+        course, course_section, item = await self._authorize_item(assessment.course_item_id, current_user)
+
+        extracted_text = extract_assessment_text(file_name, content_type, file_bytes)
+        generated = await generate_quiz_questions_from_text(
+            source_text=extracted_text,
+            question_count=question_count,
+            options_per_question=options_per_question,
+            course_title=course.title,
+            section_title=course_section.title,
+            item_title=f"{item.title} ({group_section.title})",
+            provider=provider,
+            model=model,
+        )
+
+        created_question_dtos = await self._maybe_persist_generated_questions(
+            course, assessment.id, generated.questions, persist, section_id=group_section.id
+        )
+
+        return QuizAIAutocompleteResponseDTO(
+            source_file_name=file_name,
+            source_mime_type=content_type,
+            extracted_text_preview=extracted_text[:1000],
+            provider=generated.provider,
+            model=generated.model,
+            persisted=persist,
+            generated_questions=generated.questions,
+            created_questions=created_question_dtos,
+        )
+
+    async def generate_quiz_from_prompt_for_group_section(
+        self,
+        section_id: uuid.UUID,
+        payload: QuizAIGenerateRequestDTO,
+        current_user: User,
+    ) -> QuizAIGenerateResponseDTO:
+        group_section = await self.repo.get_quiz_group_section(section_id)
+        if group_section is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
+            
+        assessment = await self.repo.get_assessment(group_section.assessment_id)
+        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.QUIZ_GROUP:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz group not found for this section")
+            
+        course, course_section, item = await self._authorize_item(assessment.course_item_id, current_user)
+
+        generated = await generate_quiz_questions_from_prompt(
+            instructor_prompt=payload.prompt,
+            question_count=payload.question_count,
+            options_per_question=payload.options_per_question,
+            course_title=course.title,
+            section_title=course_section.title,
+            item_title=f"{item.title} ({group_section.title})",
+            provider=payload.provider,
+            model=payload.model,
+        )
+        
+        created_question_dtos = await self._maybe_persist_generated_questions(
+            course, assessment.id, generated.questions, payload.persist, section_id=group_section.id
+        )
+
+        return QuizAIGenerateResponseDTO(
+            prompt=payload.prompt,
+            provider=generated.provider,
+            model=generated.model,
+            persisted=payload.persist,
+            generated_questions=generated.questions,
+            created_questions=created_question_dtos,
+        )
+
+
     async def _maybe_persist_generated_questions(
         self,
         course: Course,
         assessment_id: uuid.UUID,
         questions: list[QuizQuestionCreateDTO],
         persist: bool,
+        section_id: uuid.UUID | None = None,
     ) -> list[CourseQuizQuestionManageDTO]:
         if not persist:
             return []
 
         created_question_dtos: list[CourseQuizQuestionManageDTO] = []
         for payload in questions:
-            question, created_options = await self._create_quiz_question(assessment_id, payload)
+            question, created_options = await self._create_quiz_question(assessment_id, payload, section_id=section_id)
             created_question_dtos.append(
                 CourseQuizQuestionManageDTO(
                     id=question.id,

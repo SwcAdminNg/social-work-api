@@ -435,7 +435,7 @@ for update/delete, matching the pattern used elsewhere in this API.
 
 ## 5a. AI-generated quiz questions
 
-There are two AI-powered authoring helpers for standalone `QUIZ` items:
+There are two AI-powered authoring helpers for standalone `QUIZ` items and `QUIZ_GROUP` sections:
 
 - `ai-generate`: create questions from an instructor prompt, topics, or learning outcomes.
 - `ai-autocomplete`: upload a PDF/DOCX and create questions from extracted document text.
@@ -456,11 +456,12 @@ You can also send a `model` override when the frontend wants to expose a provide
 
 ### 5a.1 Generate from a prompt
 
-**`POST /courses/items/{item_id}/quiz/ai-generate`**
+**`POST /courses/items/{item_id}/quiz/ai-generate`** (for a standalone QUIZ)
+**`POST /courses/quiz-group/sections/{section_id}/ai-generate`** (for a QUIZ_GROUP section)
 
 Use this when the instructor wants to say something like "Create questions on child protection,
 case notes, confidentiality, and ethical referrals". The user must be an admin or the owning
-instructor. This endpoint does not support `ESSAY` or `QUIZ_GROUP` items yet.
+instructor. This endpoint does not support `ESSAY` items.
 
 Request body:
 
@@ -517,11 +518,12 @@ When `persist=true`, `created_questions` contains the saved question/option IDs.
 
 ### 5a.2 Autocomplete from PDF/DOCX
 
-**`POST /courses/items/{item_id}/quiz/ai-autocomplete`**
+**`POST /courses/items/{item_id}/quiz/ai-autocomplete`** (for a standalone QUIZ)
+**`POST /courses/quiz-group/sections/{section_id}/ai-autocomplete`** (for a QUIZ_GROUP section)
 
 Upload an existing assessment document and let the selected AI provider generate
-quiz questions/options for an existing standalone `QUIZ` item. The user must be an admin or the
-owning instructor. This endpoint does not support `ESSAY` or `QUIZ_GROUP` items yet.
+quiz questions/options for an existing standalone `QUIZ` item or `QUIZ_GROUP` section. The user must be an admin or the
+owning instructor. This endpoint does not support `ESSAY` items.
 
 Content type: `multipart/form-data`
 
