@@ -92,10 +92,12 @@ class CommunityMessageCreateDTO(CreateDTO):
 
 class CommunityMessageQuoteDTO(BaseDTO):
     """Denormalized snippet of the message being replied to, so the client doesn't
-    need a second round-trip just to render the quoted preview."""
+    need a second round-trip - including a lookup on the parent's sender - just to
+    render the quoted preview (e.g. "Replying to Ada Obi: ...")."""
 
     id: uuid.UUID
     sender_id: uuid.UUID
+    sender: UserReadDTO | None = None
     body: str
     attachment_file_name: str | None = None
 

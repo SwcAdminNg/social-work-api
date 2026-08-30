@@ -132,9 +132,11 @@ class CommunityService:
         if message.reply_to_message_id is not None:
             parent = reply_parents.get(message.reply_to_message_id)
             if parent is not None:
+                parent_sender = senders.get(parent.sender_id)
                 reply_to = CommunityMessageQuoteDTO(
                     id=parent.id,
                     sender_id=parent.sender_id,
+                    sender=UserReadDTO.model_validate(parent_sender) if parent_sender else None,
                     body=parent.body,
                     attachment_file_name=parent.attachment_file_name,
                 )

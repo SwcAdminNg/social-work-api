@@ -88,7 +88,13 @@ Ordered **most recent first** — page 1 is the bottom of the chat. Load page 2,
       "sender": { "id": "72d94ca2-....", "first_name": "Femi", "...": "..." },
       "body": "Here you go!",
       "created_at": "2026-08-30T10:16:30Z",
-      "reply_to": { "id": "e5f6....", "sender_id": "8a3c1d2e-....", "body": "Does anyone have notes from last week's session?", "attachment_file_name": null },
+      "reply_to": {
+        "id": "e5f6....",
+        "sender_id": "8a3c1d2e-....",
+        "sender": { "id": "8a3c1d2e-....", "first_name": "Ada", "last_name": "Obi", "username": "ada.obi", "profile_picture_url": "https://...", "...": "..." },
+        "body": "Does anyone have notes from last week's session?",
+        "attachment_file_name": null
+      },
       "attachment_url": "https://pub-....r2.dev/communities/....pdf",
       "attachment_file_name": "week-4-notes.pdf",
       "attachment_mime_type": "application/pdf",
@@ -101,7 +107,7 @@ Ordered **most recent first** — page 1 is the bottom of the chat. Load page 2,
 }
 ```
 
-- **`reply_to`** is a denormalized snippet of the message being replied to (`id`, `sender_id`, `body`, `attachment_file_name`) — enough to render a quoted preview without a second request. `null` if the message isn't a reply.
+- **`reply_to`** is a denormalized snippet of the message being replied to (`id`, `sender_id`, `sender`, `body`, `attachment_file_name`) — including the parent's full `sender` (username, name, profile picture, same shape as any other `UserReadDTO`), so you can render "Replying to Ada Obi" with an avatar with no second request. `null` if the message isn't a reply; `sender` itself can be `null` in the rare case the original sender's account was hard-deleted.
 - **`attachment_kind`** is `"IMAGE"` or `"DOCUMENT"`, inferred from the MIME type — use it to decide whether to render an inline image preview or a file/download chip.
 - **`resource_reference`** is populated when the message shares a curriculum/library item — see §3.3.
 
