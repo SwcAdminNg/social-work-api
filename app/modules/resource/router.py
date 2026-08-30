@@ -284,6 +284,27 @@ async def list_resources(
 
 
 @router.get(
+    "/courses/{course_id}",
+    response_model=PaginatedResponse[ResourceReadDTO],
+    summary="List published resources tied to a specific course (public, optional auth)",
+)
+async def list_resources_for_course(
+    course_id: uuid.UUID,
+    pagination: PaginationParams = Depends(),
+    current_user: User | None = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[ResourceReadDTO]:
+    service = ResourceService(db)
+    filters = ResourceFilterParams(category=None, course_id=course_id, search=None)
+    items, total = await service.list_published(pagination, filters)
+    data = PaginatedResponse.create(
+        items=[ResourceReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
+    )
+    await service.attach_access(data.data, current_user)
+    return data
+
+
+@router.get(
     "/{slug}",
     response_model=ApiResponse[ResourceDetailDTO],
     summary="Get a published resource by slug (public). Attachments are populated only when "
