@@ -150,6 +150,13 @@ class CourseReadDTO(AuditDTO):
     )
     is_bookmarked: bool = False
     is_enrolled: bool = False
+    is_completed: bool = Field(
+        default=False,
+        description="True when the current user has completed this course. Always false when "
+        "not authenticated or not enrolled - mirrors `progress_status == COMPLETED` but as a "
+        "plain boolean for frontends that just need a completion check (e.g. to show 'View "
+        "Course' instead of 'Enroll').",
+    )
     progress_status: CourseProgressStatusEnum | None = Field(
         default=None,
         description="The current user's progress on this course. Only set when the "

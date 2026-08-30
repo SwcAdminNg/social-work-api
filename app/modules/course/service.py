@@ -154,8 +154,8 @@ class CourseService:
         return {cid: progress_by_course.get(cid) for cid in enrolled_ids}
 
     async def attach_progress_status(self, dtos, user: User) -> None:
-        """Sets `progress_status` and `has_new_content` on each CourseReadDTO (or
-        subclass) in place. `has_new_content` compares the course's
+        """Sets `progress_status`, `is_completed`, and `has_new_content` on each
+        CourseReadDTO (or subclass) in place. `has_new_content` compares the course's
         `content_updated_at` (already populated on the dto) against this user's
         `UserCourseProgress.last_accessed_at` - true means there's curriculum
         content added since they were last in the course."""
@@ -168,6 +168,7 @@ class CourseService:
             progress = progress_map[dto.id]
             if progress and progress.is_completed:
                 dto.progress_status = CourseProgressStatusEnum.COMPLETED
+                dto.is_completed = True
             elif progress and progress.progress_percent > 0:
                 dto.progress_status = CourseProgressStatusEnum.IN_PROGRESS
             else:

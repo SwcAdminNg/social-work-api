@@ -367,6 +367,9 @@ async def get_manage_course(
     course_read = CourseReadDTO.model_validate(course)
     await service.attach_instructors([course_read])
     await service.attach_estimated_time([course_read])
+    enrolled_ids, _ = await service.get_course_access_details(current_user, [course.id])
+    course_read.is_enrolled = course.id in enrolled_ids
+    await service.attach_progress_status([course_read], current_user)
     data = CourseManageDetailDTO(**course_read.model_dump(), sections=sections)
     return ApiResponse(message="Course retrieved successfully", data=data)
 
