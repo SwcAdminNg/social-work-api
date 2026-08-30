@@ -39,6 +39,7 @@ class SavedCardResponse(BaseModel):
     exp_year: str
     card_type: str
     bank: str | None
+    is_default: bool
 
 
 class SubscriptionPlanResponse(BaseModel):

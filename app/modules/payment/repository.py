@@ -29,11 +29,26 @@ class PaymentRepository:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_saved_card_by_id(self, card_id: uuid.UUID) -> SavedCard | None:
-        return await self.session.get(SavedCard, card_id)
+        stmt = select(SavedCard).where(SavedCard.id == card_id, SavedCard.deleted_at.is_(None))
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def list_user_saved_cards(self, user_id: uuid.UUID) -> Sequence[SavedCard]:
-        stmt = select(SavedCard).where(SavedCard.user_id == user_id)
+        stmt = (
+            select(SavedCard)
+            .where(SavedCard.user_id == user_id, SavedCard.deleted_at.is_(None))
+            .order_by(SavedCard.is_default.desc(), SavedCard.created_at.desc())
+        )
         return (await self.session.execute(stmt)).scalars().all()
+
+    async def unset_default_cards(self, user_id: uuid.UUID) -> None:
+        stmt = select(SavedCard).where(
+            SavedCard.user_id == user_id,
+            SavedCard.is_default.is_(True),
+            SavedCard.deleted_at.is_(None),
+        )
+        cards = (await self.session.execute(stmt)).scalars().all()
+        for card in cards:
+            card.is_default = False
 
     async def list_transactions(
         self, pagination
@@ -137,8 +152,8 @@ class PaymentRepository:
     async def get_default_saved_card(self, user_id: uuid.UUID) -> SavedCard | None:
         stmt = (
             select(SavedCard)
-            .where(SavedCard.user_id == user_id)
-            .order_by(SavedCard.created_at.desc())
+            .where(SavedCard.user_id == user_id, SavedCard.deleted_at.is_(None))
+            .order_by(SavedCard.is_default.desc(), SavedCard.created_at.desc())
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()

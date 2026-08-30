@@ -113,6 +113,35 @@ async def list_saved_cards(
     return ApiResponse(message="Saved cards retrieved", data=data)
 
 
+@router.delete(
+    "/cards/{card_id}",
+    response_model=ApiResponse[None],
+    summary="Delete a saved card",
+)
+async def delete_saved_card(
+    card_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await PaymentService(db).delete_saved_card(card_id, current_user)
+    return ApiResponse(message="Card deleted successfully")
+
+
+@router.post(
+    "/cards/{card_id}/default",
+    response_model=ApiResponse[SavedCardResponse],
+    summary="Set a saved card as the default for future charges",
+)
+async def set_default_card(
+    card_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[SavedCardResponse]:
+    card = await PaymentService(db).set_default_card(card_id, current_user)
+    data = SavedCardResponse.model_validate(card, from_attributes=True)
+    return ApiResponse(message="Default card updated", data=data)
+
+
 @router.get(
     "/plans",
     response_model=ApiResponse[list[SubscriptionPlanResponse]],

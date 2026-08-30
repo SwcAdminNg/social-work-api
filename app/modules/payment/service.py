@@ -274,7 +274,9 @@ class PaymentService:
             existing = (await self.session.execute(stmt)).scalar_one_or_none()
             if existing:
                 return existing
-        
+
+        existing_cards = await self.repo.list_user_saved_cards(user_id)
+
         card = SavedCard(
             user_id=user_id,
             gateway=gateway,
@@ -285,8 +287,35 @@ class PaymentService:
             card_type=str(auth_data.get("card_type", "unknown")),
             bank=str(auth_data.get("bank", "")) if auth_data.get("bank") else None,
             signature=signature,
+            is_default=len(existing_cards) == 0,
         )
         self.session.add(card)
+        return card
+
+    async def delete_saved_card(self, card_id: uuid.UUID, user: User) -> None:
+        card = await self.repo.get_saved_card_by_id(card_id)
+        if not card or card.user_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Saved card not found")
+
+        was_default = card.is_default
+        card.mark_deleted(user.id)
+        await self.session.flush()
+
+        if was_default:
+            remaining = await self.repo.list_user_saved_cards(user.id)
+            if remaining:
+                remaining[0].is_default = True
+
+        await self.session.commit()
+
+    async def set_default_card(self, card_id: uuid.UUID, user: User) -> SavedCard:
+        card = await self.repo.get_saved_card_by_id(card_id)
+        if not card or card.user_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Saved card not found")
+
+        await self.repo.unset_default_cards(user.id)
+        card.is_default = True
+        await self.session.commit()
         return card
 
     async def get_current_subscription(self, user_id: uuid.UUID) -> UserSubscription | None:

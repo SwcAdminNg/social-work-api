@@ -95,3 +95,4 @@ class SavedCard(BaseEntity):
     card_type: Mapped[str] = mapped_column(String(50), nullable=False)
     bank: Mapped[str | None] = mapped_column(String(100), nullable=True)
     signature: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
