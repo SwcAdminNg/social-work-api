@@ -26,6 +26,7 @@ from app.modules.course.dto import (
     CourseCatalogUpdateDTO,
     PublicCourseCatalogReadDTO,
 )
+from app.modules.community.entity import Community, CommunityTypeEnum
 from app.modules.course.entity import Course, CourseAccessModeEnum, CourseItem, CourseSection, CourseCatalog
 from app.modules.course.instructor_entity import CourseInstructor
 from app.modules.course.repository import CourseRepository, CourseCatalogRepository
@@ -83,6 +84,11 @@ class CourseService:
         )
         await self.repository.create(course)
         await self._replace_instructors(course, payload.instructors, instructor)
+        # Every course is automatically a community for its enrollees/instructors -
+        # create it eagerly here (same transaction) rather than lazily on first
+        # access, so nothing that touches "this course's community" ever needs to
+        # handle a missing row / race a concurrent get-or-create.
+        self.session.add(Community(type=CommunityTypeEnum.COURSE, course_id=course.id, name=course.title))
         await self.session.commit()
         return course
 

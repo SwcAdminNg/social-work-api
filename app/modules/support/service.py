@@ -10,8 +10,9 @@ from app.core.config import settings
 from app.core.email import email_service
 from app.core.qstash import get_qstash_client
 from app.core.storage import get_r2_client
+from app.core import presence
+from app.core.ws_pubsub import channel_name, publish_event
 from app.modules.group.repository import GroupMembershipRepository, GroupRepository
-from app.modules.support import presence
 from app.modules.support.dto import (
     FAQCategoryCreateDTO,
     FAQCategoryUpdateDTO,
@@ -44,12 +45,22 @@ from app.modules.support.repository import (
     SupportTicketRepository,
 )
 from app.modules.support.staff import SUPPORT_DESK_GROUP_NAME, is_support_staff
-from app.modules.support.ws_manager import publish_ticket_event
 from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
 
 logger = logging.getLogger(__name__)
+
+_PRESENCE_NAMESPACE = "support"
+_TICKET_CHANNEL_NAMESPACE = "support:ticket"
+
+
+def ticket_channel(ticket_id: uuid.UUID) -> str:
+    return channel_name(_TICKET_CHANNEL_NAMESPACE, ticket_id)
+
+
+async def publish_ticket_event(ticket_id: uuid.UUID, event: dict) -> None:
+    await publish_event(_TICKET_CHANNEL_NAMESPACE, ticket_id, event)
 
 
 class FAQService:
@@ -390,7 +401,7 @@ class SupportService:
             return
 
         member_ids = await self.membership_repo.get_active_user_ids_in_group(group.id)
-        staff_online = await presence.any_online(member_ids)
+        staff_online = await presence.any_online(_PRESENCE_NAMESPACE, member_ids)
 
         if not staff_online and ticket.escalated_at is None:
             await self._send_escalation_email(ticket, member_ids)

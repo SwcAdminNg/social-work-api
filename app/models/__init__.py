@@ -29,3 +29,5 @@ from app.modules.learning.entity import (  # noqa: F401
 from app.modules.certificate.entity import Certificate, CertificateTemplate  # noqa: F401
 from app.modules.group.entity import Group, GroupMembership  # noqa: F401
 from app.modules.support.entity import FAQCategory, FAQItem, SupportMessage, SupportTicket  # noqa: F401
+from app.modules.resource.entity import Resource  # noqa: F401
+from app.modules.community.entity import Community, CommunityMembership, CommunityMessage  # noqa: F401

@@ -18,10 +18,10 @@ import app.core.cache as cache_module
 from app.common.api_route import NoNullAPIRoute
 from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
+from app.core import presence
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.qstash import verify_qstash_signature
 from app.modules.auth.dependencies import get_current_admin_user, get_current_user, get_user_from_token
-from app.modules.support import presence
 from app.modules.support.dependencies import get_current_support_staff
 from app.modules.support.dto import (
     FAQCategoryCreateDTO,
@@ -42,12 +42,13 @@ from app.modules.support.dto import (
     SupportTicketReadDTO,
     SupportTicketStatusUpdateDTO,
 )
-from app.modules.support.service import FAQService, SupportService
+from app.modules.support.service import FAQService, SupportService, ticket_channel
 from app.modules.support.staff import is_support_staff
-from app.modules.support.ws_manager import ticket_channel
 from app.modules.user.entity import User
 
 router = APIRouter(prefix="/support", tags=["Support"], route_class=NoNullAPIRoute)
+
+_PRESENCE_NAMESPACE = "support"
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +337,7 @@ async def rate_ticket(
     "with the ticket queue open but no specific ticket socket connected)",
 )
 async def presence_heartbeat(current_user: User = Depends(get_current_user)) -> ApiResponse[None]:
-    await presence.mark_online(current_user.id)
+    await presence.mark_online(_PRESENCE_NAMESPACE, current_user.id)
     return ApiResponse(message="Presence updated successfully")
 
 
@@ -362,7 +363,7 @@ async def ticket_chat_ws(websocket: WebSocket, ticket_id: uuid.UUID, token: str 
             return
 
     await websocket.accept()
-    await presence.mark_online(user.id)
+    await presence.mark_online(_PRESENCE_NAMESPACE, user.id)
 
     async def reader() -> None:
         # HTTPException (e.g. 409 "ticket is closed") and pydantic ValidationError
@@ -378,7 +379,7 @@ async def ticket_chat_ws(websocket: WebSocket, ticket_id: uuid.UUID, token: str 
                     payload = json.loads(raw)
                 except (TypeError, ValueError):
                     continue
-                await presence.mark_online(user.id)
+                await presence.mark_online(_PRESENCE_NAMESPACE, user.id)
                 if payload.get("type") == "ping":
                     continue
                 if payload.get("type") != "message":
@@ -425,7 +426,7 @@ async def ticket_chat_ws(websocket: WebSocket, ticket_id: uuid.UUID, token: str 
     finally:
         for task in tasks:
             task.cancel()
-        await presence.mark_offline(user.id)
+        await presence.mark_offline(_PRESENCE_NAMESPACE, user.id)
 
 
 # ---------------------------------------------------------------------------

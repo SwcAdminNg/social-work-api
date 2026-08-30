@@ -3,7 +3,7 @@ import uuid
 from fastapi import Query
 from pydantic import Field, model_validator
 
-from app.common.base_dto import AuditDTO, CreateDTO, UpdateDTO
+from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.resource.entity import ResourceCategoryEnum, ResourceVisibilityEnum
 
 
@@ -97,3 +97,15 @@ class ResourceThumbnailUploadRequest(CreateDTO):
 class ResourceThumbnailUploadResponse(CreateDTO):
     upload_url: str
     thumbnail_url: str
+
+
+class ResourceCardDTO(BaseDTO):
+    """Small projection used when a Resource is shared as a card elsewhere (e.g. a
+    community chat message referencing a curriculum/material item) - deliberately
+    not the full ResourceReadDTO, just enough to render a clickable preview."""
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    category: ResourceCategoryEnum
+    thumbnail_url: str | None = None
