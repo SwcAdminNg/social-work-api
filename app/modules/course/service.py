@@ -39,6 +39,7 @@ _NON_COLUMN_FIELDS = {
     "estimated_duration",
     "is_bookmarked",
     "is_enrolled",
+    "is_completed",
     "progress_status",
     "has_new_content",
 }
