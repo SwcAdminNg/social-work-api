@@ -188,6 +188,26 @@ class ResourceContentService:
     async def get_document_download_url(
         self, slug: str, attachment_id: uuid.UUID, current_user: User | None = None
     ) -> str:
+        resource, document = await self._get_accessible_resource_document(slug, attachment_id, current_user)
+
+        if not document.downloadable:
+            can_manage = current_user is not None and (
+                current_user.user_type == UserTypeEnum.ADMIN or resource.owner_id == current_user.id
+            )
+            if not can_manage:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "This document is not available for download")
+
+        return self.r2.generate_download_url(document.storage_key)
+
+    async def get_document_view_url(
+        self, slug: str, attachment_id: uuid.UUID, current_user: User | None = None
+    ) -> str:
+        _, document = await self._get_accessible_resource_document(slug, attachment_id, current_user)
+        return self.r2.generate_download_url(document.storage_key)
+
+    async def _get_accessible_resource_document(
+        self, slug: str, attachment_id: uuid.UUID, current_user: User | None = None
+    ) -> tuple[Resource, ResourceDocument]:
         resource = await self.resource_repo.get_by_slug(slug)
         if resource is None or not resource.is_published:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found")
@@ -203,14 +223,7 @@ class ResourceContentService:
         if document is None or not document.is_uploaded:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not available")
 
-        if not document.downloadable:
-            can_manage = current_user is not None and (
-                current_user.user_type == UserTypeEnum.ADMIN or resource.owner_id == current_user.id
-            )
-            if not can_manage:
-                raise HTTPException(status.HTTP_403_FORBIDDEN, "This document is not available for download")
-
-        return self.r2.generate_download_url(document.storage_key)
+        return resource, document
 
     # -- video -------------------------------------------------------------------
 

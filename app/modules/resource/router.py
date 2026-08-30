@@ -331,6 +331,21 @@ async def get_resource_by_slug(
 
 
 @router.get(
+    "/{slug}/attachments/{attachment_id}/view",
+    response_model=ApiResponse[dict],
+    summary="Get a fresh, short-lived view URL for a resource document (public)",
+)
+async def get_resource_document_view_url(
+    slug: str,
+    attachment_id: uuid.UUID,
+    current_user: User | None = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[dict]:
+    url = await ResourceContentService(db).get_document_view_url(slug, attachment_id, current_user)
+    return ApiResponse(message="View URL generated successfully", data={"view_url": url})
+
+
+@router.get(
     "/{slug}/attachments/{attachment_id}/download",
     response_model=ApiResponse[dict],
     summary="Get a fresh, short-lived download URL for a resource document (public)",
