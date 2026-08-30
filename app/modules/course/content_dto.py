@@ -11,7 +11,7 @@ from app.modules.course.content_entity import (
     MultiAnswerModeEnum,
     VideoStatusEnum,
 )
-from app.modules.course.dto import CourseReadDTO, PublicCourseReadDTO
+from app.modules.course.dto import CourseInstructorReadDTO, CourseReadDTO, PublicCourseReadDTO
 from app.modules.course.entity import CourseItemTypeEnum
 
 # ---------------------------------------------------------------------------
@@ -22,11 +22,17 @@ from app.modules.course.entity import CourseItemTypeEnum
 class CourseSectionCreateDTO(CreateDTO):
     title: str = Field(min_length=1, max_length=255)
     order_index: int = 0
+    # Names of guest lecturer(s) covering this section, if any. Each name is
+    # automatically credited on the course's instructor list, flagged as a guest.
+    # Leave unset/empty for a section taught by the course's regular instructor(s).
+    guest_instructors: list[str] | None = None
 
 
 class CourseSectionUpdateDTO(UpdateDTO):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     order_index: int | None = None
+    # Replaces the full set of guest lecturers for this section when provided.
+    guest_instructors: list[str] | None = None
 
 
 class SectionOrderEntryDTO(BaseDTO):
@@ -103,6 +109,13 @@ class CourseItemCreateDTO(CreateDTO):
     estimated_minutes: int | None = Field(default=None, ge=0)
     # Required only when item_type == DOCUMENT, used to build the R2 storage key.
     file_name: str | None = Field(default=None, max_length=255)
+    # Only meaningful when item_type == DOCUMENT. Off by default so a newly
+    # uploaded document is view/stream-only until the instructor opts it in.
+    downloadable: bool = False
+    # Required only when item_type == LINKS.
+    url: str | None = Field(default=None, max_length=2000)
+    label: str | None = Field(default=None, max_length=255)
+    description: str | None = None
     # Required only when item_type == ASSESSMENT.
     assessment_type: AssessmentTypeEnum | None = None
     due_date: datetime | None = None
@@ -139,6 +152,12 @@ class CourseItemUpdateDTO(UpdateDTO):
     order_index: int | None = None
     is_preview: bool | None = None
     estimated_minutes: int | None = Field(default=None, ge=0)
+    # Only settable when the item is a DOCUMENT.
+    downloadable: bool | None = None
+    # Only settable when the item is LINKS.
+    url: str | None = Field(default=None, max_length=2000)
+    label: str | None = Field(default=None, max_length=255)
+    description: str | None = None
 
 
 class ItemOrderEntryDTO(BaseDTO):
@@ -187,6 +206,7 @@ class CourseDocumentPublicDTO(BaseDTO):
     mime_type: str | None = None
     file_size_bytes: int | None = None
     is_uploaded: bool
+    downloadable: bool
 
 
 class CourseDocumentManageDTO(CourseDocumentPublicDTO):
@@ -201,6 +221,17 @@ class DocumentUploadCredentialsDTO(BaseDTO):
 class DocumentFinalizeDTO(BaseDTO):
     mime_type: str | None = None
     file_size_bytes: int | None = Field(default=None, ge=0)
+
+
+# ---------------------------------------------------------------------------
+# Links
+# ---------------------------------------------------------------------------
+
+
+class CourseLinkDTO(BaseDTO):
+    url: str
+    label: str | None = None
+    description: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +449,7 @@ class CourseItemReadDTO(AuditDTO):
     video: CourseVideoPublicDTO | None = None
     document: CourseDocumentPublicDTO | None = None
     assessment: CourseAssessmentPublicDTO | None = None
+    link: CourseLinkDTO | None = None
 
 
 class CourseItemManageReadDTO(AuditDTO):
@@ -430,6 +462,7 @@ class CourseItemManageReadDTO(AuditDTO):
     video: CourseVideoManageDTO | None = None
     document: CourseDocumentManageDTO | None = None
     assessment: CourseAssessmentManageDTO | None = None
+    link: CourseLinkDTO | None = None
 
 
 class CourseSectionReadDTO(AuditDTO):
@@ -437,6 +470,7 @@ class CourseSectionReadDTO(AuditDTO):
     title: str
     order_index: int
     items: list[CourseItemReadDTO] = Field(default_factory=list)
+    guest_instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
 
 
 class CourseSectionManageReadDTO(AuditDTO):
@@ -444,6 +478,7 @@ class CourseSectionManageReadDTO(AuditDTO):
     title: str
     order_index: int
     items: list[CourseItemManageReadDTO] = Field(default_factory=list)
+    guest_instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
 
 
 class CourseDetailDTO(CourseReadDTO):

@@ -121,7 +121,9 @@ class CourseService:
         for row, user_picture_url in rows:
             picture_url = user_picture_url or build_initials_avatar_url(row.name)
             result.setdefault(row.course_id, []).append(
-                CourseInstructorReadDTO(user_id=row.user_id, name=row.name, profile_picture_url=picture_url)
+                CourseInstructorReadDTO(
+                    user_id=row.user_id, name=row.name, profile_picture_url=picture_url, is_guest=row.is_guest
+                )
             )
         return result
 

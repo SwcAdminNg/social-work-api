@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
@@ -21,6 +21,7 @@ from app.modules.course.content_dto import (
     CourseItemReadDTO,
     CourseItemReorderDTO,
     CourseItemUpdateDTO,
+    CourseLinkDTO,
     CourseQuizDetailDTO,
     CourseQuizGroupDetailDTO,
     CourseQuizGroupManageDetailDTO,
@@ -53,11 +54,13 @@ from app.modules.course.content_dto import (
     QuizQuestionUpdateDTO,
     VideoUploadCredentialsDTO,
 )
+from app.common.avatar import build_initials_avatar_url
 from app.modules.course.content_entity import (
     AssessmentTypeEnum,
     CourseAssessment,
     CourseDocument,
     CourseEssaySettings,
+    CourseLink,
     CourseQuizGroupSection,
     CourseQuizGroupSettings,
     CourseQuizOption,
@@ -73,7 +76,9 @@ from app.modules.course.assessment_ai import (
     generate_quiz_questions_from_text,
 )
 from app.modules.course.content_repository import CourseContentRepository
+from app.modules.course.dto import CourseInstructorReadDTO
 from app.modules.course.entity import Course, CourseItem, CourseItemTypeEnum, CourseSection
+from app.modules.course.instructor_entity import CourseInstructor, CourseSectionInstructor
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.entity import EssaySubmission
 from app.modules.learning.repository import LearningRepository
@@ -146,9 +151,12 @@ class CourseContentService:
         self, course_id: uuid.UUID, payload: CourseSectionCreateDTO, current_user: User
     ) -> CourseSection:
         course = await self._authorize_course(course_id, current_user)
-        section = CourseSection(course_id=course.id, **payload.model_dump())
+        section = CourseSection(
+            course_id=course.id, **payload.model_dump(exclude={"guest_instructors"})
+        )
         self.session.add(section)
         await self.session.flush()
+        await self._replace_section_guest_instructors(course.id, section.id, payload.guest_instructors)
         await self.session.commit()
         return section
 
@@ -159,12 +167,59 @@ class CourseContentService:
         payload: CourseSectionUpdateDTO,
         current_user: User,
     ) -> CourseSection:
-        _, section = await self._authorize_section(course_id, section_id, current_user)
-        for field, value in payload.model_dump(exclude_unset=True).items():
+        course, section = await self._authorize_section(course_id, section_id, current_user)
+        update_data = payload.model_dump(exclude_unset=True, exclude={"guest_instructors"})
+        for field, value in update_data.items():
             setattr(section, field, value)
         await self.session.flush()
+        if "guest_instructors" in payload.model_fields_set:
+            await self._replace_section_guest_instructors(course.id, section.id, payload.guest_instructors)
         await self.session.commit()
         return section
+
+    async def _ensure_guest_instructor(self, course_id: uuid.UUID, name: str) -> CourseInstructor:
+        """Returns the course's existing guest-instructor row for this name, or
+        creates one - so re-saving a section with the same guest name doesn't
+        duplicate their credit on the course."""
+        stmt = select(CourseInstructor).where(
+            CourseInstructor.course_id == course_id,
+            CourseInstructor.is_guest.is_(True),
+            CourseInstructor.name == name,
+            CourseInstructor.deleted_at.is_(None),
+        )
+        existing = (await self.session.execute(stmt)).scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        count_stmt = select(func.count()).select_from(CourseInstructor).where(
+            CourseInstructor.course_id == course_id
+        )
+        order_index = (await self.session.execute(count_stmt)).scalar_one()
+        instructor = CourseInstructor(
+            course_id=course_id, user_id=None, name=name, is_guest=True, order_index=order_index
+        )
+        self.session.add(instructor)
+        await self.session.flush()
+        return instructor
+
+    async def _replace_section_guest_instructors(
+        self, course_id: uuid.UUID, section_id: uuid.UUID, guest_names: list[str] | None
+    ) -> None:
+        if guest_names is None:
+            return
+        await self.session.execute(
+            CourseSectionInstructor.__table__.delete().where(
+                CourseSectionInstructor.section_id == section_id
+            )
+        )
+        for idx, name in enumerate(guest_names):
+            instructor = await self._ensure_guest_instructor(course_id, name)
+            self.session.add(
+                CourseSectionInstructor(
+                    section_id=section_id, course_instructor_id=instructor.id, order_index=idx
+                )
+            )
+        await self.session.flush()
 
     async def delete_section(
         self, course_id: uuid.UUID, section_id: uuid.UUID, current_user: User
@@ -225,10 +280,26 @@ class CourseContentService:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "file_name is required for document items")
             storage_key = self.r2.build_document_key(course.id, payload.file_name)
             self.session.add(
-                CourseDocument(course_item_id=item.id, storage_key=storage_key, file_name=payload.file_name)
+                CourseDocument(
+                    course_item_id=item.id,
+                    storage_key=storage_key,
+                    file_name=payload.file_name,
+                    downloadable=payload.downloadable,
+                )
             )
             document_credentials = DocumentUploadCredentialsDTO(
                 upload_url=self.r2.generate_upload_url(storage_key), storage_key=storage_key
+            )
+        elif payload.item_type == CourseItemTypeEnum.LINKS:
+            if not payload.url:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "url is required for link items")
+            self.session.add(
+                CourseLink(
+                    course_item_id=item.id,
+                    url=payload.url,
+                    label=payload.label,
+                    description=payload.description,
+                )
             )
         elif payload.item_type == CourseItemTypeEnum.ASSESSMENT:
             if payload.assessment_type is None:
@@ -329,8 +400,28 @@ class CourseContentService:
         self, item_id: uuid.UUID, payload: CourseItemUpdateDTO, current_user: User
     ) -> CourseItem:
         _, _, item = await self._authorize_item(item_id, current_user)
-        for field, value in payload.model_dump(exclude_unset=True).items():
+        _sub_entity_fields = {"downloadable", "url", "label", "description"}
+        for field, value in payload.model_dump(exclude_unset=True, exclude=_sub_entity_fields).items():
             setattr(item, field, value)
+
+        if "downloadable" in payload.model_fields_set:
+            document = await self.repo.get_document_by_item(item.id)
+            if document is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not a document")
+            document.downloadable = payload.downloadable
+
+        link_fields = {
+            field: getattr(payload, field)
+            for field in ("url", "label", "description")
+            if field in payload.model_fields_set
+        }
+        if link_fields:
+            link = await self.repo.get_link_by_item(item.id)
+            if link is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not a link")
+            for field, value in link_fields.items():
+                setattr(link, field, value)
+
         await self.session.flush()
         await self.session.commit()
         return item
@@ -400,6 +491,14 @@ class CourseContentService:
         document = await self.repo.get_document_by_item(item.id)
         if document is None or not document.is_uploaded:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not available")
+
+        if not document.downloadable:
+            can_manage = current_user is not None and (
+                current_user.user_type == UserTypeEnum.ADMIN or course.instructor_id == current_user.id
+            )
+            if not can_manage:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "This document is not available for download")
+
         return self.r2.generate_download_url(document.storage_key)
 
     # -- video -------------------------------------------------------------------
@@ -951,7 +1050,20 @@ class CourseContentService:
 
         videos = {v.course_item_id: v for v in await self.repo.list_videos_for_items(item_ids)}
         documents = {d.course_item_id: d for d in await self.repo.list_documents_for_items(item_ids)}
+        links = {l.course_item_id: l for l in await self.repo.list_links_for_items(item_ids)}
         assessments = {a.course_item_id: a for a in await self.repo.list_assessments_for_items(item_ids)}
+
+        guest_instructors_by_section: dict[uuid.UUID, list[CourseInstructorReadDTO]] = {}
+        for link_row, instructor in await self.repo.list_section_instructors(section_ids):
+            picture_url = build_initials_avatar_url(instructor.name)
+            guest_instructors_by_section.setdefault(link_row.section_id, []).append(
+                CourseInstructorReadDTO(
+                    user_id=instructor.user_id,
+                    name=instructor.name,
+                    profile_picture_url=picture_url,
+                    is_guest=instructor.is_guest,
+                )
+            )
 
         assessment_ids = [a.id for a in assessments.values()]
         quiz_settings_by_assessment = {
@@ -996,6 +1108,7 @@ class CourseContentService:
                     item,
                     videos.get(item.id),
                     documents.get(item.id),
+                    links.get(item.id),
                     assessments.get(item.id),
                     quiz_settings_by_assessment,
                     essay_settings_by_assessment,
@@ -1018,6 +1131,7 @@ class CourseContentService:
                     title=section.title,
                     order_index=section.order_index,
                     items=item_dtos,
+                    guest_instructors=guest_instructors_by_section.get(section.id, []),
                 )
             )
         return result_sections
@@ -1059,6 +1173,7 @@ class CourseContentService:
         item: CourseItem,
         video: CourseVideo | None,
         document: CourseDocument | None,
+        link: CourseLink | None,
         assessment: CourseAssessment | None,
         quiz_settings_by_assessment: dict,
         essay_settings_by_assessment: dict,
@@ -1073,6 +1188,7 @@ class CourseContentService:
         if not manage and not enrolled and not item.is_preview:
             video = None
             document = None
+            link = None
             assessment = None
 
         video_dto = None
@@ -1097,8 +1213,13 @@ class CourseContentService:
                 mime_type=document.mime_type,
                 file_size_bytes=document.file_size_bytes,
                 is_uploaded=document.is_uploaded,
+                downloadable=document.downloadable,
                 **extra,
             )
+
+        link_dto = None
+        if link is not None:
+            link_dto = CourseLinkDTO(url=link.url, label=link.label, description=link.description)
 
         assessment_dto = None
         if assessment is not None:
@@ -1187,5 +1308,6 @@ class CourseContentService:
             estimated_minutes=item.estimated_minutes,
             video=video_dto,
             document=document_dto,
+            link=link_dto,
             assessment=assessment_dto,
         )

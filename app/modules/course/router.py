@@ -693,7 +693,7 @@ class ItemCreateResponseDTO(CourseItemManageReadDTO):
     "/{course_id}/sections/{section_id}/items",
     response_model=ApiResponse[ItemCreateResponseDTO],
     status_code=status.HTTP_201_CREATED,
-    summary="Add a curriculum item (quiz/document/video) to a section. For VIDEO/DOCUMENT "
+    summary="Add a curriculum item (quiz/document/video/link) to a section. For VIDEO/DOCUMENT "
     "types the response includes the upload credentials the frontend uses to upload "
     "directly to Bunny Stream / Cloudflare R2.",
 )
@@ -725,7 +725,9 @@ async def create_item(
 @router.patch(
     "/items/{item_id}",
     response_model=ApiResponse[None],
-    summary="Update a curriculum item's title/order/preview flag (admin or owning instructor)",
+    summary="Update a curriculum item's title/order/preview flag, and (depending on the "
+    "item's type) its document downloadable flag or link url/label/description "
+    "(admin or owning instructor)",
 )
 async def update_item(
     item_id: uuid.UUID,

@@ -25,6 +25,7 @@ class CourseInstructorReadDTO(BaseDTO):
     user_id: uuid.UUID | None = None
     name: str
     profile_picture_url: str | None = None
+    is_guest: bool = False
 
 
 class _TimedAccessValidatorMixin:
@@ -65,6 +66,11 @@ class CourseCreateDTO(CreateDTO, _TimedAccessValidatorMixin):
     access_mode: CourseAccessModeEnum = CourseAccessModeEnum.SELF_PACED
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
+    certificate_enabled: bool = Field(
+        default=False,
+        description="Whether completing this course can earn a certificate. Leave off for "
+        "courses that are continuously updated rather than a fixed, completable body of content.",
+    )
 
 
 class CourseUpdateDTO(UpdateDTO, _TimedAccessValidatorMixin):
@@ -84,6 +90,7 @@ class CourseUpdateDTO(UpdateDTO, _TimedAccessValidatorMixin):
     access_mode: CourseAccessModeEnum | None = None
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
+    certificate_enabled: bool | None = None
 
     @model_validator(mode="after")
     def _validate_access_window(self):
@@ -128,6 +135,7 @@ class CourseReadDTO(AuditDTO):
     access_mode: CourseAccessModeEnum
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
+    certificate_enabled: bool
     instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
     estimated_total_minutes: int | None = Field(
         default=None,

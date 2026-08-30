@@ -8,6 +8,7 @@ from app.modules.course.content_entity import (
     CourseAssessment,
     CourseDocument,
     CourseEssaySettings,
+    CourseLink,
     CourseQuizGroupSection,
     CourseQuizGroupSettings,
     CourseQuizOption,
@@ -16,6 +17,7 @@ from app.modules.course.content_entity import (
     CourseVideo,
 )
 from app.modules.course.entity import CourseItem, CourseSection
+from app.modules.course.instructor_entity import CourseInstructor, CourseSectionInstructor
 
 
 class CourseContentRepository:
@@ -80,6 +82,36 @@ class CourseContentRepository:
             return []
         stmt = select(CourseDocument).where(CourseDocument.course_item_id.in_(item_ids))
         return (await self.session.execute(stmt)).scalars().all()
+
+    # -- link ------------------------------------------------------------------
+
+    async def get_link_by_item(self, item_id: uuid.UUID) -> CourseLink | None:
+        stmt = select(CourseLink).where(CourseLink.course_item_id == item_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_links_for_items(self, item_ids: Sequence[uuid.UUID]) -> Sequence[CourseLink]:
+        if not item_ids:
+            return []
+        stmt = select(CourseLink).where(CourseLink.course_item_id.in_(item_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    # -- section guest instructors ----------------------------------------------
+
+    async def list_section_instructors(
+        self, section_ids: Sequence[uuid.UUID]
+    ) -> Sequence[tuple[CourseSectionInstructor, CourseInstructor]]:
+        if not section_ids:
+            return []
+        stmt = (
+            select(CourseSectionInstructor, CourseInstructor)
+            .join(CourseInstructor, CourseInstructor.id == CourseSectionInstructor.course_instructor_id)
+            .where(
+                CourseSectionInstructor.section_id.in_(section_ids),
+                CourseSectionInstructor.deleted_at.is_(None),
+            )
+            .order_by(CourseSectionInstructor.order_index)
+        )
+        return (await self.session.execute(stmt)).all()
 
     # -- assessment ---------------------------------------------------------------
 

@@ -53,6 +53,20 @@ class CourseDocument(BaseEntity):
     mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_uploaded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Off by default - students can view/stream the document but not save a copy
+    # until the instructor/admin explicitly allows it.
+    downloadable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+
+
+class CourseLink(BaseEntity):
+    __tablename__ = "course_links"
+
+    course_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), unique=True, nullable=False, index=True
+    )
+    url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AssessmentTypeEnum(str, enum.Enum):

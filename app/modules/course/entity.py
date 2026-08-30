@@ -36,6 +36,7 @@ class CourseItemTypeEnum(str, enum.Enum):
     ASSESSMENT = "ASSESSMENT"
     DOCUMENT = "DOCUMENT"
     VIDEO = "VIDEO"
+    LINKS = "LINKS"
 
 
 class CourseAccessModeEnum(str, enum.Enum):
@@ -83,7 +84,10 @@ class Course(BaseEntity):
     # - lets enrolled-course listings flag "new material since you were last here" by
     # comparing this against the student's UserCourseProgress.last_accessed_at.
     content_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    certificate_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # Off by default - a course with continuous/ongoing content updates shouldn't
+    # let students earn a certificate for a moving target. Instructors opt in
+    # explicitly once the course is a fixed, completable body of content.
+    certificate_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # Null falls back to the first active global (owner_id=None) CertificateTemplate
     # - see CertificateService._resolve_template - so a course "just works" the
     # moment at least one global template has been seeded/created.
