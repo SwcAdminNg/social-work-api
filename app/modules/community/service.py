@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Sequence
 
 from fastapi import HTTPException, status
@@ -22,6 +23,7 @@ from app.modules.community.dto import (
     CommunityOnlineMembersReadDTO,
     CommunityReadDTO,
     CommunityMembersAddDTO,
+    CommunityUnreadCountReadDTO,
     CustomCommunityCreateDTO,
 )
 from app.modules.community.entity import (
@@ -32,7 +34,11 @@ from app.modules.community.entity import (
     CommunityTypeEnum,
 )
 from app.modules.community.message_repository import CommunityMessageRepository
-from app.modules.community.repository import CommunityMembershipRepository, CommunityRepository
+from app.modules.community.repository import (
+    CommunityMembershipRepository,
+    CommunityReadRepository,
+    CommunityRepository,
+)
 from app.modules.resource.dto import ResourceCardDTO
 from app.modules.resource.entity import Resource
 from app.modules.resource.repository import ResourceRepository
@@ -54,6 +60,7 @@ class CommunityService:
         self.repository = CommunityRepository(session)
         self.membership_repo = CommunityMembershipRepository(session)
         self.message_repo = CommunityMessageRepository(session)
+        self.read_repo = CommunityReadRepository(session)
         self.resource_repo = ResourceRepository(session)
         self.user_repo = UserRepository(session)
 
@@ -166,6 +173,14 @@ class CommunityService:
     # -- listing -----------------------------------------------------------------
 
     async def list_for_user(self, user: User) -> list[CommunityReadDTO]:
+        communities = await self._communities_for_user(user)
+        return [await self._build_community_dto(c) for c in communities]
+
+    async def _communities_for_user(self, user: User) -> list[Community]:
+        """Every community `user` belongs to (General, Help, their course
+        communities, and any custom communities they're a member of - or, for an
+        admin, every community that exists). Shared by `list_for_user` and
+        `get_unread_count`, which both need this same set."""
         general = await self.get_or_create_singleton(CommunityTypeEnum.GENERAL, "General")
         help_community = await self.get_or_create_singleton(CommunityTypeEnum.HELP, "Help")
         communities: list[Community] = [general, help_community]
@@ -191,8 +206,7 @@ class CommunityService:
                 continue
             seen.add(community.id)
             unique_communities.append(community)
-
-        return [await self._build_community_dto(c) for c in unique_communities]
+        return unique_communities
 
     async def _accessible_course_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
         """Every course `user_id` can see a COURSE community for: enrolled via
@@ -396,3 +410,17 @@ class CommunityService:
         member_ids = await membership.list_member_ids(self.session, community)
         online_ids = await presence.online_subset(_PRESENCE_NAMESPACE, member_ids)
         return CommunityOnlineMembersReadDTO(online_user_ids=online_ids)
+
+    # -- read tracking ---------------------------------------------------------------
+
+    async def mark_read(self, community_id: uuid.UUID, user: User) -> None:
+        community = await self._get_community_or_404(community_id)
+        await self.assert_member(community, user)
+        await self.read_repo.mark_read(community.id, user.id, datetime.now(timezone.utc))
+        await self.session.commit()
+
+    async def get_unread_count(self, user: User) -> CommunityUnreadCountReadDTO:
+        communities = await self._communities_for_user(user)
+        community_ids = [c.id for c in communities]
+        total_unread = await self.message_repo.count_unread(community_ids, user.id)
+        return CommunityUnreadCountReadDTO(total_unread=total_unread)

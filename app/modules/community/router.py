@@ -32,6 +32,7 @@ from app.modules.community.dto import (
     CommunityMessageReadDTO,
     CommunityOnlineMembersReadDTO,
     CommunityReadDTO,
+    CommunityUnreadCountReadDTO,
     CustomCommunityCreateDTO,
 )
 from app.modules.community.service import CommunityService
@@ -91,6 +92,22 @@ async def list_custom_communities(
 ) -> PaginatedResponse[CommunityReadDTO]:
     items, total = await CommunityService(db).list_custom_for_admin(pagination, search)
     return PaginatedResponse.create(items=items, total_items=total, params=pagination)
+
+
+@router.get(
+    "/unread-count",
+    response_model=ApiResponse[CommunityUnreadCountReadDTO],
+    summary="Total unread message count across every community the current user "
+    "belongs to (for a header/nav badge)",
+)
+async def get_unread_count(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CommunityUnreadCountReadDTO]:
+    # Registered before the "/{community_id}" routes below - a path param route
+    # would otherwise swallow this and try (and fail) to parse "unread-count" as a UUID.
+    data = await CommunityService(db).get_unread_count(current_user)
+    return ApiResponse(message="Unread count retrieved successfully", data=data)
 
 
 @router.get(
@@ -221,6 +238,21 @@ async def list_online_members(
 ) -> ApiResponse[CommunityOnlineMembersReadDTO]:
     data = await CommunityService(db).list_online_members(community_id, current_user)
     return ApiResponse(message="Online members retrieved successfully", data=data)
+
+
+@router.post(
+    "/{community_id}/read",
+    response_model=ApiResponse[None],
+    summary="Mark a community as read up to now, for the current user (clears its "
+    "contribution to /community/unread-count)",
+)
+async def mark_community_read(
+    community_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CommunityService(db).mark_read(community_id, current_user)
+    return ApiResponse(message="Marked as read")
 
 
 @router.post(

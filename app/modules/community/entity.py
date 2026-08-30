@@ -111,3 +111,21 @@ class CommunityMessage(BaseEntity):
     )
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CommunityRead(BaseEntity):
+    """Tracks, per (community, user), the timestamp up to which that user has read
+    that community's messages. One row is created/updated the first time a user
+    marks a community read - a user who has never opened a community has no row
+    here, so every message in it (from someone else) counts as unread, matching
+    ordinary chat-app semantics for a never-visited room."""
+
+    __tablename__ = "community_reads"
+
+    community_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("communities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

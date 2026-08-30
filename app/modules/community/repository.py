@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Sequence
 
 from sqlalchemy import func, select
@@ -10,6 +11,7 @@ from app.modules.community.entity import (
     Community,
     CommunityMembership,
     CommunityMembershipAddedViaEnum,
+    CommunityRead,
     CommunityTypeEnum,
 )
 
@@ -114,3 +116,28 @@ class CommunityMembershipRepository(BaseRepository[CommunityMembership]):
             return False
         await self.hard_delete(membership)
         return True
+
+
+class CommunityReadRepository(BaseRepository[CommunityRead]):
+    """Tracks per (community, user) read markers. No soft-delete concept here -
+    a read marker is a pure timestamp, there's nothing to "restore"."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, CommunityRead)
+
+    async def get_read(self, community_id: uuid.UUID, user_id: uuid.UUID) -> CommunityRead | None:
+        stmt = select(CommunityRead).where(
+            CommunityRead.community_id == community_id, CommunityRead.user_id == user_id
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def mark_read(self, community_id: uuid.UUID, user_id: uuid.UUID, when: datetime) -> CommunityRead:
+        existing = await self.get_read(community_id, user_id)
+        if existing is not None:
+            existing.last_read_at = when
+            await self.session.flush()
+            return existing
+        record = CommunityRead(community_id=community_id, user_id=user_id, last_read_at=when)
+        self.session.add(record)
+        await self.session.flush()
+        return record

@@ -286,23 +286,51 @@ Cross-reference these ids against `GET /community/{id}/members` (which also has 
 
 ---
 
-## 6. Endpoint reference
+## 6. Unread counts
+
+**`GET /community/unread-count`** — a single aggregate across every community you belong to, meant for a header/nav badge:
+
+```json
+{
+  "success": true,
+  "message": "Unread count retrieved successfully",
+  "data": { "total_unread": 4 }
+}
+```
+
+`total_unread` counts every message sent **by someone else** since you last marked that community read — summed across all your communities. If you've never opened a given community, every message in it (from others) counts toward this total; that's expected, same as any chat app showing a backlog badge the first time you see a room.
+
+**`POST /community/{community_id}/read`** — marks that community read *up to now* for you. No body. Call it:
+- When the user opens/switches to a community's chat screen.
+- Whenever a new message arrives (via the WebSocket) for the community currently open on screen, so it doesn't sit there counting as unread while the user is actively looking at it.
+
+```json
+{ "success": true, "message": "Marked as read" }
+```
+
+Poll `GET /community/unread-count` (e.g. every 30s, and again right after `POST .../read` resolves) to keep the badge in sync.
+
+---
+
+## 7. Endpoint reference
 
 | Endpoint | What it does |
 |---|---|
 | `GET /community` | List every community you belong to. Not paginated. |
+| `GET /community/unread-count` | Aggregate unread message count across all your communities. |
 | `GET /community/{id}` | Get one community, with live `member_count`. |
 | `GET /community/{id}/members` | Paginated roster, with `is_online` per member. |
 | `GET /community/{id}/messages` | Paginated history, most recent first. |
 | `POST /community/{id}/messages` | Send a message (HTTP fallback — prefer the WebSocket). |
 | `POST /community/{id}/attachments/upload-url` | Presigned upload URL for an image/document. |
 | `GET /community/{id}/online` | Which member ids are currently online. |
+| `POST /community/{id}/read` | Mark a community read up to now. |
 | `POST /community/presence/heartbeat` | Mark yourself online without an open socket. |
 | `WS /community/{id}/ws?token=...` | Live chat: send/receive messages, typing indicators. |
 
 ---
 
-## 7. Error responses you should handle
+## 8. Error responses you should handle
 
 | Status | When |
 |---|---|
@@ -313,7 +341,7 @@ Cross-reference these ids against `GET /community/{id}/members` (which also has 
 
 ---
 
-## 8. Frontend implementation checklist
+## 9. Frontend implementation checklist
 
 - [ ] Room list screen: `GET /community` rendered as a sidebar/tab list (General, Help, your course rooms, any custom rooms), each opening the same chat UI.
 - [ ] Chat screen: load the latest page of `GET /community/{id}/messages` on open, then connect the WebSocket and append live events; reverse-infinite-scroll to load older pages.
@@ -322,3 +350,4 @@ Cross-reference these ids against `GET /community/{id}/members` (which also has 
 - [ ] Typing indicator: send `{"type":"typing","is_typing":true}` on keystroke (debounced) and `false` on send/blur; render incoming `typing` frames as a transient "X is typing…" line, expiring it client-side after a few seconds of silence.
 - [ ] Online indicators: poll or refresh `GET /community/{id}/online` (or rely on `is_online` from the members endpoint) to show presence dots in the member list/header.
 - [ ] Handle the WebSocket `error` frame by surfacing the `detail` inline (e.g. as a toast) rather than treating it as a fatal/disconnect event.
+- [ ] Unread badge: poll `GET /community/unread-count` (e.g. every 30s) for a nav/header badge; call `POST /community/{id}/read` on opening a chat and whenever a live `message` frame arrives for the currently-open room, then re-poll the count.

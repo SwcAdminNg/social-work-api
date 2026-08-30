@@ -186,6 +186,7 @@ One instructor-specific note: sharing a curriculum/material item in a course's c
 | Endpoint | Auth | Notes |
 |---|---|---|
 | `GET /community` | Any authenticated user | List every community you belong to. Not paginated. |
+| `GET /community/unread-count` | Any authenticated user | Aggregate unread count across your communities — see student doc §6. |
 | `POST /community/custom` | Admin | Create a custom community. |
 | `GET /community/custom` | Admin | List/search all custom communities. |
 | `GET /community/{id}` | Member or admin | Get one community, with live `member_count`. |
@@ -196,6 +197,7 @@ One instructor-specific note: sharing a curriculum/material item in a course's c
 | `POST /community/{id}/messages` | Member | Post a message (HTTP fallback) — see student doc §2. |
 | `POST /community/{id}/attachments/upload-url` | Member | Presigned upload URL — see student doc §3. |
 | `GET /community/{id}/online` | Member | Which members are currently online — see student doc §5. |
+| `POST /community/{id}/read` | Member | Mark a community read up to now — see student doc §6. |
 | `POST /community/presence/heartbeat` | Any authenticated user | Mark yourself online without an open socket. |
 | `WS /community/{id}/ws?token=...` | Member (JWT as query param) | Live chat + typing — see student doc §4. |
 

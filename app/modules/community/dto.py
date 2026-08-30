@@ -128,6 +128,10 @@ class CommunityAttachmentUploadResponseDTO(BaseDTO):
     storage_key: str
 
 
+class CommunityUnreadCountReadDTO(BaseDTO):
+    total_unread: int
+
+
 # ---------------------------------------------------------------------------
 # WebSocket-only frames (never persisted)
 # ---------------------------------------------------------------------------
