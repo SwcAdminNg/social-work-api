@@ -19,6 +19,7 @@ from app.modules.support.router import router as support_router
 from app.modules.health.router import router as health_router
 from app.modules.payment.router import router as payment_router
 from app.modules.learning.router import router as learning_router
+from app.modules.resource.router import router as resource_router
 from app.modules.customer_support.router import router as customer_support_router
 from app.modules.user.router import router as user_router
 from app.modules.user.dashboard_router import router as dashboard_router
@@ -88,5 +89,6 @@ app.include_router(group_router)
 app.include_router(support_router)
 app.include_router(payment_router)
 app.include_router(learning_router)
+app.include_router(resource_router)
 app.include_router(customer_support_router)
 app.include_router(home_router)
