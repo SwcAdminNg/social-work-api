@@ -324,10 +324,16 @@ Unassign (go back to whatever the global default is):
 { "success": true, "message": "Course certificate settings updated successfully" }
 ```
 
-There's currently no dedicated "read course certificate settings" endpoint — `certificate_enabled`
-and `certificate_template_id` aren't yet echoed back on the course read DTOs either. If you need to
-confirm what's set, re-send the same values you intend (this endpoint is idempotent) or check with
-the team about surfacing it on `GET /courses/manage/{id}`.
+`certificate_enabled` is also readable (and settable) directly on the normal course object now —
+see [`COURSE_CONTENT_ENHANCEMENTS_INSTRUCTOR_ADMIN_API.md`](./COURSE_CONTENT_ENHANCEMENTS_INSTRUCTOR_ADMIN_API.md#2-certification-eligibility-toggle-certificate_enabled)
+for the `POST /courses` / `PATCH /courses/{id}` / `GET /courses/manage/{id}` shape. `certificate_template_id`
+still isn't echoed back anywhere — this settings endpoint remains the only way to read/set it; if you
+need to confirm what's assigned, re-send the same values you intend (it's idempotent).
+
+Also note: **new courses now default to `certificate_enabled: false`** (flipped from `true`) — a
+course with continuous/ongoing content updates shouldn't hand out certificates for a moving target.
+Instructors opt in explicitly via either this endpoint or the general course create/update payload.
+Existing courses created before this change keep whatever value they already had.
 
 ---
 

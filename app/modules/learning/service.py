@@ -326,6 +326,20 @@ class LearningService:
         completed_item_ids = set((await self.session.execute(stmt)).scalars().all())
         locks = await self.get_section_lock_map(user_id, course_id)
 
+        from app.common.avatar import build_initials_avatar_url
+        from app.modules.course.dto import CourseInstructorReadDTO
+
+        guest_instructors_by_section: dict[uuid.UUID, list[CourseInstructorReadDTO]] = {}
+        for link_row, instructor in await self.content_repo.list_section_instructors(section_ids):
+            guest_instructors_by_section.setdefault(link_row.section_id, []).append(
+                CourseInstructorReadDTO(
+                    user_id=instructor.user_id,
+                    name=instructor.name,
+                    profile_picture_url=build_initials_avatar_url(instructor.name),
+                    is_guest=instructor.is_guest,
+                )
+            )
+
         section_dtos = []
         for section in sections:
             section_items = [i for i in items if i.section_id == section.id]
@@ -340,6 +354,7 @@ class LearningService:
                 LearningSectionDTO(
                     id=section.id, title=section.title, items=item_dtos,
                     is_locked=locks.get(section.id, False),
+                    guest_instructors=guest_instructors_by_section.get(section.id, []),
                 )
             )
 
@@ -378,6 +393,13 @@ class LearningService:
             doc = await self.content_repo.get_document_by_item(item_id)
             if doc:
                 dto.document_url = self.r2.generate_download_url(doc.storage_key)
+                dto.downloadable = doc.downloadable
+        elif item.item_type == CourseItemTypeEnum.LINKS:
+            link = await self.content_repo.get_link_by_item(item_id)
+            if link:
+                dto.link_url = link.url
+                dto.link_label = link.label
+                dto.link_description = link.description
         elif item.item_type == CourseItemTypeEnum.ASSESSMENT:
             assessment = await self.content_repo.get_assessment_by_item(item_id)
             if assessment:

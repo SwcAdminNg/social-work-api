@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.common.base_dto import BaseDTO
 from app.modules.course.content_entity import AssessmentTypeEnum, EssaySubmissionModeEnum, MultiAnswerModeEnum
-from app.modules.course.dto import CourseReadDTO
+from app.modules.course.dto import CourseInstructorReadDTO, CourseReadDTO
 from app.modules.course.entity import CourseItemTypeEnum
 
 
@@ -34,6 +34,9 @@ class LearningSectionDTO(BaseDTO):
     # still list here (so you can render them, greyed out) but fetching/submitting
     # them 403s until it unlocks.
     is_locked: bool = False
+    # Guest lecturer(s) covering this section, if any (each flagged `is_guest: true`).
+    # Empty when the section is taught by the course's regular instructor(s).
+    guest_instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
 
 
 class CourseCurriculumDTO(BaseDTO):
@@ -174,6 +177,15 @@ class LearningItemContentDTO(BaseDTO):
     # Optional fields depending on item_type
     video_url: str | None = None
     document_url: str | None = None
+    # Set only when item_type == DOCUMENT. `document_url` above is always a working
+    # link for in-app viewing regardless of this flag - this only tells the frontend
+    # whether to also offer a "Download" affordance (hide/disable it when false).
+    downloadable: bool | None = None
+
+    # Links
+    link_url: str | None = None
+    link_label: str | None = None
+    link_description: str | None = None
 
     # Assessment - common
     assessment_type: AssessmentTypeEnum | None = None
