@@ -1,0 +1,23 @@
+import uuid
+
+from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.common.base_entity import BaseEntity
+
+
+class CartItem(BaseEntity):
+    """A course sitting in a user's cart, waiting to be checked out. There is no
+    separate "Cart" header entity - a user's cart is simply their `CartItem` rows;
+    they're inserted on add and deleted on removal/checkout/purchase."""
+
+    __tablename__ = "cart_items"
+    __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_cart_items_user_course"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )

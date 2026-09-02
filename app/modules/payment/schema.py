@@ -12,6 +12,7 @@ class InitializePaymentRequest(BaseModel):
     related_id: uuid.UUID | None = Field(None, description="Course ID or SubscriptionPlan ID")
     gateway: PaymentGatewayEnum = Field(default=PaymentGatewayEnum.PAYSTACK)
     save_card: bool = Field(default=False, description="Whether to save the card for future transactions")
+    coupon_code: str | None = Field(None, description="Coupon code to apply (COURSE_PURCHASE only)")
 
 
 class InitializePaymentResponse(BaseModel):
@@ -56,6 +57,8 @@ class TransactionReadDTO(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
     amount: float
+    subtotal_amount: float | None = None
+    discount_amount: float = 0
     reference: str
     gateway: PaymentGatewayEnum
     status: TransactionStatusEnum

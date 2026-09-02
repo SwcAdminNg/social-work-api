@@ -4,7 +4,7 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, UserSubscription
+from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, TransactionItem, UserSubscription
 
 
 class PaymentRepository:
@@ -27,6 +27,15 @@ class PaymentRepository:
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def add_transaction_items(self, transaction_id: uuid.UUID, items: list[tuple[uuid.UUID, float]]) -> None:
+        for course_id, unit_price in items:
+            self.session.add(TransactionItem(transaction_id=transaction_id, course_id=course_id, unit_price=unit_price))
+        await self.session.flush()
+
+    async def get_transaction_items(self, transaction_id: uuid.UUID) -> Sequence[TransactionItem]:
+        stmt = select(TransactionItem).where(TransactionItem.transaction_id == transaction_id)
+        return (await self.session.execute(stmt)).scalars().all()
 
     async def get_saved_card_by_id(self, card_id: uuid.UUID) -> SavedCard | None:
         stmt = select(SavedCard).where(SavedCard.id == card_id, SavedCard.deleted_at.is_(None))

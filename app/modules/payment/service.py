@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.email import email_service
+from app.modules.coupon.service import CouponService
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum, UserCourseAccess
 from app.modules.course.repository import CourseRepository
 from app.modules.payment.entity import (
@@ -35,6 +36,7 @@ class PaymentService:
         self.repo = PaymentRepository(session)
         self.course_repo = CourseRepository(session)
         self.activity_service = ActivityService(session)
+        self.coupon_service = CouponService(session)
         
     def _get_gateway(self, gateway_type: PaymentGatewayEnum):
         if gateway_type == PaymentGatewayEnum.PAYSTACK:
@@ -68,6 +70,10 @@ class PaymentService:
 
     async def initialize_payment(self, payload: InitializePaymentRequest, user: User) -> dict:
         amount = 0.0
+        subtotal_amount: float | None = None
+        discount_amount = 0.0
+        coupon_id = None
+
         # Validate related ID
         if payload.transaction_type == TransactionTypeEnum.COURSE_PURCHASE:
             if not payload.related_id:
@@ -78,7 +84,14 @@ class PaymentService:
             if course.price is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Course is free, no payment required")
             amount = float(course.price)
-                
+            subtotal_amount = amount
+
+            if payload.coupon_code:
+                application = await self.coupon_service.validate_and_compute(payload.coupon_code, user, [course])
+                coupon_id = application.coupon.id
+                discount_amount = application.discount_amount
+                amount = application.total_amount
+
         elif payload.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             if not payload.related_id:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "related_id (plan ID) is required for subscription")
@@ -89,12 +102,13 @@ class PaymentService:
 
         reference = self._generate_reference()
         gateway = self._get_gateway(payload.gateway)
-        
+
         metadata = {
             "user_id": str(user.id),
             "transaction_type": payload.transaction_type.value,
             "related_id": str(payload.related_id) if payload.related_id else None,
             "save_card": payload.save_card,
+            "coupon_code": payload.coupon_code,
         }
 
         # Call gateway API
@@ -109,6 +123,9 @@ class PaymentService:
         transaction = Transaction(
             user_id=user.id,
             amount=amount,
+            subtotal_amount=subtotal_amount,
+            discount_amount=discount_amount,
+            coupon_id=coupon_id,
             reference=reference,
             gateway=payload.gateway,
             status=TransactionStatusEnum.PENDING,
@@ -118,6 +135,88 @@ class PaymentService:
         self.session.add(transaction)
         await self.session.commit()
 
+        return gateway_response
+
+    async def checkout_cart(
+        self, user: User, coupon_code: str | None, gateway_type: PaymentGatewayEnum, save_card: bool
+    ) -> dict:
+        from sqlalchemy import select
+
+        from app.modules.cart.repository import CartRepository
+
+        cart_items = await CartRepository(self.session).list_for_user(user.id)
+        if not cart_items:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Your cart is empty")
+
+        course_ids = [item.course_id for item in cart_items]
+        courses_by_id = {c.id: c for c in await self.course_repo.get_many_by_ids(course_ids)}
+        if len(courses_by_id) != len(course_ids):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "One or more items in your cart no longer exist - please refresh your cart"
+            )
+
+        ordered_courses = [courses_by_id[cid] for cid in course_ids]
+        for course in ordered_courses:
+            if not course.is_published or course.price is None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"'{course.title}' is no longer available for purchase - please remove it from your cart",
+                )
+
+        owned_stmt = select(UserCourseAccess.course_id).where(
+            UserCourseAccess.user_id == user.id, UserCourseAccess.course_id.in_(course_ids)
+        )
+        already_owned = set((await self.session.execute(owned_stmt)).scalars().all())
+        if already_owned:
+            titles = ", ".join(c.title for c in ordered_courses if c.id in already_owned)
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"You already have access to: {titles} - please remove from your cart"
+            )
+
+        subtotal_amount = sum(float(c.price) for c in ordered_courses)
+        discount_amount = 0.0
+        coupon_id = None
+        amount = subtotal_amount
+
+        if coupon_code:
+            application = await self.coupon_service.validate_and_compute(coupon_code, user, ordered_courses)
+            coupon_id = application.coupon.id
+            discount_amount = application.discount_amount
+            amount = application.total_amount
+
+        reference = self._generate_reference()
+        gateway = self._get_gateway(gateway_type)
+
+        metadata = {
+            "user_id": str(user.id),
+            "transaction_type": TransactionTypeEnum.CART_PURCHASE.value,
+            "course_ids": [str(c.id) for c in ordered_courses],
+            "save_card": save_card,
+            "coupon_code": coupon_code,
+        }
+
+        gateway_response = await gateway.initialize_transaction(
+            amount=amount, email=user.email, reference=reference, metadata=metadata
+        )
+
+        transaction = Transaction(
+            user_id=user.id,
+            amount=amount,
+            subtotal_amount=subtotal_amount,
+            discount_amount=discount_amount,
+            coupon_id=coupon_id,
+            reference=reference,
+            gateway=gateway_type,
+            status=TransactionStatusEnum.PENDING,
+            transaction_type=TransactionTypeEnum.CART_PURCHASE,
+            related_id=None,
+        )
+        self.session.add(transaction)
+        await self.session.flush()
+
+        await self.repo.add_transaction_items(transaction.id, [(c.id, float(c.price)) for c in ordered_courses])
+
+        await self.session.commit()
         return gateway_response
 
     async def charge_saved_card(self, payload: ChargeSavedCardRequest, user: User) -> dict:
@@ -219,30 +318,36 @@ class PaymentService:
         await self.session.commit()
         return transaction
 
+    async def _grant_course_access(self, user_id: uuid.UUID, course_id: uuid.UUID) -> None:
+        from app.modules.learning.entity import UserCourseProgress
+        from sqlalchemy import select
+
+        access = UserCourseAccess(
+            user_id=user_id, course_id=course_id, granted_via=CourseAccessGrantedViaEnum.PURCHASE
+        )
+        self.session.add(access)
+
+        stmt = select(UserCourseProgress).where(
+            UserCourseProgress.user_id == user_id, UserCourseProgress.course_id == course_id
+        )
+        existing_progress = (await self.session.execute(stmt)).scalar_one_or_none()
+        if not existing_progress:
+            self.session.add(UserCourseProgress(user_id=user_id, course_id=course_id))
+
+    async def _redeem_coupon_if_used(self, transaction: Transaction) -> None:
+        if not transaction.coupon_id:
+            return
+        coupon = await self.coupon_service.repo.get_by_id(transaction.coupon_id)
+        if coupon:
+            await self.coupon_service.redeem(
+                coupon, transaction.user_id, transaction.id, float(transaction.discount_amount or 0)
+            )
+
     async def _grant_access(self, transaction: Transaction):
         if transaction.transaction_type == TransactionTypeEnum.COURSE_PURCHASE:
-            access = UserCourseAccess(
-                user_id=transaction.user_id,
-                course_id=transaction.related_id,
-                granted_via=CourseAccessGrantedViaEnum.PURCHASE
-            )
-            self.session.add(access)
-            
-            from app.modules.learning.entity import UserCourseProgress
-            from sqlalchemy import select
-            
-            stmt = select(UserCourseProgress).where(
-                UserCourseProgress.user_id == transaction.user_id,
-                UserCourseProgress.course_id == transaction.related_id
-            )
-            existing_progress = (await self.session.execute(stmt)).scalar_one_or_none()
-            if not existing_progress:
-                progress = UserCourseProgress(
-                    user_id=transaction.user_id,
-                    course_id=transaction.related_id
-                )
-                self.session.add(progress)
-            
+            await self._grant_course_access(transaction.user_id, transaction.related_id)
+            await self._redeem_coupon_if_used(transaction)
+
             course = await self.course_repo.get_by_id(transaction.related_id)
             await self.activity_service.log_activity(
                 transaction.user_id,
@@ -251,8 +356,36 @@ class PaymentService:
             )
 
             if course:
-                await self._send_course_payment_receipt(transaction, course)
+                await self._send_payment_receipt(transaction, [course])
 
+        elif transaction.transaction_type == TransactionTypeEnum.CART_PURCHASE:
+            from app.modules.cart.repository import CartRepository
+
+            items = await self.repo.get_transaction_items(transaction.id)
+            course_ids = [item.course_id for item in items]
+            courses_by_id = {c.id: c for c in await self.course_repo.get_many_by_ids(course_ids)}
+
+            for course_id in course_ids:
+                await self._grant_course_access(transaction.user_id, course_id)
+
+            await self._redeem_coupon_if_used(transaction)
+
+            purchased_courses = [courses_by_id[cid] for cid in course_ids if cid in courses_by_id]
+            await self.activity_service.log_activity(
+                transaction.user_id,
+                ActivityTypeEnum.PAYMENT_SUCCESSFUL,
+                {
+                    "transaction_type": "CART_PURCHASE",
+                    "course_ids": [str(cid) for cid in course_ids],
+                    "course_titles": [c.title for c in purchased_courses],
+                    "amount": float(transaction.amount),
+                },
+            )
+
+            await CartRepository(self.session).clear(transaction.user_id)
+
+            if purchased_courses:
+                await self._send_payment_receipt(transaction, purchased_courses)
 
         elif transaction.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             plan = await self.repo.get_plan_by_id(transaction.related_id)
@@ -274,16 +407,29 @@ class PaymentService:
                     {"transaction_type": "SUBSCRIPTION", "plan_id": str(plan.id), "plan_name": plan.name, "amount": float(transaction.amount)}
                 )
 
-    def _build_course_receipt_pdf(self, transaction: Transaction, user: User, course) -> bytes:
+    async def _build_receipt_pdf(self, transaction: Transaction, user: User, courses: list) -> bytes:
+        coupon_code = None
+        if transaction.coupon_id:
+            coupon = await self.coupon_service.repo.get_by_id(transaction.coupon_id)
+            coupon_code = coupon.code if coupon else None
         return render_payment_receipt_pdf(
             recipient_name=f"{user.first_name} {user.last_name}",
             recipient_email=user.email,
-            course_title=course.title,
-            amount=float(transaction.amount),
+            items=[{"title": c.title, "unit_price": float(c.price)} for c in courses],
+            subtotal_amount=float(transaction.subtotal_amount) if transaction.subtotal_amount is not None else float(transaction.amount),
+            discount_amount=float(transaction.discount_amount or 0),
+            total_amount=float(transaction.amount),
+            coupon_code=coupon_code,
             reference=transaction.reference,
             payment_date_str=transaction.created_at.strftime("%B %d, %Y"),
             payment_method=transaction.gateway.value.title(),
         )
+
+    def _items_summary(self, courses: list) -> str:
+        if len(courses) == 1:
+            return courses[0].title
+        titles = ", ".join(c.title for c in courses)
+        return f"{len(courses)} courses ({titles})"
 
     async def get_course_receipt_pdf(self, reference: str, current_user: User) -> tuple[bytes, str]:
         transaction = await self.repo.get_transaction_by_reference(reference)
@@ -291,38 +437,45 @@ class PaymentService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Transaction not found")
         if transaction.user_id != current_user.id and current_user.user_type != UserTypeEnum.ADMIN:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have access to this receipt")
-        if transaction.transaction_type != TransactionTypeEnum.COURSE_PURCHASE:
+        if transaction.transaction_type not in (TransactionTypeEnum.COURSE_PURCHASE, TransactionTypeEnum.CART_PURCHASE):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Receipts are only available for course purchases")
         if transaction.status != TransactionStatusEnum.SUCCESS:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Receipt is only available for successful payments")
 
-        course = await self.course_repo.get_by_id(transaction.related_id)
-        if not course:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+        if transaction.transaction_type == TransactionTypeEnum.COURSE_PURCHASE:
+            course = await self.course_repo.get_by_id(transaction.related_id)
+            if not course:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+            courses = [course]
+        else:
+            items = await self.repo.get_transaction_items(transaction.id)
+            courses_by_id = {c.id: c for c in await self.course_repo.get_many_by_ids([i.course_id for i in items])}
+            courses = [courses_by_id[i.course_id] for i in items if i.course_id in courses_by_id]
+            if not courses:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
 
         user = await self.session.get(User, transaction.user_id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
 
-        pdf_bytes = self._build_course_receipt_pdf(transaction, user, course)
+        pdf_bytes = await self._build_receipt_pdf(transaction, user, courses)
         return pdf_bytes, f"Receipt-{transaction.reference}.pdf"
 
-    async def _send_course_payment_receipt(self, transaction: Transaction, course) -> None:
+    async def _send_payment_receipt(self, transaction: Transaction, courses: list) -> None:
         try:
             user = await self.session.get(User, transaction.user_id)
             if not user:
                 return
 
             payment_date = transaction.created_at.strftime("%B %d, %Y")
-            recipient_name = f"{user.first_name} {user.last_name}"
             amount = float(transaction.amount)
 
-            receipt_pdf = self._build_course_receipt_pdf(transaction, user, course)
+            receipt_pdf = await self._build_receipt_pdf(transaction, user, courses)
 
             await email_service.send_course_payment_receipt_email(
                 to_email=user.email,
                 first_name=user.first_name,
-                course_title=course.title,
+                items_summary=self._items_summary(courses),
                 amount=amount,
                 reference=transaction.reference,
                 payment_date=payment_date,

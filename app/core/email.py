@@ -192,18 +192,18 @@ class EmailService:
         self,
         to_email: str,
         first_name: str,
-        course_title: str,
+        items_summary: str,
         amount: float,
         reference: str,
         payment_date: str,
         receipt_pdf: bytes,
     ) -> None:
-        subject = f"Payment received — {course_title}"
+        subject = f"Payment received — {items_summary}"
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1a1a1a;">
           <h2 style="color: #111827;">Thank you for your payment!</h2>
           <p>Hi {first_name},</p>
-          <p>We've received your payment for <strong>{course_title}</strong>. You now have full access to the course &mdash; happy learning!</p>
+          <p>We've received your payment for <strong>{items_summary}</strong>. You now have full access &mdash; happy learning!</p>
           <table style="width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 14px;">
             <tr>
               <td style="padding: 8px 0; color: #6b7280;">Amount paid</td>

@@ -20,6 +20,12 @@ class CourseRepository(BaseRepository[Course]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_many_by_ids(self, course_ids: Sequence[uuid.UUID]) -> Sequence[Course]:
+        if not course_ids:
+            return []
+        stmt = self._base_select().where(Course.id.in_(course_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
     async def sum_estimated_minutes_by_course(self, course_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]:
         if not course_ids:
             return {}

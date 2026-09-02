@@ -48,7 +48,14 @@ To roll back the last migration: `alembic downgrade -1`
 ## 5. Run the API
 
 ```powershell
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
+```
+
+If Windows Application Control blocks `uvicorn.exe`, call the module through the
+venv interpreter directly:
+
+```powershell
+.\venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 - **Seeding the certificate:**

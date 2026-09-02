@@ -95,12 +95,17 @@ def _fetch_logo() -> ImageReader | None:
 def render_payment_receipt_pdf(
     recipient_name: str,
     recipient_email: str,
-    course_title: str,
-    amount: float,
+    items: list[dict],
+    subtotal_amount: float,
+    discount_amount: float,
+    total_amount: float,
     reference: str,
     payment_date_str: str,
     payment_method: str,
+    coupon_code: str | None = None,
 ) -> bytes:
+    """`items` is a list of `{"title": str, "unit_price": float}` - one row per
+    course (1 for a single-course purchase, N for a cart checkout)."""
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
 
@@ -150,7 +155,7 @@ def render_payment_receipt_pdf(
     cursor_y -= 34
 
     # -- amount paid ------------------------------------------------------
-    amount_w = _draw_amount_left(pdf, margin, cursor_y, amount, "Helvetica-Bold", 22, TEXT)
+    amount_w = _draw_amount_left(pdf, margin, cursor_y, total_amount, "Helvetica-Bold", 22, TEXT)
     pdf.setFillColor(GREEN)
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawString(margin + amount_w + 10, cursor_y + 6, "PAID")
@@ -196,18 +201,20 @@ def render_payment_receipt_pdf(
     pdf.setLineWidth(1)
     pdf.line(margin, cursor_y, PAGE_WIDTH - margin, cursor_y)
 
-    cursor_y -= 22
-    pdf.setFillColor(TEXT)
-    pdf.setFont("Helvetica", 10.5)
-    pdf.drawString(desc_x, cursor_y, course_title)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawCentredString(qty_x, cursor_y, "1")
-    _draw_amount_right(pdf, amount_x, cursor_y, amount, "Helvetica", 10, TEXT)
-    pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 8.5)
-    pdf.drawString(desc_x, cursor_y - 13, "Course enrollment")
+    for item in items:
+        cursor_y -= 22
+        pdf.setFillColor(TEXT)
+        pdf.setFont("Helvetica", 10.5)
+        pdf.drawString(desc_x, cursor_y, item["title"])
+        pdf.setFont("Helvetica", 10)
+        pdf.drawCentredString(qty_x, cursor_y, "1")
+        _draw_amount_right(pdf, amount_x, cursor_y, item["unit_price"], "Helvetica", 10, TEXT)
+        pdf.setFillColor(MUTED)
+        pdf.setFont("Helvetica", 8.5)
+        pdf.drawString(desc_x, cursor_y - 13, "Course enrollment")
+        cursor_y -= 13
 
-    cursor_y -= 34
+    cursor_y -= 21
     pdf.setStrokeColor(BORDER)
     pdf.line(margin, cursor_y, PAGE_WIDTH - margin, cursor_y)
 
@@ -215,13 +222,26 @@ def render_payment_receipt_pdf(
     pdf.setFillColor(MUTED)
     pdf.setFont("Helvetica", 10)
     pdf.drawString(desc_x, cursor_y, "Subtotal")
-    _draw_amount_right(pdf, amount_x, cursor_y, amount, "Helvetica", 10, MUTED)
+    _draw_amount_right(pdf, amount_x, cursor_y, subtotal_amount, "Helvetica", 10, MUTED)
+
+    if discount_amount > 0:
+        cursor_y -= 20
+        pdf.setFillColor(GREEN)
+        pdf.setFont("Helvetica", 10)
+        label = f"Coupon ({coupon_code})" if coupon_code else "Discount"
+        pdf.drawString(desc_x, cursor_y, label)
+
+        dash_w = pdf.stringWidth("-", "Helvetica", 10)
+        amount_w = _draw_amount_right(pdf, amount_x, cursor_y, discount_amount, "Helvetica", 10, GREEN)
+        pdf.setFillColor(GREEN)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(amount_x - amount_w - dash_w, cursor_y, "-")
 
     cursor_y -= 20
     pdf.setFillColor(TEXT)
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(desc_x, cursor_y, "Amount paid")
-    _draw_amount_right(pdf, amount_x, cursor_y, amount, "Helvetica-Bold", 11, TEXT)
+    _draw_amount_right(pdf, amount_x, cursor_y, total_amount, "Helvetica-Bold", 11, TEXT)
 
     cursor_y -= 12
     pdf.setStrokeColor(BORDER)

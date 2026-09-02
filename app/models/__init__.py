@@ -17,7 +17,9 @@ from app.modules.course.access_entity import UserCourseAccess  # noqa: F401
 from app.modules.course.bookmark_entity import CourseBookmark  # noqa: F401
 from app.modules.course.instructor_entity import CourseInstructor  # noqa: F401
 from app.modules.course.review_entity import CourseReview  # noqa: F401
-from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, UserSubscription  # noqa: F401
+from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, TransactionItem, UserSubscription  # noqa: F401
+from app.modules.coupon.entity import Coupon, CouponRedemption  # noqa: F401
+from app.modules.cart.entity import CartItem  # noqa: F401
 from app.modules.user.entity import User  # noqa: F401
 from app.modules.user.activity_entity import ActivityLog  # noqa: F401
 from app.modules.learning.entity import (  # noqa: F401

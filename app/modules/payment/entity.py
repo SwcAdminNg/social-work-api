@@ -24,6 +24,7 @@ class TransactionStatusEnum(str, enum.Enum):
 class TransactionTypeEnum(str, enum.Enum):
     COURSE_PURCHASE = "COURSE_PURCHASE"
     SUBSCRIPTION = "SUBSCRIPTION"
+    CART_PURCHASE = "CART_PURCHASE"
 
 
 class SubscriptionPlan(BaseEntity):
@@ -75,6 +76,16 @@ class Transaction(BaseEntity):
     related_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True) # Course ID or Plan ID
     gateway_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Coupon/discount bookkeeping. `amount` keeps its original meaning (the final
+    # charged amount) so every pre-existing read of `amount` stays correct;
+    # `subtotal_amount`/`discount_amount` are additive and null/0 for transactions
+    # created before coupons existed.
+    coupon_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("coupons.id", ondelete="SET NULL"), nullable=True
+    )
+    subtotal_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    discount_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0, server_default="0")
+
 
 class SavedCard(BaseEntity):
     __tablename__ = "saved_cards"
@@ -96,3 +107,21 @@ class SavedCard(BaseEntity):
     bank: Mapped[str | None] = mapped_column(String(100), nullable=True)
     signature: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class TransactionItem(BaseEntity):
+    """One line item of a `CART_PURCHASE` transaction - one row per course. Unused
+    for a single `COURSE_PURCHASE`, which keeps using `Transaction.related_id`
+    exactly as before. `unit_price` snapshots the course's price at purchase time
+    (before any coupon discount) so receipts stay accurate even if the course's
+    price later changes."""
+
+    __tablename__ = "transaction_items"
+
+    transaction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False, index=True
+    )
+    unit_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
