@@ -106,10 +106,10 @@ async def _get_or_create_global_template(session) -> CertificateTemplate:
             "having met all requirements with distinction and demonstrated a thorough "
             "understanding of the subject matter."
         ),
-        organization_name="Social Workers Academy",
+        organization_name="Social Work Nigeria Academy",
         footer_text="This certificate can be verified online using the code below.",
         signature_name="Dr. Amara Okafor",
-        signature_title="Program Director, Social Workers Academy",
+        signature_title="Program Director, Social Work Nigeria Academy",
         primary_color=PRIMARY,
         accent_color=ACCENT,
         background_color=BACKGROUND,

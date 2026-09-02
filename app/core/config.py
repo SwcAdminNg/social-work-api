@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "Social Workers API"
+    app_name: str = "Social Work Nigeria API"
     app_env: str = "local"
     debug: bool = True
 
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # Two-factor authentication (email OTP and authenticator app TOTP)
     two_factor_challenge_expire_minutes: int = 10
-    totp_issuer_name: str = "Social Workers"
+    totp_issuer_name: str = "Social Work Nigeria"
     # Optional dedicated key for encrypting stored TOTP secrets. If unset, a key is
     # derived from jwt_secret_key instead so no new required env var is introduced.
     totp_secret_encryption_key: str = ""
@@ -39,7 +39,19 @@ class Settings(BaseSettings):
     # Resend (email)
     resend_api_key: str
     resend_from_email: str = "noreply@send.socialworknigeria.org"
-    resend_from_name: str = "Social Workers"
+    resend_from_name: str = "Social Work Nigeria"
+
+    # Company / HQ info (used in email footers and PDF receipts)
+    company_name: str = "Social Work Nigeria"
+    company_address: str = "Okonkwo Estate, Zaramagada-Fwavei, RVWV+VJ6, Rayfield Rd, Jos 930103, Plateau, Nigeria"
+    company_phone: str = "+234 (0) 800 123 4567"
+    company_support_email: str = "support@socialworknigeria.com"
+    company_info_email: str = "info@socialworknigeria.com"
+    company_logo_url: str = "https://www.socialworknigeria.org/_next/image?url=%2Fimages%2Flogo%2Fswc-dark-logo.png&w=640&q=75"
+    # Local logo file (checked first, before falling back to company_logo_url) so
+    # PDF receipts can embed a full-resolution copy instead of the resized image
+    # served by the website's Next.js image proxy.
+    company_logo_path: str = "app/static/logo.png"
 
     # Cloudflare R2 (course documents)
     r2_account_id: str = ""

@@ -1,4 +1,4 @@
-# Social Workers API
+# Social Work Nigeria API
 
 FastAPI + PostgreSQL backend. This README walks through install → setup → running the app.
 

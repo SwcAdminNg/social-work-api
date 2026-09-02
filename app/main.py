@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    description="Social Workers API",
+    description="Social Work Nigeria API",
     version="0.1.0",
     lifespan=lifespan,
     docs_url="/docs",

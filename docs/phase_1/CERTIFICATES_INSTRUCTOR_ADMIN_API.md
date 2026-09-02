@@ -104,7 +104,7 @@ defined "term" for the whole cohort.
 | `title_text` | string (max 150) | `"Certificate of Completion"` | The big headline on the certificate. |
 | `subtitle_text` | string \| null (max 255) | `"This certificate is proudly presented to"` | Sits above the recipient's name. |
 | `body_text` | string | see below | The paragraph under the recipient's name. Supports placeholders — see §2.2. |
-| `organization_name` | string (max 150) | `"Social Workers Academy"` | Shown near the logo. |
+| `organization_name` | string (max 150) | `"Social Work Nigeria Academy"` | Shown near the logo. |
 | `footer_text` | string \| null (max 255) | `null` | Small print at the very bottom (e.g. a disclaimer or tagline). |
 | `signature_name` | string \| null (max 150) | `null` | Name under the signature line. |
 | `signature_title` | string \| null (max 150) | `null` | Title/role under the signature name (e.g. `"Program Director"`). |
@@ -135,9 +135,9 @@ POST /certificates/templates
   "title_text": "Certificate of Completion",
   "subtitle_text": "This certificate is proudly presented to",
   "body_text": "for successfully completing \"{course_title}\" on {completion_date}, having met all requirements with distinction.",
-  "organization_name": "Social Workers Academy",
+  "organization_name": "Social Work Nigeria Academy",
   "signature_name": "Dr. Amara Okafor",
-  "signature_title": "Program Director, Social Workers Academy",
+  "signature_title": "Program Director, Social Work Nigeria Academy",
   "primary_color": "#0B3D2E",
   "accent_color": "#D4AF37",
   "background_color": "#FFFDF7",
@@ -158,9 +158,9 @@ POST /certificates/templates
     "title_text": "Certificate of Completion",
     "subtitle_text": "This certificate is proudly presented to",
     "body_text": "for successfully completing \"{course_title}\" ...",
-    "organization_name": "Social Workers Academy",
+    "organization_name": "Social Work Nigeria Academy",
     "signature_name": "Dr. Amara Okafor",
-    "signature_title": "Program Director, Social Workers Academy",
+    "signature_title": "Program Director, Social Work Nigeria Academy",
     "primary_color": "#0B3D2E",
     "accent_color": "#D4AF37",
     "background_color": "#FFFDF7",

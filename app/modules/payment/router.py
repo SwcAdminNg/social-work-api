@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
 
@@ -281,6 +281,23 @@ async def list_my_transactions(
         params=pagination,
     )
 
+
+
+@router.get(
+    "/transactions/{reference}/receipt",
+    summary="Download the PDF receipt for a successful course purchase",
+)
+async def download_receipt(
+    reference: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    pdf_bytes, filename = await PaymentService(db).get_course_receipt_pdf(reference, current_user)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get(

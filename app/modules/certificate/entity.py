@@ -46,7 +46,7 @@ class CertificateTemplate(BaseEntity):
             "on {completion_date}, demonstrating dedication and mastery of the material."
         ),
     )
-    organization_name: Mapped[str] = mapped_column(String(150), nullable=False, default="Social Workers Academy")
+    organization_name: Mapped[str] = mapped_column(String(150), nullable=False, default="Social Work Nigeria Academy")
     footer_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # -- signature block ----------------------------------------------------

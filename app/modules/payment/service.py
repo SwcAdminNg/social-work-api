@@ -1,3 +1,4 @@
+import logging
 import uuid
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -18,11 +19,14 @@ from app.modules.payment.entity import (
     UserSubscription,
 )
 from app.modules.payment.paystack_gateway import PaystackGateway
+from app.modules.payment.receipt_renderer import render_payment_receipt_pdf
 from app.modules.payment.repository import PaymentRepository
 from app.modules.payment.schema import ChargeSavedCardRequest, InitializePaymentRequest, SubscriptionPlanCreateDTO, SubscriptionPlanUpdateDTO
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
-from app.modules.user.entity import User
+from app.modules.user.entity import User, UserTypeEnum
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentService:
@@ -245,7 +249,11 @@ class PaymentService:
                 ActivityTypeEnum.PAYMENT_SUCCESSFUL,
                 {"transaction_type": "COURSE_PURCHASE", "course_id": str(transaction.related_id), "course_title": course.title if course else "Unknown", "amount": float(transaction.amount)}
             )
-            
+
+            if course:
+                await self._send_course_payment_receipt(transaction, course)
+
+
         elif transaction.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             plan = await self.repo.get_plan_by_id(transaction.related_id)
             if plan:
@@ -265,6 +273,63 @@ class PaymentService:
                     ActivityTypeEnum.PAYMENT_SUCCESSFUL,
                     {"transaction_type": "SUBSCRIPTION", "plan_id": str(plan.id), "plan_name": plan.name, "amount": float(transaction.amount)}
                 )
+
+    def _build_course_receipt_pdf(self, transaction: Transaction, user: User, course) -> bytes:
+        return render_payment_receipt_pdf(
+            recipient_name=f"{user.first_name} {user.last_name}",
+            recipient_email=user.email,
+            course_title=course.title,
+            amount=float(transaction.amount),
+            reference=transaction.reference,
+            payment_date_str=transaction.created_at.strftime("%B %d, %Y"),
+            payment_method=transaction.gateway.value.title(),
+        )
+
+    async def get_course_receipt_pdf(self, reference: str, current_user: User) -> tuple[bytes, str]:
+        transaction = await self.repo.get_transaction_by_reference(reference)
+        if not transaction:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Transaction not found")
+        if transaction.user_id != current_user.id and current_user.user_type != UserTypeEnum.ADMIN:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have access to this receipt")
+        if transaction.transaction_type != TransactionTypeEnum.COURSE_PURCHASE:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Receipts are only available for course purchases")
+        if transaction.status != TransactionStatusEnum.SUCCESS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Receipt is only available for successful payments")
+
+        course = await self.course_repo.get_by_id(transaction.related_id)
+        if not course:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+
+        user = await self.session.get(User, transaction.user_id)
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+        pdf_bytes = self._build_course_receipt_pdf(transaction, user, course)
+        return pdf_bytes, f"Receipt-{transaction.reference}.pdf"
+
+    async def _send_course_payment_receipt(self, transaction: Transaction, course) -> None:
+        try:
+            user = await self.session.get(User, transaction.user_id)
+            if not user:
+                return
+
+            payment_date = transaction.created_at.strftime("%B %d, %Y")
+            recipient_name = f"{user.first_name} {user.last_name}"
+            amount = float(transaction.amount)
+
+            receipt_pdf = self._build_course_receipt_pdf(transaction, user, course)
+
+            await email_service.send_course_payment_receipt_email(
+                to_email=user.email,
+                first_name=user.first_name,
+                course_title=course.title,
+                amount=amount,
+                reference=transaction.reference,
+                payment_date=payment_date,
+                receipt_pdf=receipt_pdf,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send payment receipt for transaction {transaction.reference}: {e}")
 
     async def _save_card(self, user_id: uuid.UUID, gateway: PaymentGatewayEnum, auth_data: dict):
         signature = auth_data.get("signature")

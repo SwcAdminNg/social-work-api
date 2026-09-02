@@ -16,7 +16,7 @@ class CertificateTemplateBaseDTO(BaseModel):
             "on {completion_date}, demonstrating dedication and mastery of the material."
         )
     )
-    organization_name: str = Field(default="Social Workers Academy", max_length=150)
+    organization_name: str = Field(default="Social Work Nigeria Academy", max_length=150)
     footer_text: str | None = Field(default=None, max_length=255)
     signature_name: str | None = Field(default=None, max_length=150)
     signature_title: str | None = Field(default=None, max_length=150)

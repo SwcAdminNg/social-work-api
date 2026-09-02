@@ -1,6 +1,6 @@
 # Developer Onboarding Guide
 
-Welcome to the **Social Workers API** project! This document contains all the necessary information to get you up to speed, install the project locally, understand the architecture, and know about the external services we rely on.
+Welcome to the **Social Work Nigeria API** project! This document contains all the necessary information to get you up to speed, install the project locally, understand the architecture, and know about the external services we rely on.
 
 ## 1. Tech Stack Overview
 
