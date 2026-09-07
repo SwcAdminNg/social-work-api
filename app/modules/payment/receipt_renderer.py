@@ -103,6 +103,8 @@ def render_payment_receipt_pdf(
     payment_date_str: str,
     payment_method: str,
     coupon_code: str | None = None,
+    tax_rate: float = 0.0,
+    tax_amount: float = 0.0,
 ) -> bytes:
     """`items` is a list of `{"title": str, "unit_price": float}` - one row per
     course (1 for a single-course purchase, N for a cart checkout)."""
@@ -236,6 +238,13 @@ def render_payment_receipt_pdf(
         pdf.setFillColor(GREEN)
         pdf.setFont("Helvetica", 10)
         pdf.drawString(amount_x - amount_w - dash_w, cursor_y, "-")
+
+    if tax_amount > 0:
+        cursor_y -= 20
+        pdf.setFillColor(MUTED)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(desc_x, cursor_y, f"VAT ({tax_rate * 100:.1f}%)")
+        _draw_amount_right(pdf, amount_x, cursor_y, tax_amount, "Helvetica", 10, MUTED)
 
     cursor_y -= 20
     pdf.setFillColor(TEXT)

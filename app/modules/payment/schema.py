@@ -1,8 +1,10 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
+from fastapi import Query
 from pydantic import BaseModel, Field
 
+from app.common.pagination import PaginationMeta
 from app.modules.payment.entity import PaymentGatewayEnum, TransactionStatusEnum, TransactionTypeEnum
 from app.modules.user.dto import UserReadDTO
 
@@ -59,6 +61,8 @@ class TransactionReadDTO(BaseModel):
     amount: float
     subtotal_amount: float | None = None
     discount_amount: float = 0
+    tax_rate: float = 0
+    tax_amount: float = 0
     reference: str
     gateway: PaymentGatewayEnum
     status: TransactionStatusEnum
@@ -99,3 +103,47 @@ class CurrentSubscriptionResponse(BaseModel):
     auto_renew: bool
     pending_plan_id: uuid.UUID | None
     plan: SubscriptionPlanResponse | None = None
+
+
+class TaxFilterParams:
+    """Shared optional date-range filter for the tax report. Use as a FastAPI
+    dependency alongside `PaginationParams`."""
+
+    def __init__(
+        self,
+        start_date: date | None = Query(None, description="Only include purchases made on or after this date"),
+        end_date: date | None = Query(None, description="Only include purchases made on or before this date"),
+    ) -> None:
+        self.start_date = start_date
+        self.end_date = end_date
+
+
+class TaxRecordDTO(BaseModel):
+    reference: str
+    user_id: uuid.UUID
+    transaction_type: TransactionTypeEnum
+    subtotal_amount: float | None
+    discount_amount: float
+    tax_rate: float
+    tax_amount: float
+    amount: float
+    created_at: datetime
+
+
+class TaxSummaryDTO(BaseModel):
+    tax_rate: float = Field(..., description="Current VAT rate applied to purchases")
+    total_tax_amount: float = Field(..., description="Total VAT collected across every matching transaction, not just the current page")
+    total_taxable_transactions: int
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+class TaxReportResponse(BaseModel):
+    """Response for the admin tax report - a paginated list of taxed transactions
+    plus a summary of the total VAT collected across the whole filtered range."""
+
+    success: bool = True
+    message: str = "OK"
+    summary: TaxSummaryDTO
+    data: list[TaxRecordDTO]
+    meta: PaginationMeta

@@ -1,5 +1,6 @@
 import base64
 import io
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -47,6 +48,8 @@ from app.modules.auth.username import generate_username_suggestions
 from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import TwoFactorMethodEnum, User
 from app.modules.user.repository import UserRepository
+
+logger = logging.getLogger(__name__)
 
 TWO_FACTOR_SETUP_TOKEN_TYPE = "2fa_setup"
 TWO_FACTOR_PENDING_TOKEN_TYPE = "2fa_pending"
@@ -97,6 +100,12 @@ class AuthService:
         except IntegrityError:
             await self.session.rollback()
             raise HTTPException(status.HTTP_409_CONFLICT, "Email or username is already taken")
+
+        try:
+            login_link = f"{settings.frontend_url.rstrip('/')}/login"
+            await email_service.send_registration_welcome_email(user.email, user.first_name, login_link)
+        except Exception as e:
+            logger.error(f"Failed to send registration welcome email to {user.email}: {e}")
 
         # New accounts must set up 2FA before they can obtain a token pair.
         challenge_token = self._issue_challenge_token(user, TWO_FACTOR_SETUP_TOKEN_TYPE)

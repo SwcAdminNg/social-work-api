@@ -86,6 +86,13 @@ class Transaction(BaseEntity):
     subtotal_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     discount_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0, server_default="0")
 
+    # Nigeria VAT, computed on (subtotal - discount) at the time of purchase and
+    # already included in `amount`. `tax_rate` is snapshotted per-transaction (not
+    # read live from settings) so historical tax reports stay accurate even if the
+    # rate changes later.
+    tax_rate: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0, server_default="0")
+    tax_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0, server_default="0")
+
 
 class SavedCard(BaseEntity):
     __tablename__ = "saved_cards"

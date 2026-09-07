@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.email import email_service
 from app.modules.coupon.service import CouponService
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum, UserCourseAccess
@@ -45,6 +46,13 @@ class PaymentService:
 
     def _generate_reference(self) -> str:
         return f"TXN_{secrets.token_hex(12).upper()}"
+
+    def _compute_tax(self, taxable_amount: float) -> tuple[float, float, float]:
+        """Applies Nigeria VAT to a discounted subtotal. Returns
+        (tax_rate, tax_amount, total_amount_including_tax)."""
+        tax_rate = settings.tax_rate
+        tax_amount = round(taxable_amount * tax_rate, 2)
+        return tax_rate, tax_amount, round(taxable_amount + tax_amount, 2)
 
     async def create_plan(self, payload: SubscriptionPlanCreateDTO) -> SubscriptionPlan:
         plan = SubscriptionPlan(**payload.model_dump())
@@ -99,6 +107,9 @@ class PaymentService:
             if not plan:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found")
             amount = float(plan.price)
+            subtotal_amount = amount
+
+        tax_rate, tax_amount, amount = self._compute_tax(amount)
 
         reference = self._generate_reference()
         gateway = self._get_gateway(payload.gateway)
@@ -125,6 +136,8 @@ class PaymentService:
             amount=amount,
             subtotal_amount=subtotal_amount,
             discount_amount=discount_amount,
+            tax_rate=tax_rate,
+            tax_amount=tax_amount,
             coupon_id=coupon_id,
             reference=reference,
             gateway=payload.gateway,
@@ -184,6 +197,8 @@ class PaymentService:
             discount_amount = application.discount_amount
             amount = application.total_amount
 
+        tax_rate, tax_amount, amount = self._compute_tax(amount)
+
         reference = self._generate_reference()
         gateway = self._get_gateway(gateway_type)
 
@@ -204,6 +219,8 @@ class PaymentService:
             amount=amount,
             subtotal_amount=subtotal_amount,
             discount_amount=discount_amount,
+            tax_rate=tax_rate,
+            tax_amount=tax_amount,
             coupon_id=coupon_id,
             reference=reference,
             gateway=gateway_type,
@@ -225,17 +242,22 @@ class PaymentService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Saved card not found")
 
         amount = 0.0
+        subtotal_amount: float | None = None
         # Validate amount and related_id
         if payload.transaction_type == TransactionTypeEnum.COURSE_PURCHASE:
             course = await self.course_repo.get_by_id(payload.related_id)
             if not course or course.price is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid course or course is free")
             amount = float(course.price)
+            subtotal_amount = amount
         elif payload.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             plan = await self.repo.get_plan_by_id(payload.related_id)
             if not plan:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid plan")
             amount = float(plan.price)
+            subtotal_amount = amount
+
+        tax_rate, tax_amount, amount = self._compute_tax(amount)
 
         reference = self._generate_reference()
         gateway = self._get_gateway(card.gateway)
@@ -251,6 +273,9 @@ class PaymentService:
         transaction = Transaction(
             user_id=user.id,
             amount=amount,
+            subtotal_amount=subtotal_amount,
+            tax_rate=tax_rate,
+            tax_amount=tax_amount,
             reference=reference,
             gateway=card.gateway,
             status=TransactionStatusEnum.PENDING,
@@ -423,6 +448,8 @@ class PaymentService:
             reference=transaction.reference,
             payment_date_str=transaction.created_at.strftime("%B %d, %Y"),
             payment_method=transaction.gateway.value.title(),
+            tax_rate=float(transaction.tax_rate or 0),
+            tax_amount=float(transaction.tax_amount or 0),
         )
 
     def _items_summary(self, courses: list) -> str:
@@ -472,6 +499,12 @@ class PaymentService:
 
             receipt_pdf = await self._build_receipt_pdf(transaction, user, courses)
 
+            frontend_url = settings.frontend_url.rstrip("/")
+            dashboard_link = f"{frontend_url}/dashboard"
+            course_links = [
+                (course.title, f"{frontend_url}/dashboard/course-catalogue/{course.slug}") for course in courses
+            ]
+
             await email_service.send_course_payment_receipt_email(
                 to_email=user.email,
                 first_name=user.first_name,
@@ -480,6 +513,8 @@ class PaymentService:
                 reference=transaction.reference,
                 payment_date=payment_date,
                 receipt_pdf=receipt_pdf,
+                dashboard_link=dashboard_link,
+                course_links=course_links,
             )
         except Exception as e:
             logger.error(f"Failed to send payment receipt for transaction {transaction.reference}: {e}")
@@ -535,6 +570,14 @@ class PaymentService:
         card.is_default = True
         await self.session.commit()
         return card
+
+    async def get_tax_report(self, filters, pagination) -> dict:
+        transactions, total, total_tax_amount = await self.repo.get_tax_report(filters, pagination)
+        return {
+            "transactions": transactions,
+            "total": total,
+            "total_tax_amount": total_tax_amount,
+        }
 
     async def get_current_subscription(self, user_id: uuid.UUID) -> UserSubscription | None:
         from sqlalchemy import select
@@ -625,7 +668,8 @@ class PaymentService:
             saved_card = await self.repo.get_default_saved_card(user.id)
             if saved_card:
                 # Try to charge
-                amount = float(current_plan.price)
+                subtotal_amount = float(current_plan.price)
+                tax_rate, tax_amount, amount = self._compute_tax(subtotal_amount)
                 reference = self._generate_reference()
                 gateway = self._get_gateway(saved_card.gateway)
 
@@ -639,6 +683,9 @@ class PaymentService:
                 transaction = Transaction(
                     user_id=user.id,
                     amount=amount,
+                    subtotal_amount=subtotal_amount,
+                    tax_rate=tax_rate,
+                    tax_amount=tax_amount,
                     reference=reference,
                     gateway=saved_card.gateway,
                     status=TransactionStatusEnum.PENDING,

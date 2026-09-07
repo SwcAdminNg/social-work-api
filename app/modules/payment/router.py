@@ -1,3 +1,4 @@
+import math
 import uuid
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -6,6 +7,7 @@ import json
 
 from app.common.api_route import NoNullAPIRoute
 from app.common.responses import ApiResponse
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.qstash import verify_qstash_signature
 from app.core.cache import get_cache, set_cache, delete_cache
@@ -22,12 +24,16 @@ from app.modules.payment.schema import (
     TransactionReadDTO,
     CurrentSubscriptionResponse,
     ChangeSubscriptionPlanRequest,
+    TaxFilterParams,
+    TaxRecordDTO,
+    TaxReportResponse,
+    TaxSummaryDTO,
 )
 from app.modules.payment.service import PaymentService
 from app.modules.payment.repository import PaymentRepository
 from app.modules.user.entity import User
 
-from app.common.pagination import PaginatedResponse, PaginationParams
+from app.common.pagination import PaginatedResponse, PaginationMeta, PaginationParams
 router = APIRouter(prefix="/payments", tags=["Payments"], route_class=NoNullAPIRoute)
 
 
@@ -281,6 +287,46 @@ async def list_my_transactions(
         params=pagination,
     )
 
+
+
+@router.get(
+    "/taxes",
+    response_model=TaxReportResponse,
+    summary="Get VAT collected across all purchases, with an optional date range filter (Admin only)",
+)
+async def get_tax_report(
+    filters: TaxFilterParams = Depends(),
+    pagination: PaginationParams = Depends(),
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> TaxReportResponse:
+    result = await PaymentService(db).get_tax_report(filters, pagination)
+
+    data = [
+        TaxRecordDTO.model_validate(transaction, from_attributes=True) for transaction in result["transactions"]
+    ]
+    total = result["total"]
+    total_pages = math.ceil(total / pagination.page_size) if total else 0
+
+    return TaxReportResponse(
+        message="Tax report retrieved",
+        summary=TaxSummaryDTO(
+            tax_rate=settings.tax_rate,
+            total_tax_amount=result["total_tax_amount"],
+            total_taxable_transactions=total,
+            start_date=filters.start_date,
+            end_date=filters.end_date,
+        ),
+        data=data,
+        meta=PaginationMeta(
+            page=pagination.page,
+            page_size=pagination.page_size,
+            total_items=total,
+            total_pages=total_pages,
+            has_next=pagination.page < total_pages,
+            has_previous=pagination.page > 1,
+        ),
+    )
 
 
 @router.get(

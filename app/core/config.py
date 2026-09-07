@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     paystack_secret_key: str = ""
     paystack_public_key: str = ""
 
+    # Tax (Nigeria VAT, applied on top of every purchase's discounted subtotal)
+    tax_rate: float = 0.075
+
     # Upstash QStash
     qstash_url: str = "https://qstash-eu-central-1.upstash.io"
     qstash_token: str = ""

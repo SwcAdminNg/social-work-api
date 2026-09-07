@@ -158,6 +158,41 @@ class PaymentRepository:
         )
         return (await self.session.execute(stmt)).all()
 
+    async def get_tax_report(
+        self, filters, pagination
+    ) -> tuple[Sequence[Transaction], int, float]:
+        """Successful transactions that carry VAT, newest first. Returns
+        (page of transactions, total matching count, sum of tax_amount across
+        ALL matching transactions - not just the current page - so admins can
+        see the full amount owed to the government even while paging)."""
+        from datetime import datetime, time, timedelta
+
+        from sqlalchemy import func
+
+        from app.modules.payment.entity import TransactionStatusEnum
+
+        stmt = select(Transaction).where(
+            Transaction.status == TransactionStatusEnum.SUCCESS,
+            Transaction.tax_amount > 0,
+        )
+        if filters.start_date is not None:
+            stmt = stmt.where(Transaction.created_at >= datetime.combine(filters.start_date, time.min))
+        if filters.end_date is not None:
+            stmt = stmt.where(
+                Transaction.created_at < datetime.combine(filters.end_date, time.min) + timedelta(days=1)
+            )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        sum_stmt = select(func.coalesce(func.sum(Transaction.tax_amount), 0)).select_from(stmt.subquery())
+        total_tax_amount = (await self.session.execute(sum_stmt)).scalar_one()
+
+        stmt = stmt.order_by(Transaction.created_at.desc()).offset(pagination.offset).limit(pagination.limit)
+        items = (await self.session.execute(stmt)).scalars().all()
+
+        return items, total, float(total_tax_amount)
+
     async def get_default_saved_card(self, user_id: uuid.UUID) -> SavedCard | None:
         stmt = (
             select(SavedCard)
