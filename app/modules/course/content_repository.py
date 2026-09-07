@@ -9,6 +9,7 @@ from app.modules.course.content_entity import (
     CourseDocument,
     CourseEssaySettings,
     CourseLink,
+    CourseLiveSession,
     CourseQuizGroupSection,
     CourseQuizGroupSettings,
     CourseQuizOption,
@@ -93,6 +94,22 @@ class CourseContentRepository:
         if not item_ids:
             return []
         stmt = select(CourseLink).where(CourseLink.course_item_id.in_(item_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    # -- live session ------------------------------------------------------------
+
+    async def get_live_session_by_item(self, item_id: uuid.UUID) -> CourseLiveSession | None:
+        stmt = select(CourseLiveSession).where(CourseLiveSession.course_item_id == item_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_live_session(self, id: uuid.UUID) -> CourseLiveSession | None:
+        stmt = select(CourseLiveSession).where(CourseLiveSession.id == id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_live_sessions_for_items(self, item_ids: Sequence[uuid.UUID]) -> Sequence[CourseLiveSession]:
+        if not item_ids:
+            return []
+        stmt = select(CourseLiveSession).where(CourseLiveSession.course_item_id.in_(item_ids))
         return (await self.session.execute(stmt)).scalars().all()
 
     # -- section guest instructors ----------------------------------------------

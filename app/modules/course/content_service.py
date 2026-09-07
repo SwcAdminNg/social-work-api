@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.core.bunny import get_bunny_client
+from app.core.daily import get_daily_client
 from app.core.storage import get_r2_client
 from app.modules.course.content_dto import (
     AssessmentAIProviderEnum,
@@ -22,6 +23,7 @@ from app.modules.course.content_dto import (
     CourseItemReorderDTO,
     CourseItemUpdateDTO,
     CourseLinkDTO,
+    CourseLiveSessionDTO,
     CourseQuizDetailDTO,
     CourseQuizGroupDetailDTO,
     CourseQuizGroupManageDetailDTO,
@@ -61,6 +63,8 @@ from app.modules.course.content_entity import (
     CourseDocument,
     CourseEssaySettings,
     CourseLink,
+    CourseLiveSession,
+    LiveSessionStatusEnum,
     CourseQuizGroupSection,
     CourseQuizGroupSettings,
     CourseQuizOption,
@@ -93,6 +97,7 @@ class CourseContentService:
         self.learning_repo = LearningRepository(session)
         self._r2 = None
         self._bunny = None
+        self._daily = None
 
     @property
     def r2(self):
@@ -107,6 +112,12 @@ class CourseContentService:
         if self._bunny is None:
             self._bunny = get_bunny_client()
         return self._bunny
+
+    @property
+    def daily(self):
+        if self._daily is None:
+            self._daily = get_daily_client()
+        return self._daily
 
     # -- authorization helpers ----------------------------------------------
 
@@ -301,6 +312,34 @@ class CourseContentService:
                     description=payload.description,
                 )
             )
+        elif payload.item_type == CourseItemTypeEnum.LIVE_SESSION:
+            if payload.scheduled_start_at is None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "scheduled_start_at is required for live session items"
+                )
+            if payload.scheduled_start_at <= datetime.now(timezone.utc):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "scheduled_start_at must be in the future")
+
+            duration_minutes = payload.duration_minutes or 60
+            room_name = self.daily.build_room_name(item.id)
+            room = await self.daily.create_room(room_name, payload.scheduled_start_at, duration_minutes)
+            live_session = CourseLiveSession(
+                course_item_id=item.id,
+                scheduled_start_at=payload.scheduled_start_at,
+                duration_minutes=duration_minutes,
+                guest_name=payload.guest_name,
+                guest_title=payload.guest_title,
+                daily_room_name=room_name,
+                daily_room_url=room["url"],
+            )
+            self.session.add(live_session)
+            await self.session.flush()
+
+            from app.modules.course.live_session_service import LiveSessionService
+
+            live_session_service = LiveSessionService(self.session)
+            await live_session_service.notify_enrolled_students(course, item, live_session, kind="scheduled")
+            await live_session_service.schedule_reminder(live_session.id, payload.scheduled_start_at)
         elif payload.item_type == CourseItemTypeEnum.ASSESSMENT:
             if payload.assessment_type is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "assessment_type is required for assessment items")
@@ -399,8 +438,11 @@ class CourseContentService:
     async def update_item(
         self, item_id: uuid.UUID, payload: CourseItemUpdateDTO, current_user: User
     ) -> CourseItem:
-        _, _, item = await self._authorize_item(item_id, current_user)
-        _sub_entity_fields = {"downloadable", "url", "label", "description"}
+        course, _, item = await self._authorize_item(item_id, current_user)
+        _sub_entity_fields = {
+            "downloadable", "url", "label", "description",
+            "scheduled_start_at", "duration_minutes", "guest_name", "guest_title",
+        }
         for field, value in payload.model_dump(exclude_unset=True, exclude=_sub_entity_fields).items():
             setattr(item, field, value)
 
@@ -409,6 +451,44 @@ class CourseContentService:
             if document is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not a document")
             document.downloadable = payload.downloadable
+
+        live_session_fields = {
+            field: getattr(payload, field)
+            for field in ("scheduled_start_at", "duration_minutes", "guest_name", "guest_title")
+            if field in payload.model_fields_set
+        }
+        if live_session_fields:
+            live_session = await self.repo.get_live_session_by_item(item.id)
+            if live_session is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not a live session")
+            if live_session.status != LiveSessionStatusEnum.SCHEDULED:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This live session can no longer be edited")
+
+            reschedule = (
+                "scheduled_start_at" in live_session_fields
+                and live_session_fields["scheduled_start_at"] != live_session.scheduled_start_at
+            )
+            previous_start_display = live_session.scheduled_start_at.strftime("%A, %B %d, %Y at %I:%M %p UTC")
+
+            for field, value in live_session_fields.items():
+                setattr(live_session, field, value)
+
+            if reschedule:
+                if live_session.scheduled_start_at <= datetime.now(timezone.utc):
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "scheduled_start_at must be in the future")
+                await self.daily.update_room_schedule(
+                    live_session.daily_room_name, live_session.scheduled_start_at, live_session.duration_minutes
+                )
+                await self.session.flush()
+
+                from app.modules.course.live_session_service import LiveSessionService
+
+                live_session_service = LiveSessionService(self.session)
+                live_session.reminder_sent_at = None
+                await live_session_service.notify_enrolled_students(
+                    course, item, live_session, kind="rescheduled", previous_start_display=previous_start_display
+                )
+                await live_session_service.schedule_reminder(live_session.id, live_session.scheduled_start_at)
 
         link_fields = {
             field: getattr(payload, field)
@@ -433,6 +513,10 @@ class CourseContentService:
             document = await self.repo.get_document_by_item(item.id)
             if document:
                 self.r2.delete_object(document.storage_key)
+        elif item.item_type == CourseItemTypeEnum.LIVE_SESSION:
+            live_session = await self.repo.get_live_session_by_item(item.id)
+            if live_session:
+                await self.daily.delete_room(live_session.daily_room_name)
 
         item.mark_deleted(current_user.id)
 
@@ -1052,6 +1136,9 @@ class CourseContentService:
         documents = {d.course_item_id: d for d in await self.repo.list_documents_for_items(item_ids)}
         links = {l.course_item_id: l for l in await self.repo.list_links_for_items(item_ids)}
         assessments = {a.course_item_id: a for a in await self.repo.list_assessments_for_items(item_ids)}
+        live_sessions = {
+            ls.course_item_id: ls for ls in await self.repo.list_live_sessions_for_items(item_ids)
+        }
 
         guest_instructors_by_section: dict[uuid.UUID, list[CourseInstructorReadDTO]] = {}
         for link_row, instructor in await self.repo.list_section_instructors(section_ids):
@@ -1110,6 +1197,7 @@ class CourseContentService:
                     documents.get(item.id),
                     links.get(item.id),
                     assessments.get(item.id),
+                    live_sessions.get(item.id),
                     quiz_settings_by_assessment,
                     essay_settings_by_assessment,
                     quiz_group_settings_by_assessment,
@@ -1175,6 +1263,7 @@ class CourseContentService:
         document: CourseDocument | None,
         link: CourseLink | None,
         assessment: CourseAssessment | None,
+        live_session: CourseLiveSession | None,
         quiz_settings_by_assessment: dict,
         essay_settings_by_assessment: dict,
         quiz_group_settings_by_assessment: dict,
@@ -1190,6 +1279,7 @@ class CourseContentService:
             document = None
             link = None
             assessment = None
+            live_session = None
 
         video_dto = None
         if video is not None:
@@ -1220,6 +1310,18 @@ class CourseContentService:
         link_dto = None
         if link is not None:
             link_dto = CourseLinkDTO(url=link.url, label=link.label, description=link.description)
+
+        live_session_dto = None
+        if live_session is not None:
+            live_session_dto = CourseLiveSessionDTO(
+                scheduled_start_at=live_session.scheduled_start_at,
+                duration_minutes=live_session.duration_minutes,
+                guest_name=live_session.guest_name,
+                guest_title=live_session.guest_title,
+                status=live_session.status,
+                recording_status=live_session.recording_status,
+                recording_playback_url=live_session.recording_playback_url,
+            )
 
         assessment_dto = None
         if assessment is not None:
@@ -1310,4 +1412,5 @@ class CourseContentService:
             document=document_dto,
             link=link_dto,
             assessment=assessment_dto,
+            live_session=live_session_dto,
         )

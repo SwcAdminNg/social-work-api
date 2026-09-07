@@ -284,4 +284,115 @@ class EmailService:
         )
 
 
+    async def send_live_session_scheduled_email(
+        self,
+        to_email: str,
+        first_name: str,
+        course_title: str,
+        session_title: str,
+        start_at_display: str,
+        guest_name: str | None,
+        guest_title: str | None,
+        join_link: str,
+        google_calendar_link: str,
+        outlook_calendar_link: str,
+        ics_bytes: bytes,
+    ) -> None:
+        subject = f"You're invited: {session_title} ({course_title})"
+        guest_section = ""
+        if guest_name:
+            guest_line = guest_name if not guest_title else f"{guest_name} &mdash; {guest_title}"
+            guest_section = f"""
+              <p style="margin: 16px 0; padding: 12px 16px; background-color: #f3f4f6; border-radius: 8px;">
+                <strong>Guest speaker:</strong> {guest_line}
+              </p>
+            """
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">A live session has been scheduled &#128197;</h2>
+          <p>Hi {first_name},</p>
+          <p>A live session for <strong>{course_title}</strong> has been scheduled:</p>
+          <p style="font-size: 16px; font-weight: bold; margin: 4px 0;">{session_title}</p>
+          <p style="color: #6b7280; margin-top: 0;">{start_at_display}</p>
+          {guest_section}
+          {_button("Join Live Session", join_link)}
+          <p style="text-align: center; margin: 16px 0; font-size: 13px;">
+            <a href="{google_calendar_link}" style="color: #2563eb; text-decoration: none; margin: 0 8px;">Add to Google Calendar</a>
+            &middot;
+            <a href="{outlook_calendar_link}" style="color: #2563eb; text-decoration: none; margin: 0 8px;">Add to Outlook</a>
+          </p>
+          <p style="color: #6b7280; font-size: 13px;">
+            A calendar invite (.ics) is attached to this email - open it to add the session to any calendar app.
+          </p>
+        """
+        attachment = {
+            "filename": "live-session.ics",
+            "content": base64.b64encode(ics_bytes).decode("ascii"),
+        }
+        await self._send(
+            to_email,
+            subject,
+            _wrap_email(body, preheader=f"{session_title} is scheduled - {start_at_display}"),
+            attachments=[attachment],
+        )
+
+    async def send_live_session_rescheduled_email(
+        self,
+        to_email: str,
+        first_name: str,
+        course_title: str,
+        session_title: str,
+        old_start_at_display: str,
+        new_start_at_display: str,
+        join_link: str,
+        google_calendar_link: str,
+        outlook_calendar_link: str,
+        ics_bytes: bytes,
+    ) -> None:
+        subject = f"Rescheduled: {session_title} ({course_title})"
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">This live session has been rescheduled</h2>
+          <p>Hi {first_name},</p>
+          <p>The live session <strong>{session_title}</strong> for <strong>{course_title}</strong> has a new date/time:</p>
+          <p style="color: #9ca3af; text-decoration: line-through; margin: 4px 0;">{old_start_at_display}</p>
+          <p style="font-size: 16px; font-weight: bold; margin: 4px 0; color: #111827;">{new_start_at_display}</p>
+          {_button("Join Live Session", join_link)}
+          <p style="text-align: center; margin: 16px 0; font-size: 13px;">
+            <a href="{google_calendar_link}" style="color: #2563eb; text-decoration: none; margin: 0 8px;">Add to Google Calendar</a>
+            &middot;
+            <a href="{outlook_calendar_link}" style="color: #2563eb; text-decoration: none; margin: 0 8px;">Add to Outlook</a>
+          </p>
+          <p style="color: #6b7280; font-size: 13px;">
+            An updated calendar invite (.ics) is attached - re-adding it will replace the old time in most calendar apps.
+          </p>
+        """
+        attachment = {
+            "filename": "live-session.ics",
+            "content": base64.b64encode(ics_bytes).decode("ascii"),
+        }
+        await self._send(
+            to_email,
+            subject,
+            _wrap_email(body, preheader=f"{session_title} moved to {new_start_at_display}"),
+            attachments=[attachment],
+        )
+
+    async def send_live_session_reminder_email(
+        self,
+        to_email: str,
+        first_name: str,
+        course_title: str,
+        session_title: str,
+        start_at_display: str,
+        join_link: str,
+    ) -> None:
+        subject = f"Starting soon: {session_title}"
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">Your live session is starting soon &#9200;</h2>
+          <p>Hi {first_name},</p>
+          <p><strong>{session_title}</strong> ({course_title}) starts at <strong>{start_at_display}</strong>.</p>
+          {_button("Join Now", join_link)}
+        """
+        await self._send(to_email, subject, _wrap_email(body, preheader=f"{session_title} starts at {start_at_display}"))
+
+
 email_service = EmailService()

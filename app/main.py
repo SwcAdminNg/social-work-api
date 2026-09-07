@@ -13,6 +13,7 @@ from app.modules.contact_us.router import router as contact_us_router
 from app.modules.course.router import router as course_router
 from app.modules.course.review_router import router as review_router
 from app.modules.course.webhook_router import router as course_webhook_router
+from app.modules.course.daily_webhook_router import router as daily_webhook_router
 from app.modules.certificate.router import router as certificate_router
 from app.modules.community.router import router as community_router
 from app.modules.group.router import router as group_router
@@ -87,6 +88,7 @@ app.include_router(contact_us_router)
 app.include_router(course_router)
 app.include_router(review_router)
 app.include_router(course_webhook_router)
+app.include_router(daily_webhook_router)
 app.include_router(certificate_router)
 app.include_router(group_router)
 app.include_router(support_router)

@@ -37,6 +37,7 @@ class CourseItemTypeEnum(str, enum.Enum):
     DOCUMENT = "DOCUMENT"
     VIDEO = "VIDEO"
     LINKS = "LINKS"
+    LIVE_SESSION = "LIVE_SESSION"
 
 
 class CourseAccessModeEnum(str, enum.Enum):

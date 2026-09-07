@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
@@ -7,6 +8,7 @@ from app.common.api_route import NoNullAPIRoute
 from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
+from app.core.qstash import verify_qstash_signature
 from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user, get_current_user_optional, get_current_admin_user
 from app.modules.course.content_dto import (
     AssessmentAIProviderEnum,
@@ -28,6 +30,7 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    LiveSessionJoinDTO,
     QuizAIGenerateRequestDTO,
     QuizAIGenerateResponseDTO,
     QuizAIAutocompleteResponseDTO,
@@ -41,6 +44,7 @@ from app.modules.course.content_dto import (
     PublicCourseDetailDTO,
 )
 from app.modules.course.content_service import CourseContentService
+from app.modules.course.live_session_service import LiveSessionService
 from app.modules.course.dto import (
     CourseCreateDTO,
     CourseFilterParams,
@@ -824,6 +828,47 @@ async def refresh_video_upload(
 ) -> ApiResponse[VideoUploadCredentialsDTO]:
     credentials = await CourseContentService(db).refresh_video_upload(item_id, current_user)
     return ApiResponse(message="Upload credentials refreshed successfully", data=credentials)
+
+
+# ---------------------------------------------------------------------------
+# Live session content
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/items/{item_id}/live-session/join",
+    response_model=ApiResponse[LiveSessionJoinDTO],
+    summary="Mint a daily.co join token for a live session (enrolled students or the "
+    "owning instructor/admin, only within the session's join window)",
+)
+async def join_live_session(
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[LiveSessionJoinDTO]:
+    join_info = await LiveSessionService(db).get_join_info(item_id, current_user)
+    return ApiResponse(message="Join credentials generated successfully", data=join_info)
+
+
+# ---------------------------------------------------------------------------
+# Cron (QStash)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/cron/live-session-reminder",
+    summary="Cron endpoint that sends the pre-session reminder email to enrolled "
+    "students (via QStash)",
+    include_in_schema=False,
+)
+async def live_session_reminder_cron(
+    raw_body: bytes = Depends(verify_qstash_signature),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    payload = json.loads(raw_body)
+    live_session_id = uuid.UUID(payload["live_session_id"])
+    await LiveSessionService(db).run_reminder(live_session_id)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

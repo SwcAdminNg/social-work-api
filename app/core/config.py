@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     paystack_secret_key: str = ""
     paystack_public_key: str = ""
 
+    # daily.co (live session video conferencing)
+    daily_api_key: str = ""
+    daily_api_base_url: str = "https://api.daily.co/v1"
+    daily_webhook_secret: str = ""
+    # How long before a live session's scheduled start to send the reminder email.
+    live_session_reminder_minutes: int = 60
+
     # Tax (Nigeria VAT, applied on top of every purchase's discounted subtotal)
     tax_rate: float = 0.075
 

@@ -8,6 +8,7 @@ from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.course.content_entity import (
     AssessmentTypeEnum,
     EssaySubmissionModeEnum,
+    LiveSessionStatusEnum,
     MultiAnswerModeEnum,
     VideoStatusEnum,
 )
@@ -133,6 +134,12 @@ class CourseItemCreateDTO(CreateDTO):
     # instead of unlimited - a final assessment needs *some* retry cap for the
     # reset to ever trigger.
     is_final_assessment: bool = False
+    # Required only when item_type == LIVE_SESSION.
+    scheduled_start_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, ge=5, le=600)
+    # Optional named guest/lecturer, only meaningful for LIVE_SESSION items.
+    guest_name: str | None = Field(default=None, max_length=255)
+    guest_title: str | None = Field(default=None, max_length=255)
 
 
 class CourseAssessmentUpdateDTO(UpdateDTO):
@@ -158,6 +165,11 @@ class CourseItemUpdateDTO(UpdateDTO):
     url: str | None = Field(default=None, max_length=2000)
     label: str | None = Field(default=None, max_length=255)
     description: str | None = None
+    # Only settable when the item is LIVE_SESSION, and only before it has started.
+    scheduled_start_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, ge=5, le=600)
+    guest_name: str | None = Field(default=None, max_length=255)
+    guest_title: str | None = Field(default=None, max_length=255)
 
 
 class ItemOrderEntryDTO(BaseDTO):
@@ -232,6 +244,28 @@ class CourseLinkDTO(BaseDTO):
     url: str
     label: str | None = None
     description: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Live session
+# ---------------------------------------------------------------------------
+
+
+class CourseLiveSessionDTO(BaseDTO):
+    scheduled_start_at: datetime
+    duration_minutes: int
+    guest_name: str | None = None
+    guest_title: str | None = None
+    status: LiveSessionStatusEnum
+    recording_status: VideoStatusEnum | None = None
+    recording_playback_url: str | None = None
+
+
+class LiveSessionJoinDTO(BaseDTO):
+    room_url: str
+    token: str
+    is_owner: bool
+    expires_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +484,7 @@ class CourseItemReadDTO(AuditDTO):
     document: CourseDocumentPublicDTO | None = None
     assessment: CourseAssessmentPublicDTO | None = None
     link: CourseLinkDTO | None = None
+    live_session: CourseLiveSessionDTO | None = None
 
 
 class CourseItemManageReadDTO(AuditDTO):
@@ -463,6 +498,7 @@ class CourseItemManageReadDTO(AuditDTO):
     document: CourseDocumentManageDTO | None = None
     assessment: CourseAssessmentManageDTO | None = None
     link: CourseLinkDTO | None = None
+    live_session: CourseLiveSessionDTO | None = None
 
 
 class CourseSectionReadDTO(AuditDTO):

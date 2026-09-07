@@ -69,6 +69,42 @@ class CourseLink(BaseEntity):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class LiveSessionStatusEnum(str, enum.Enum):
+    SCHEDULED = "SCHEDULED"
+    LIVE = "LIVE"
+    ENDED = "ENDED"
+    CANCELLED = "CANCELLED"
+
+
+class CourseLiveSession(BaseEntity):
+    __tablename__ = "course_live_sessions"
+
+    course_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), unique=True, nullable=False, index=True
+    )
+    scheduled_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    # Optional named guest/lecturer credited on the invite, distinct from the
+    # course's regular instructor(s) - e.g. a one-off subject-matter expert.
+    guest_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    guest_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    daily_room_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    daily_room_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[LiveSessionStatusEnum] = mapped_column(
+        Enum(LiveSessionStatusEnum, name="live_session_status_enum", native_enum=True),
+        nullable=False,
+        default=LiveSessionStatusEnum.SCHEDULED,
+    )
+    # Reuses VideoStatusEnum (PENDING/PROCESSING/READY/FAILED) rather than a
+    # parallel enum - a recording's lifecycle is identical to an uploaded video's.
+    recording_status: Mapped[VideoStatusEnum | None] = mapped_column(
+        Enum(VideoStatusEnum, name="video_status_enum", native_enum=True), nullable=True
+    )
+    recording_playback_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invite_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AssessmentTypeEnum(str, enum.Enum):
     """The set of pluggable assessment kinds. To add a new one: add a member here,
     a settings table keyed by `assessment_id` (see `CourseQuizSettings`/`CourseEssaySettings`),
