@@ -400,6 +400,23 @@ class LearningService:
                 dto.link_url = link.url
                 dto.link_label = link.label
                 dto.link_description = link.description
+        elif item.item_type == CourseItemTypeEnum.LIVE_SESSION:
+            live_session = await self.content_repo.get_live_session_by_item(item_id)
+            if live_session:
+                dto.live_session_scheduled_start_at = live_session.scheduled_start_at
+                dto.live_session_duration_minutes = live_session.duration_minutes
+                dto.live_session_guest_name = live_session.guest_name
+                dto.live_session_guest_title = live_session.guest_title
+                dto.live_session_status = live_session.status
+                dto.live_session_recording_status = live_session.recording_status
+                dto.live_session_recording_url = live_session.recording_playback_url
+
+                now = datetime.now(timezone.utc)
+                window_start = live_session.scheduled_start_at - timedelta(minutes=10)
+                window_end = live_session.scheduled_start_at + timedelta(
+                    minutes=live_session.duration_minutes + 30
+                )
+                dto.live_session_can_join = window_start <= now <= window_end
         elif item.item_type == CourseItemTypeEnum.ASSESSMENT:
             assessment = await self.content_repo.get_assessment_by_item(item_id)
             if assessment:

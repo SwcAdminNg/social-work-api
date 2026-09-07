@@ -6,7 +6,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.common.base_dto import BaseDTO
-from app.modules.course.content_entity import AssessmentTypeEnum, EssaySubmissionModeEnum, MultiAnswerModeEnum
+from app.modules.course.content_entity import (
+    AssessmentTypeEnum,
+    EssaySubmissionModeEnum,
+    LiveSessionStatusEnum,
+    MultiAnswerModeEnum,
+    VideoStatusEnum,
+)
 from app.modules.course.dto import CourseInstructorReadDTO, CourseReadDTO
 from app.modules.course.entity import CourseItemTypeEnum
 
@@ -186,6 +192,19 @@ class LearningItemContentDTO(BaseDTO):
     link_url: str | None = None
     link_label: str | None = None
     link_description: str | None = None
+
+    # Live session
+    live_session_scheduled_start_at: datetime | None = None
+    live_session_duration_minutes: int | None = None
+    live_session_guest_name: str | None = None
+    live_session_guest_title: str | None = None
+    live_session_status: LiveSessionStatusEnum | None = None
+    # True only while `now` is inside the join window (opens 10 minutes before
+    # scheduled_start_at, closes 30 minutes after scheduled end) - gate the "Join"
+    # button on this rather than computing the window yourself client-side.
+    live_session_can_join: bool | None = None
+    live_session_recording_status: VideoStatusEnum | None = None
+    live_session_recording_url: str | None = None
 
     # Assessment - common
     assessment_type: AssessmentTypeEnum | None = None
