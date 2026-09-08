@@ -50,6 +50,7 @@ from app.modules.learning.entity import (
     UserItemProgress,
 )
 from app.modules.certificate.service import CertificateService
+from app.modules.notification.service import NotificationService
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
 from app.modules.user.repository import UserRepository
@@ -101,17 +102,20 @@ class LearningService:
         is_completed = completed_items == total_items
 
         progress = await self.repo.get_user_course_progress(user_id, course_id)
+        was_completed = bool(progress and progress.is_completed)
         if progress:
             await self.repo.update_user_course_progress(
                 progress, percent, is_completed, touch_last_accessed=touch_last_accessed
             )
 
         if is_completed:
-            # Idempotent - a no-op once a certificate already exists for this
-            # user/course, or if the course has no certificate template/is opted out.
             course = await self.course_repo.get_by_id(course_id)
             user = await UserRepository(self.session).get_by_id(user_id)
             if course is not None and user is not None:
+                if not was_completed:
+                    await NotificationService(self.session).notify_course_completed(user, course.id, course.title)
+                # Idempotent - a no-op once a certificate already exists for this
+                # user/course, or if the course has no certificate template/is opted out.
                 await self.certificate_service.ensure_issued(user, course)
 
     async def recalculate_progress_for_enrolled_users(self, course_id: uuid.UUID) -> None:
@@ -297,8 +301,12 @@ class LearningService:
             ActivityTypeEnum.COURSE_ENROLLED,
             {"course_id": str(course_id), "course_title": course.title}
         )
-        
+
         await self.session.commit()
+
+        user = await UserRepository(self.session).get_by_id(user_id)
+        if user is not None:
+            await NotificationService(self.session).notify_course_enrolled(user, course.id, course.title)
 
         return {"message": "Successfully enrolled"}
 

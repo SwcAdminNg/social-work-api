@@ -8,6 +8,7 @@ from app.common.pagination import PaginationParams
 from app.modules.contact_us.dto import ContactUsCreateDTO, ContactUsFilterParams
 from app.modules.contact_us.entity import ContactUsMessage
 from app.modules.contact_us.repository import ContactUsRepository
+from app.modules.notification.service import NotificationService
 
 
 class ContactUsService:
@@ -19,6 +20,7 @@ class ContactUsService:
         message = ContactUsMessage(**payload.model_dump())
         await self.repository.create(message)
         await self.session.commit()
+        await NotificationService(self.session).notify_admins_new_contact_message(message.full_name, message.id)
         return message
 
     async def list(

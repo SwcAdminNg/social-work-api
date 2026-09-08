@@ -39,6 +39,7 @@ from app.modules.community.repository import (
     CommunityReadRepository,
     CommunityRepository,
 )
+from app.modules.notification.service import NotificationService
 from app.modules.resource.dto import ResourceCardDTO
 from app.modules.resource.entity import Resource
 from app.modules.resource.repository import ResourceRepository
@@ -390,7 +391,27 @@ class CommunityService:
         await publish_event(
             _CHANNEL_NAMESPACE, community.id, {"type": "message", "data": message_dto.model_dump(mode="json")}
         )
+        await self._notify_offline_members(community, message, user)
         return message_dto
+
+    async def _notify_offline_members(self, community: Community, message: CommunityMessage, sender: User) -> None:
+        """Only CUSTOM/COURSE communities - GENERAL/HELP roll in every active user,
+        so writing a notification row per member on every message there would be
+        an unbounded fan-out. Members already viewing the room (WS-subscribed and
+        presence-online) skip it too, since they just saw the message live."""
+        if community.type not in (CommunityTypeEnum.CUSTOM, CommunityTypeEnum.COURSE):
+            return
+        member_ids = await membership.list_member_ids(self.session, community)
+        if not member_ids or len(member_ids) > 200:
+            return
+        online_ids = set(await presence.online_subset(_PRESENCE_NAMESPACE, member_ids))
+        preview = message.body[:140] if message.body else "Sent an attachment"
+        sender_name = f"{sender.first_name} {sender.last_name}"
+        notifications = NotificationService(self.session)
+        for member_id in member_ids:
+            if member_id == sender.id or member_id in online_ids:
+                continue
+            await notifications.notify_community_new_message(member_id, community.id, community.name, sender_name, preview)
 
     async def list_messages(
         self, community_id: uuid.UUID, user: User, pagination: PaginationParams

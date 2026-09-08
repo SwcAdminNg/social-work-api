@@ -38,3 +38,4 @@ from app.modules.community.entity import (  # noqa: F401
     CommunityMessage,
     CommunityRead,
 )
+from app.modules.notification.entity import Notification  # noqa: F401

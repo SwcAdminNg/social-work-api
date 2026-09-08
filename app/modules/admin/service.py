@@ -10,6 +10,7 @@ from app.core.security import generate_opaque_token, hash_password, hash_token
 from app.modules.admin.dto import AcceptAdminInviteRequestDTO, InviteAdminRequestDTO
 from app.modules.auth.entity import AdminInviteToken
 from app.modules.auth.repository import AdminInviteTokenRepository
+from app.modules.notification.service import NotificationService
 from app.modules.user.entity import User, UserTypeEnum
 from app.modules.user.repository import UserRepository
 
@@ -58,6 +59,7 @@ class AdminService:
 
         invite_link = f"{settings.frontend_url}/accept-admin-invite?token={raw_token}"
         await email_service.send_admin_invite_email(user.email, user.first_name, invite_link)
+        await NotificationService(self.session).notify_admin_invited(user)
 
         return user
 
@@ -76,3 +78,4 @@ class AdminService:
         user.is_active = True
         await self.invite_tokens.mark_used(stored_token)
         await self.session.commit()
+        await NotificationService(self.session).notify_admins_invite_accepted(user)

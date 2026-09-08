@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.core.storage import get_r2_client
+from app.modules.notification.service import NotificationService
 from app.modules.user.dto import ProfilePictureUploadRequest, ProfilePictureUploadResponse, UserFilterParams, UserUpdateDTO
 from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
@@ -48,6 +49,7 @@ class UserService:
         user.profile_picture_url = public_url
         await self.repository.update(user)
         await self.session.commit()
+        await NotificationService(self.session).notify_profile_picture_updated(user)
 
         return ProfilePictureUploadResponse(upload_url=upload_url, profile_picture_url=public_url)
 
@@ -63,10 +65,16 @@ class UserService:
         user.is_suspended = is_suspended
         await self.repository.update(user)
         await self.session.commit()
+        notifications = NotificationService(self.session)
+        if is_suspended:
+            await notifications.notify_account_suspended(user)
+        else:
+            await notifications.notify_account_unsuspended(user)
         return user
 
     async def update_role(self, user: User, role: str) -> User:
         user.user_type = role
         await self.repository.update(user)
         await self.session.commit()
+        await NotificationService(self.session).notify_role_changed(user, role)
         return user

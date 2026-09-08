@@ -24,6 +24,7 @@ from app.modules.payment.paystack_gateway import PaystackGateway
 from app.modules.payment.receipt_renderer import render_payment_receipt_pdf
 from app.modules.payment.repository import PaymentRepository
 from app.modules.payment.schema import ChargeSavedCardRequest, InitializePaymentRequest, SubscriptionPlanCreateDTO, SubscriptionPlanUpdateDTO
+from app.modules.notification.service import NotificationService
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
 from app.modules.user.entity import User, UserTypeEnum
@@ -382,6 +383,7 @@ class PaymentService:
 
             if course:
                 await self._send_payment_receipt(transaction, [course])
+                await self._notify_payment_success(transaction, course.title if course else "your course")
 
         elif transaction.transaction_type == TransactionTypeEnum.CART_PURCHASE:
             from app.modules.cart.repository import CartRepository
@@ -411,6 +413,7 @@ class PaymentService:
 
             if purchased_courses:
                 await self._send_payment_receipt(transaction, purchased_courses)
+                await self._notify_payment_success(transaction, self._items_summary(purchased_courses))
 
         elif transaction.transaction_type == TransactionTypeEnum.SUBSCRIPTION:
             plan = await self.repo.get_plan_by_id(transaction.related_id)
@@ -431,6 +434,7 @@ class PaymentService:
                     ActivityTypeEnum.PAYMENT_SUCCESSFUL,
                     {"transaction_type": "SUBSCRIPTION", "plan_id": str(plan.id), "plan_name": plan.name, "amount": float(transaction.amount)}
                 )
+                await self._notify_payment_success(transaction, f"the {plan.name} subscription")
 
     async def _build_receipt_pdf(self, transaction: Transaction, user: User, courses: list) -> bytes:
         coupon_code = None
@@ -518,6 +522,19 @@ class PaymentService:
             )
         except Exception as e:
             logger.error(f"Failed to send payment receipt for transaction {transaction.reference}: {e}")
+
+    async def _notify_payment_success(self, transaction: Transaction, items_summary: str) -> None:
+        try:
+            user = await self.session.get(User, transaction.user_id)
+            if not user:
+                return
+            notifications = NotificationService(self.session)
+            await notifications.notify_payment_successful(
+                user, float(transaction.amount), transaction.reference, items_summary
+            )
+            await notifications.notify_admins_new_payment(user, float(transaction.amount), transaction.reference)
+        except Exception as e:
+            logger.error(f"Failed to create payment notifications for transaction {transaction.reference}: {e}")
 
     async def _save_card(self, user_id: uuid.UUID, gateway: PaymentGatewayEnum, auth_data: dict):
         signature = auth_data.get("signature")
@@ -619,6 +636,7 @@ class PaymentService:
     async def process_daily_subscriptions(self) -> dict:
         import logging
         logger = logging.getLogger(__name__)
+        notifications = NotificationService(self.session)
 
         # 1. Notify users whose subscriptions are expiring in 2 days
         expiring_in_2_days = await self.repo.get_subscriptions_expiring_in_days(2)
@@ -632,6 +650,9 @@ class PaymentService:
                     plan_name=plan.name,
                     updated_price=float(plan.price),
                     expiry_date=subscription.end_date.strftime("%Y-%m-%d"),
+                )
+                await notifications.notify_subscription_expiring_soon(
+                    user, plan.name, subscription.end_date.strftime("%Y-%m-%d")
                 )
             except Exception as e:
                 logger.error(f"Failed to send expiring email to {user.email}: {e}")
@@ -651,6 +672,7 @@ class PaymentService:
                     first_name=user.first_name,
                     plan_name=plan.name,
                 )
+                await notifications.notify_subscription_expired(user, plan.name)
                 expired_count += 1
                 await self.session.commit()
                 continue
@@ -717,6 +739,7 @@ class PaymentService:
                             amount=amount,
                             next_expiry_date=subscription.end_date.strftime("%Y-%m-%d"),
                         )
+                        await notifications.notify_subscription_renewed(user, current_plan.name)
                         renewed_count += 1
                     else:
                         # Failed charge
@@ -726,6 +749,7 @@ class PaymentService:
                             first_name=user.first_name,
                             plan_name=current_plan.name,
                         )
+                        await notifications.notify_subscription_renewal_failed(user, current_plan.name)
                         failed_count += 1
                 except Exception as e:
                     logger.error(f"Charge failed for user {user.email}: {e}")
@@ -736,6 +760,7 @@ class PaymentService:
                         first_name=user.first_name,
                         plan_name=current_plan.name,
                     )
+                    await notifications.notify_subscription_renewal_failed(user, current_plan.name)
                     failed_count += 1
             else:
                 # No saved card
@@ -745,8 +770,9 @@ class PaymentService:
                     first_name=user.first_name,
                     plan_name=current_plan.name,
                 )
+                await notifications.notify_subscription_expired(user, current_plan.name)
                 expired_count += 1
-                
+
             await self.session.commit()
 
         return {

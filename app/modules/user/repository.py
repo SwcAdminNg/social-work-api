@@ -1,3 +1,4 @@
+import uuid
 from typing import Sequence
 
 from sqlalchemy import func, or_, select
@@ -6,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
 from app.modules.user.dto import UserFilterParams
-from app.modules.user.entity import User
+from app.modules.user.entity import User, UserTypeEnum
 
 
 class UserRepository(BaseRepository[User]):
@@ -33,6 +34,10 @@ class UserRepository(BaseRepository[User]):
 
     async def email_exists(self, email: str) -> bool:
         return await self.get_by_email(email) is not None
+
+    async def list_active_admin_ids(self) -> list[uuid.UUID]:
+        stmt = self._base_select().where(User.user_type == UserTypeEnum.ADMIN, User.is_active.is_(True)).with_only_columns(User.id)
+        return list((await self.session.execute(stmt)).scalars().all())
 
     async def username_exists(self, username: str) -> bool:
         return await self.get_by_username(username) is not None

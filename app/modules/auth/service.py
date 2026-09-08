@@ -45,6 +45,7 @@ from app.modules.auth.repository import (
     RefreshTokenRepository,
 )
 from app.modules.auth.username import generate_username_suggestions
+from app.modules.notification.service import NotificationService
 from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import TwoFactorMethodEnum, User
 from app.modules.user.repository import UserRepository
@@ -107,6 +108,13 @@ class AuthService:
         except Exception as e:
             logger.error(f"Failed to send registration welcome email to {user.email}: {e}")
 
+        try:
+            notifications = NotificationService(self.session)
+            await notifications.notify_signup_welcome(user)
+            await notifications.notify_admins_new_user_signup(user)
+        except Exception as e:
+            logger.error(f"Failed to create signup notifications for {user.email}: {e}")
+
         # New accounts must set up 2FA before they can obtain a token pair.
         challenge_token = self._issue_challenge_token(user, TWO_FACTOR_SETUP_TOKEN_TYPE)
         return LoginResponseDTO(
@@ -158,6 +166,12 @@ class AuthService:
 
         extended = bool(decoded.get("extended", False))
         tokens = await self._issue_token_pair(user, extended=extended)
+
+        try:
+            await NotificationService(self.session).notify_login(user)
+        except Exception as e:
+            logger.error(f"Failed to create login notification for {user.email}: {e}")
+
         return AuthSessionDTO(user=UserReadDTO.model_validate(user), tokens=tokens)
 
     async def resend_login_2fa_code(self, challenge_token: str) -> None:
@@ -239,6 +253,7 @@ class AuthService:
         user.two_factor_confirmed_at = datetime.now(timezone.utc)
         await self.users.update(user)
         await self.session.commit()
+        await NotificationService(self.session).notify_two_factor_enabled(user, TwoFactorMethodEnum.TOTP)
 
     async def _confirm_email_setup(self, user: User, code: str) -> None:
         await self._verify_email_code(user, code, TwoFactorPurposeEnum.SETUP)
@@ -249,6 +264,7 @@ class AuthService:
         user.totp_secret_encrypted = None
         await self.users.update(user)
         await self.session.commit()
+        await NotificationService(self.session).notify_two_factor_enabled(user, TwoFactorMethodEnum.EMAIL)
 
     def _verify_totp_code(self, user: User, code: str) -> None:
         if not user.totp_secret_encrypted:
@@ -348,6 +364,7 @@ class AuthService:
 
         reset_link = f"{settings.frontend_url}/reset-password?token={raw_token}"
         await email_service.send_password_reset_email(user.email, user.first_name, reset_link)
+        await NotificationService(self.session).notify_password_reset_requested(user)
 
     async def reset_password(self, payload: ResetPasswordRequestDTO) -> None:
         token_hash = hash_token(payload.token)
@@ -364,6 +381,7 @@ class AuthService:
         await self.reset_tokens.mark_used(stored_token)
         await self.refresh_tokens.revoke_all_for_user(user.id)
         await self.session.commit()
+        await NotificationService(self.session).notify_password_reset_completed(user)
 
     async def _issue_token_pair(self, user: User, extended: bool = False) -> TokenPairDTO:
         access_token, expires_in = create_access_token(subject=str(user.id), extended=extended)

@@ -22,6 +22,7 @@ from app.modules.certificate.renderer import render_certificate_pdf
 from app.modules.certificate.repository import CertificateRepository, CertificateTemplateRepository
 from app.modules.course.entity import Course, CourseAccessModeEnum
 from app.modules.course.repository import CourseRepository
+from app.modules.notification.service import NotificationService
 from app.modules.user.entity import User, UserTypeEnum
 
 
@@ -201,6 +202,7 @@ class CertificateService:
         )
         await self.repo.create(certificate)
         await self.session.commit()
+        await NotificationService(self.session).notify_certificate_issued(user, course.id, course.title)
         return certificate
 
     async def process_scheduled_course_certificates(self) -> dict:

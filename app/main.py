@@ -16,6 +16,7 @@ from app.modules.course.webhook_router import router as course_webhook_router
 from app.modules.course.daily_webhook_router import router as daily_webhook_router
 from app.modules.certificate.router import router as certificate_router
 from app.modules.community.router import router as community_router
+from app.modules.notification.router import router as notification_router
 from app.modules.group.router import router as group_router
 from app.modules.support.router import router as support_router
 from app.modules.health.router import router as health_router
@@ -98,5 +99,6 @@ app.include_router(coupon_router)
 app.include_router(learning_router)
 app.include_router(resource_router)
 app.include_router(community_router)
+app.include_router(notification_router)
 app.include_router(customer_support_router)
 app.include_router(home_router)

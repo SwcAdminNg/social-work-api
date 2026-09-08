@@ -17,6 +17,7 @@ from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.entity import Course, CourseItem
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.repository import LearningRepository
+from app.modules.notification.service import NotificationService
 from app.modules.user.entity import User, UserTypeEnum
 from app.modules.user.repository import UserRepository
 
@@ -123,6 +124,7 @@ class LiveSessionService:
 
         content = self._build_notification_content(course, item, live_session)
         join_link = f"{settings.frontend_url.rstrip('/')}/courses/{course.slug}/live-session/{item.id}"
+        notifications = NotificationService(self.session)
 
         for user_id in user_ids:
             user = await self.user_repo.get_by_id(user_id)
@@ -143,6 +145,9 @@ class LiveSessionService:
                         outlook_calendar_link=content["calendar_links"]["outlook"],
                         ics_bytes=content["ics_bytes"],
                     )
+                    await notifications.notify_live_session_scheduled(
+                        user, course.id, course.slug, item.id, item.title, content["display"]
+                    )
                 elif kind == "rescheduled":
                     await email_service.send_live_session_rescheduled_email(
                         to_email=user.email,
@@ -156,6 +161,9 @@ class LiveSessionService:
                         outlook_calendar_link=content["calendar_links"]["outlook"],
                         ics_bytes=content["ics_bytes"],
                     )
+                    await notifications.notify_live_session_rescheduled(
+                        user, course.id, course.slug, item.id, item.title, content["display"]
+                    )
                 elif kind == "reminder":
                     await email_service.send_live_session_reminder_email(
                         to_email=user.email,
@@ -164,6 +172,9 @@ class LiveSessionService:
                         session_title=item.title,
                         start_at_display=content["display"],
                         join_link=join_link,
+                    )
+                    await notifications.notify_live_session_reminder(
+                        user, course.id, course.slug, item.id, item.title, content["display"]
                     )
             except Exception as exc:
                 logger.warning("Failed to send live-session %s email to %s: %s", kind, user.email, exc)

@@ -45,6 +45,7 @@ from app.modules.support.repository import (
     SupportTicketRepository,
 )
 from app.modules.support.staff import SUPPORT_DESK_GROUP_NAME, is_support_staff
+from app.modules.notification.service import NotificationService
 from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
@@ -234,6 +235,7 @@ class SupportService:
         await publish_ticket_event(
             ticket.id, {"type": "message", "data": (await self._build_message_dto(message)).model_dump(mode="json")}
         )
+        await NotificationService(self.session).notify_admins_new_support_ticket(ticket.id, ticket.subject)
         return await self._build_ticket_dto(ticket)
 
     async def post_message(
@@ -277,6 +279,19 @@ class SupportService:
 
         message_dto = await self._build_message_dto(message)
         await publish_ticket_event(ticket.id, {"type": "message", "data": message_dto.model_dump(mode="json")})
+
+        preview = message.body[:140] if message.body else "Sent an attachment"
+        sender_name = f"{current_user.first_name} {current_user.last_name}"
+        notifications = NotificationService(self.session)
+        if is_staff_sender:
+            await notifications.notify_support_ticket_message(
+                ticket.user_id, ticket.id, ticket.subject, sender_name, preview, for_admin=False
+            )
+        elif ticket.assigned_admin_id is not None:
+            await notifications.notify_support_ticket_message(
+                ticket.assigned_admin_id, ticket.id, ticket.subject, sender_name, preview, for_admin=True
+            )
+
         return message_dto
 
     # -- admin management --------------------------------------------------------
@@ -292,6 +307,7 @@ class SupportService:
         await self.ticket_repo.update(ticket)
         await self.session.commit()
         await publish_ticket_event(ticket.id, {"type": "assigned", "admin_id": str(assignee.id)})
+        await NotificationService(self.session).notify_support_ticket_assigned(assignee, ticket.id, ticket.subject)
         return await self._build_ticket_dto(ticket)
 
     async def update_status(self, ticket_id: uuid.UUID, status_value: SupportTicketStatusEnum) -> SupportTicketReadDTO:
@@ -300,6 +316,11 @@ class SupportService:
         await self.ticket_repo.update(ticket)
         await self.session.commit()
         await publish_ticket_event(ticket.id, {"type": "status_changed", "status": status_value.value})
+        owner = await self.user_repo.get_by_id(ticket.user_id)
+        if owner is not None:
+            await NotificationService(self.session).notify_support_ticket_status_changed(
+                owner, ticket.id, ticket.subject, status_value.value
+            )
         return await self._build_ticket_dto(ticket)
 
     async def list_for_admin(

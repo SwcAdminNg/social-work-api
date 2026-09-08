@@ -10,9 +10,11 @@ from app.modules.course.review_dto import ReviewCreate, ReviewHideDTO, ReviewRep
 from app.modules.course.review_entity import CourseReview
 from app.modules.course.review_repository import CourseReviewRepository
 from app.modules.course.service import CourseService
+from app.modules.notification.service import NotificationService
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
 from app.modules.user.entity import User, UserTypeEnum
+from app.modules.user.repository import UserRepository
 from app.core.cache import delete_cache, get_cache, set_cache
 
 
@@ -68,11 +70,13 @@ class CourseReviewService:
         )
         
         await self.db.commit()
-        
+
         await delete_cache(f"course:slug:{course.slug}")
         await delete_cache("courses:*")
         await delete_cache(f"reviews:course_{course_id}:*")
-        
+
+        await NotificationService(self.db).notify_admins_new_course_review(course.title, course_id)
+
         await self.db.refresh(created_review)
         return created_review
 
@@ -177,9 +181,14 @@ class CourseReviewService:
             
         review.reply_text = payload.reply_text
         review.reply_created_at = datetime.now(timezone.utc)
-        
+
         await self.db.commit()
         await delete_cache(f"reviews:course_{review.course_id}:*")
+
+        review_owner = await UserRepository(self.db).get_by_id(review.user_id)
+        if review_owner is not None:
+            await NotificationService(self.db).notify_course_review_replied(review_owner, course.id, course.title)
+
         await self.db.refresh(review)
         return review
 
