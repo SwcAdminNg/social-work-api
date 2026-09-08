@@ -6,11 +6,27 @@ from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
-from app.modules.user.dashboard_dto import ActivityLogDTO, UserStatsDTO
+from app.modules.user.dashboard_dto import ActivityLogDTO, DashboardOverviewDTO, UserStatsDTO
 from app.modules.user.dashboard_service import DashboardService
 from app.modules.user.entity import User
 
 router = APIRouter(prefix="/users/me/dashboard", tags=["User Dashboard"], route_class=NoNullAPIRoute)
+
+
+@router.get(
+    "/overview",
+    response_model=ApiResponse[DashboardOverviewDTO],
+    summary="Get everything the dashboard homepage needs in one call: stats, continue-learning, "
+    "upcoming live sessions, recent certificates, recent activity, and unread/open counts",
+)
+async def get_dashboard_overview(
+    limit: int = 5,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[DashboardOverviewDTO]:
+    service = DashboardService(db)
+    overview = await service.get_overview(current_user, limit=limit)
+    return ApiResponse(message="Dashboard overview retrieved successfully", data=overview)
 
 
 @router.get(
@@ -25,7 +41,7 @@ async def get_user_stats(
     service = DashboardService(db)
     stats = await service.get_user_stats(current_user.id)
     return ApiResponse(
-        message="User statistics retrieved successfully", 
+        message="User statistics retrieved successfully",
         data=stats
     )
 

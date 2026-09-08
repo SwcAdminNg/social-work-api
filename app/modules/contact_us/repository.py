@@ -49,3 +49,16 @@ class ContactUsRepository(BaseRepository[ContactUsMessage]):
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
+
+    async def count_total(self) -> int:
+        stmt = select(func.count()).select_from(self._base_select().subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
+    async def count_since(self, since: datetime) -> int:
+        """There's no read/unread status on a contact-us message - this counts
+        messages received since `since` (e.g. the last 7 days) as the closest
+        proxy for "recent, may need a look", not a true unread count."""
+        stmt = select(func.count()).select_from(
+            self._base_select().where(ContactUsMessage.created_at >= since).subquery()
+        )
+        return (await self.session.execute(stmt)).scalar_one()

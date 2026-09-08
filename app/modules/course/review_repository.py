@@ -96,6 +96,23 @@ class CourseReviewRepository:
             
         return reviews, total
 
+    async def platform_stats(self) -> tuple[float, int, int]:
+        """Returns (average_rating, total_reviews, pending_reply_count) across every
+        non-hidden review platform-wide. "Pending reply" = a review with no
+        `reply_text` yet, regardless of rating - the admin queue for "reviews that
+        need a response"."""
+        stats_stmt = select(func.avg(CourseReview.rating), func.count()).where(CourseReview.is_hidden.is_(False))
+        avg_rating, total = (await self.session.execute(stats_stmt)).one()
+
+        pending_stmt = select(func.count()).select_from(
+            select(CourseReview)
+            .where(CourseReview.is_hidden.is_(False), CourseReview.reply_text.is_(None))
+            .subquery()
+        )
+        pending = (await self.session.execute(pending_stmt)).scalar_one()
+
+        return (float(avg_rating) if avg_rating is not None else 0.0, total or 0, pending)
+
     async def create(self, review: CourseReview) -> CourseReview:
         self.session.add(review)
         await self.session.flush()

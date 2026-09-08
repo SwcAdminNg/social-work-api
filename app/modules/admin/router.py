@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.api_route import NoNullAPIRoute
 from app.common.responses import ApiResponse
 from app.core.database import get_db
+from app.modules.admin.dashboard_dto import AdminDashboardOverviewDTO
+from app.modules.admin.dashboard_service import AdminDashboardService
 from app.modules.admin.dto import AcceptAdminInviteRequestDTO, AdminInviteResponseDTO, InviteAdminRequestDTO
 from app.modules.admin.service import AdminService
 from app.modules.auth.dependencies import get_current_admin_user
@@ -12,6 +14,21 @@ from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import User
 
 router = APIRouter(prefix="/admin", tags=["Admin Users"], route_class=NoNullAPIRoute)
+
+
+@router.get(
+    "/dashboard/overview",
+    response_model=ApiResponse[AdminDashboardOverviewDTO],
+    summary="Get everything the admin dashboard homepage needs in one call: user/revenue/course/"
+    "support/review stats, top-enrolled courses, and recent signups/transactions (admin only)",
+)
+async def get_admin_dashboard_overview(
+    limit: int = 5,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AdminDashboardOverviewDTO]:
+    overview = await AdminDashboardService(db).get_overview(limit=limit)
+    return ApiResponse(message="Admin dashboard overview retrieved successfully", data=overview)
 
 
 @router.post(

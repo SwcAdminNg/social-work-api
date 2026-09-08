@@ -1,10 +1,18 @@
 import uuid
+from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, TransactionItem, UserSubscription
+from app.modules.payment.entity import (
+    SavedCard,
+    SubscriptionPlan,
+    Transaction,
+    TransactionItem,
+    TransactionStatusEnum,
+    UserSubscription,
+)
 
 
 class PaymentRepository:
@@ -58,6 +66,22 @@ class PaymentRepository:
         cards = (await self.session.execute(stmt)).scalars().all()
         for card in cards:
             card.is_default = False
+
+    async def sum_revenue(self, since: datetime | None = None) -> float:
+        stmt = select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+            Transaction.status == TransactionStatusEnum.SUCCESS
+        )
+        if since is not None:
+            stmt = stmt.where(Transaction.created_at >= since)
+        return float((await self.session.execute(stmt)).scalar_one())
+
+    async def count_active_subscriptions(self) -> int:
+        stmt = select(func.count()).select_from(
+            select(UserSubscription)
+            .where(UserSubscription.is_active.is_(True), UserSubscription.deleted_at.is_(None))
+            .subquery()
+        )
+        return (await self.session.execute(stmt)).scalar_one()
 
     async def list_transactions(
         self, pagination

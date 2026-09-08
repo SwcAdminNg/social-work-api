@@ -1,16 +1,28 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Sequence, Tuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
+from app.modules.cart.repository import CartRepository
+from app.modules.certificate.service import CertificateService
+from app.modules.community.service import CommunityService
 from app.modules.course.access_entity import UserCourseAccess
 from app.modules.course.bookmark_entity import CourseBookmark
 from app.modules.course.review_entity import CourseReview
 from app.modules.learning.entity import QuizAttempt, UserCourseProgress
+from app.modules.learning.repository import LearningRepository
+from app.modules.learning.service import LearningService
+from app.modules.notification.repository import NotificationRepository
+from app.modules.payment.repository import PaymentRepository
+from app.modules.payment.schema import CurrentSubscriptionResponse, SubscriptionPlanResponse
+from app.modules.payment.service import PaymentService
+from app.modules.support.repository import SupportTicketRepository
 from app.modules.user.activity_entity import ActivityLog
-from app.modules.user.dashboard_dto import UserStatsDTO
+from app.modules.user.dashboard_dto import ActivityLogDTO, ContinueLearningItemDTO, DashboardOverviewDTO, UserStatsDTO
+from app.modules.user.entity import User
 
 
 class DashboardService:
@@ -96,3 +108,74 @@ class DashboardService:
         items = (await self.db.execute(stmt)).scalars().all()
 
         return items, total
+
+    async def get_overview(self, user: User, limit: int = 5) -> DashboardOverviewDTO:
+        """Composes every "above the fold" dashboard section in one call. Each
+        section is also independently available as its own (paginated) endpoint
+        for a "view all" - this just avoids the frontend firing off ~8 parallel
+        requests on every dashboard load."""
+        user_id = user.id
+
+        stats = await self.get_user_stats(user_id)
+
+        # Continue learning: most-recently-accessed enrolled courses, excluding
+        # ones already completed (those belong in the certificates section
+        # instead). Over-fetch a bit since completed courses get filtered out.
+        rows, _ = await LearningRepository(self.db).get_enrolled_courses_with_progress(
+            user_id, PaginationParams(page=1, page_size=limit * 3)
+        )
+        continue_learning = [
+            ContinueLearningItemDTO(
+                course_id=course.id,
+                title=course.title,
+                slug=course.slug,
+                thumbnail_url=course.thumbnail_url,
+                progress_percent=progress.progress_percent,
+                last_accessed_at=progress.last_accessed_at,
+            )
+            for course, progress in rows
+            if not progress.is_completed
+        ][:limit]
+
+        upcoming_live_sessions, _ = await LearningService(self.db).list_user_live_sessions(
+            user_id, PaginationParams(page=1, page_size=limit), start_date=datetime.now(timezone.utc)
+        )
+
+        recent_certificates, _ = await CertificateService(self.db).list_my_certificates(
+            user, PaginationParams(page=1, page_size=limit)
+        )
+
+        recent_activity_items, _ = await self.list_recent_activity(user_id, PaginationParams(page=1, page_size=limit))
+
+        unread_notifications_count = await NotificationRepository(self.db).count_unread(user_id)
+        unread_community = await CommunityService(self.db).get_unread_count(user)
+        open_support_tickets_count = await SupportTicketRepository(self.db).count_open_for_user(user_id)
+        cart_item_count = len(await CartRepository(self.db).list_for_user(user_id))
+
+        subscription = None
+        sub = await PaymentService(self.db).get_current_subscription(user_id)
+        if sub is not None:
+            plan = await PaymentRepository(self.db).get_plan_by_id(sub.plan_id)
+            subscription = CurrentSubscriptionResponse(
+                id=sub.id,
+                plan_id=sub.plan_id,
+                start_date=sub.start_date,
+                end_date=sub.end_date,
+                is_active=sub.is_active,
+                auto_renew=sub.auto_renew,
+                pending_plan_id=sub.pending_plan_id,
+                plan=SubscriptionPlanResponse.model_validate(plan, from_attributes=True) if plan else None,
+            )
+
+        return DashboardOverviewDTO(
+            stats=stats,
+            continue_learning=continue_learning,
+            upcoming_live_sessions=upcoming_live_sessions,
+            recent_certificates=recent_certificates,
+            recent_activity=[ActivityLogDTO.model_validate(a) for a in recent_activity_items],
+            unread_notifications_count=unread_notifications_count,
+            unread_community_messages_count=unread_community.total_unread,
+            open_support_tickets_count=open_support_tickets_count,
+            cart_item_count=cart_item_count,
+            subscription=subscription,
+        )

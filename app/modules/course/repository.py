@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
+from app.modules.course.access_entity import UserCourseAccess
 from app.modules.course.dto import CourseFilterParams, CourseManageFilterParams, CourseProgressStatusEnum
 from app.modules.course.entity import Course, CourseCatalog, CourseItem, CourseSection
 from app.modules.course.instructor_entity import CourseInstructor
@@ -86,6 +87,24 @@ class CourseRepository(BaseRepository[Course]):
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
+
+    async def count_by_published_status(self) -> tuple[int, int]:
+        """Returns (published_count, draft_count)."""
+        stmt = select(Course.is_published, func.count()).where(Course.deleted_at.is_(None)).group_by(Course.is_published)
+        counts = {is_published: count for is_published, count in (await self.session.execute(stmt)).all()}
+        return counts.get(True, 0), counts.get(False, 0)
+
+    async def list_top_enrolled(self, limit: int) -> Sequence[tuple[Course, int]]:
+        """Published courses ranked by active enrollment count, most-enrolled first."""
+        stmt = (
+            select(Course, func.count(UserCourseAccess.id).label("enrollment_count"))
+            .join(UserCourseAccess, UserCourseAccess.course_id == Course.id)
+            .where(Course.deleted_at.is_(None), Course.is_published.is_(True))
+            .group_by(Course.id)
+            .order_by(func.count(UserCourseAccess.id).desc())
+            .limit(limit)
+        )
+        return (await self.session.execute(stmt)).all()
 
     async def list_manage(
         self,

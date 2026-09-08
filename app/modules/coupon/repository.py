@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.base_repository import BaseRepository
@@ -29,6 +30,18 @@ class CouponRepository(BaseRepository[Coupon]):
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
+
+    async def count_active(self) -> int:
+        now = datetime.now(timezone.utc)
+        stmt = select(func.count()).select_from(
+            self._base_select()
+            .where(
+                Coupon.is_active.is_(True),
+                or_(Coupon.valid_until.is_(None), Coupon.valid_until > now),
+            )
+            .subquery()
+        )
+        return (await self.session.execute(stmt)).scalar_one()
 
     async def count_user_redemptions(self, coupon_id: uuid.UUID, user_id: uuid.UUID) -> int:
         stmt = select(func.count()).select_from(CouponRedemption).where(

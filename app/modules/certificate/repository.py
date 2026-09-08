@@ -59,6 +59,14 @@ class CertificateRepository(BaseRepository[Certificate]):
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
 
+    async def count_total(self) -> int:
+        stmt = select(func.count()).select_from(self._base_select().subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
+    async def count_since(self, since: datetime) -> int:
+        stmt = select(func.count()).select_from(self._base_select().where(Certificate.issued_at >= since).subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
     async def exists_certificate_number(self, certificate_number: str) -> bool:
         stmt = select(Certificate.id).where(Certificate.certificate_number == certificate_number)
         return (await self.session.execute(stmt)).scalar_one_or_none() is not None

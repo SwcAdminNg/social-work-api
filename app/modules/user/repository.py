@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Sequence
 
 from sqlalchemy import func, or_, select
@@ -70,3 +71,20 @@ class UserRepository(BaseRepository[User]):
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
+
+    async def count_by_type(self) -> dict[UserTypeEnum, int]:
+        stmt = select(User.user_type, func.count()).where(User.deleted_at.is_(None)).group_by(User.user_type)
+        rows = (await self.session.execute(stmt)).all()
+        return {user_type: count for user_type, count in rows}
+
+    async def count_suspended(self) -> int:
+        stmt = select(func.count()).select_from(self._base_select().where(User.is_suspended.is_(True)).subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
+    async def count_new_since(self, since: datetime) -> int:
+        stmt = select(func.count()).select_from(self._base_select().where(User.created_at >= since).subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
+    async def list_recent(self, limit: int) -> Sequence[User]:
+        stmt = self._base_select().order_by(User.created_at.desc()).limit(limit)
+        return (await self.session.execute(stmt)).scalars().all()

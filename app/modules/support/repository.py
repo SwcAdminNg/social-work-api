@@ -60,6 +60,25 @@ class SupportTicketRepository(BaseRepository[SupportTicket]):
         items = (await self.session.execute(stmt)).scalars().all()
         return items, total
 
+    async def count_open_for_user(self, user_id: uuid.UUID) -> int:
+        stmt = select(func.count()).select_from(self._base_select().where(
+            SupportTicket.user_id == user_id,
+            SupportTicket.status.in_([SupportTicketStatusEnum.OPEN, SupportTicketStatusEnum.IN_PROGRESS]),
+        ).subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
+    async def count_by_status(self) -> dict[SupportTicketStatusEnum, int]:
+        stmt = select(SupportTicket.status, func.count()).where(SupportTicket.deleted_at.is_(None)).group_by(SupportTicket.status)
+        rows = (await self.session.execute(stmt)).all()
+        return {status: count for status, count in rows}
+
+    async def count_unassigned_open(self) -> int:
+        stmt = select(func.count()).select_from(self._base_select().where(
+            SupportTicket.assigned_admin_id.is_(None),
+            SupportTicket.status.in_([SupportTicketStatusEnum.OPEN, SupportTicketStatusEnum.IN_PROGRESS]),
+        ).subquery())
+        return (await self.session.execute(stmt)).scalar_one()
+
     async def list_for_admin(
         self,
         pagination: PaginationParams,
