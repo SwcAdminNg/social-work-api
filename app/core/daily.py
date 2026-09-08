@@ -90,10 +90,17 @@ class DailyClient:
             response.raise_for_status()
             return response.json()["token"]
 
-    async def get_recording_download_link(self, recording_id: str) -> str:
+    async def get_recording_download_link(self, recording_id: str, valid_for_secs: int | None = None) -> str:
+        """Mints a fresh, short-lived signed URL for a cloud recording - daily.co
+        doesn't offer a permanent playback URL, so callers must call this on demand
+        rather than storing the result (max validity is 7 days; daily.co's own
+        default is 1 hour if `valid_for_secs` is omitted)."""
+        params = {"valid_for_secs": valid_for_secs} if valid_for_secs else None
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{self._api_base}/recordings/{recording_id}/access-link", headers=self._headers()
+                f"{self._api_base}/recordings/{recording_id}/access-link",
+                headers=self._headers(),
+                params=params,
             )
             response.raise_for_status()
             return response.json()["download_link"]

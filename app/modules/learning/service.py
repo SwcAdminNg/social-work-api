@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum
 from app.modules.course.entity import CourseItemTypeEnum
-from app.modules.course.content_entity import AssessmentTypeEnum, EssaySubmissionModeEnum, MultiAnswerModeEnum
+from app.core.config import settings
+from app.modules.course.content_entity import (
+    AssessmentTypeEnum,
+    EssaySubmissionModeEnum,
+    MultiAnswerModeEnum,
+    VideoStatusEnum,
+)
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.dto import (
@@ -58,12 +64,21 @@ class LearningService:
         self.activity_service = ActivityService(session)
         self.certificate_service = CertificateService(session)
         self._r2 = None
+        self._daily = None
 
     @property
     def r2(self):
         if self._r2 is None:
             self._r2 = get_r2_client()
         return self._r2
+
+    @property
+    def daily(self):
+        if self._daily is None:
+            from app.core.daily import get_daily_client
+
+            self._daily = get_daily_client()
+        return self._daily
 
     async def _has_active_subscription(self, user_id: uuid.UUID) -> bool:
         stmt = select(UserSubscription).where(
@@ -410,7 +425,12 @@ class LearningService:
                 dto.live_session_guest_title = live_session.guest_title
                 dto.live_session_status = live_session.status
                 dto.live_session_recording_status = live_session.recording_status
-                dto.live_session_recording_url = live_session.recording_playback_url
+                if live_session.recording_status == VideoStatusEnum.READY and live_session.recording_id:
+                    # daily.co only issues short-lived signed links - mint one fresh
+                    # on every request rather than storing/reusing an old one.
+                    dto.live_session_recording_url = await self.daily.get_recording_download_link(
+                        live_session.recording_id, settings.daily_recording_link_expire_seconds
+                    )
 
                 now = datetime.now(timezone.utc)
                 window_start = live_session.scheduled_start_at - timedelta(minutes=10)
@@ -1219,7 +1239,6 @@ class LearningService:
                     can_join=window_start <= now <= window_end,
                     is_completed=progress.is_completed if progress else False,
                     recording_status=live_session.recording_status,
-                    recording_playback_url=live_session.recording_playback_url,
                 )
             )
 

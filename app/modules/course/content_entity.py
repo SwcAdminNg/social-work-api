@@ -100,7 +100,11 @@ class CourseLiveSession(BaseEntity):
     recording_status: Mapped[VideoStatusEnum | None] = mapped_column(
         Enum(VideoStatusEnum, name="video_status_enum", native_enum=True), nullable=True
     )
-    recording_playback_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # daily.co's recording id - NOT a playback URL. daily.co only hands out
+    # short-lived signed access-links (expire in at most a few hours), so a
+    # playable URL is minted fresh from this id on every request instead of
+    # being stored, the same way CourseDocument's download URL is never stored.
+    recording_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     invite_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

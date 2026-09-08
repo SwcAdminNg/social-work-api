@@ -1320,7 +1320,6 @@ class CourseContentService:
                 guest_title=live_session.guest_title,
                 status=live_session.status,
                 recording_status=live_session.recording_status,
-                recording_playback_url=live_session.recording_playback_url,
             )
 
         assessment_dto = None

@@ -63,9 +63,11 @@ covers how this shows up for students. Base URL prefix for everything below: `/c
   subdomain) — it's intentionally not embedded inside the student platform. The frontend's only job
   is to fetch a per-user join URL and redirect the browser there; there's no in-app video call UI to
   build or maintain.
-- Cloud recording is enabled automatically on every session. Once the call ends and daily.co finishes
-  processing, the recording becomes available on the item (`recording_status: "READY"` +
-  `recording_playback_url`) with no manual step on your side.
+- Cloud recording is enabled automatically on every session, **stored on daily.co's own cloud
+  storage** — nothing is copied into your R2 bucket. Once the call ends and daily.co finishes
+  processing, `recording_status` on the item flips to `READY` with no manual step on your side. A
+  playable URL isn't stored anywhere (daily.co only issues short-lived signed links, not a permanent
+  one) — see §7 for how the student side gets one on demand.
 - Deleting the item deletes the underlying daily.co room too — no orphaned rooms to clean up
   manually.
 
@@ -195,8 +197,7 @@ Appears on the `live_session` object wherever curriculum items are returned — 
     "guest_name": "Dr. Amara Okafor",
     "guest_title": "Clinical Director, Crisis Response Network",
     "status": "SCHEDULED",
-    "recording_status": null,
-    "recording_playback_url": null
+    "recording_status": null
   }
 }
 ```
@@ -205,7 +206,13 @@ Appears on the `live_session` object wherever curriculum items are returned — 
 |---|---|
 | `status` | `SCHEDULED` → `ENDED` (set automatically once daily.co reports the call ended). `LIVE` and `CANCELLED` are defined on the enum but not currently reachable via any code path today — a session stays `SCHEDULED` for its entire actual call duration (there's no explicit "now live" transition), and there's no "cancel" action; deleting the item is the way to call off a session before it happens. |
 | `recording_status` | `null` until the call has happened; then `PENDING`/`PROCESSING`/`READY`/`FAILED` as daily.co processes the cloud recording. Reuses the same status values as `VIDEO` items. |
-| `recording_playback_url` | Populated once `recording_status: "READY"`. |
+
+**No `recording_playback_url`/playback field on this endpoint, on purpose.** daily.co doesn't hand
+out a permanent playback URL — only short-lived signed links (expiring within hours). Exposing one
+here would mean an external API call to daily.co on every curriculum fetch. `recording_status` just
+tells the instructor a recording exists; getting an actual playable link happens on the *student*
+side, on demand, via `GET /learning/courses/{course_id}/items/{item_id}` (see §7) — there's currently
+no instructor-facing endpoint to preview the recording separately from what students see.
 
 The **manage** view of this object is identical to the public one shown above — there's no
 manage-only field like `bunny_video_guid`/`storage_key` on video/document, since there's no
@@ -237,15 +244,35 @@ Notes:
 
 ---
 
-## 7. Recording lifecycle
+## 7. Recording lifecycle and where the file actually lives
 
 1. Recording starts automatically when the call begins (cloud recording is enabled on every room by
    default — no setting to toggle it per session today).
 2. When the call ends, `status` flips to `ENDED` automatically.
 3. Once daily.co finishes processing the recording (usually within a few minutes of the call ending),
-   `recording_status` flips to `READY` and `recording_playback_url` is populated — no polling
-   endpoint needed on your side; just re-fetch the item like you would for any other content update.
-4. If recording processing fails, `recording_status` becomes `FAILED` and no playback URL is set.
+   `recording_status` flips to `READY` — no polling endpoint needed on your side; just re-fetch the
+   item like you would for any other content update.
+4. If recording processing fails, `recording_status` becomes `FAILED`.
+
+**The recording file is stored on daily.co's own cloud storage — not your Cloudflare R2 bucket.**
+Unlike `VIDEO`/`DOCUMENT` items, there's no copy of this file under your own storage/CDN. daily.co
+also doesn't hand out a permanent playback URL for it, only short-lived signed links (their default
+is a 1-hour validity, capped at 7 days), so the API mints a fresh one on demand rather than storing
+one:
+
+- `GET /learning/courses/{course_id}/items/{item_id}` (the student-facing single-item endpoint)
+  calls daily.co's `/recordings/{id}/access-link` endpoint fresh on every request and returns the
+  result as `live_session_recording_url`, valid for `daily_recording_link_expire_seconds` (server
+  config, default 6 hours).
+- Nothing is cached — every request to that endpoint is a live network call to daily.co when a
+  recording exists. There's currently no endpoint that returns a *stored* playback URL, by design.
+
+**Retention is governed by your daily.co plan, not by this API.** How long daily.co keeps a cloud
+recording before deleting it depends on your daily.co account/plan settings — this integration
+doesn't currently download or archive recordings into your own storage. If you need recordings kept
+indefinitely (independent of daily.co's retention policy) or served from your own domain/CDN like
+`VIDEO` items are, that's a follow-up feature (download-and-re-upload-to-R2 on the
+`recording.ready-to-download` webhook), not something built today — flag it if that's a requirement.
 
 There's currently no endpoint to manually trigger/retry a recording, or to disable recording for a
 specific session — treat every live session as "always recorded."
@@ -288,8 +315,10 @@ specific session — treat every live session as "always recorded."
   `"SCHEDULED"` — the API will reject the change anyway, so fail gracefully in the UI first.
 - [ ] When editing, clearly warn that changing the date/time **re-notifies every enrolled student**
   with a "rescheduled" email — this isn't a silent save.
-- [ ] After a session ends, surface `recording_status`/`recording_playback_url` on the instructor's
-  view of the item too, so they can confirm the recording is ready without asking students.
+- [ ] After a session ends, surface `recording_status` on the instructor's view of the item too, so
+  they can confirm a recording is ready without asking students. To actually preview it, reuse the
+  student-facing `GET /learning/courses/{course_id}/items/{item_id}` endpoint's
+  `live_session_recording_url` — there's no separate instructor preview endpoint.
 - [ ] Double-check any place you hardcode/switch on `item_type` values (e.g. an enum/union type in
   your frontend code) to make sure `"LIVE_SESSION"` doesn't silently fall through to a default/
   unknown state.

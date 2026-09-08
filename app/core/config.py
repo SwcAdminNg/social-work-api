@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     daily_webhook_secret: str = ""
     # How long before a live session's scheduled start to send the reminder email.
     live_session_reminder_minutes: int = 60
+    # How long a freshly-minted recording playback link stays valid (daily.co max: 7 days).
+    daily_recording_link_expire_seconds: int = 21600  # 6 hours
 
     # Tax (Nigeria VAT, applied on top of every purchase's discounted subtotal)
     tax_rate: float = 0.075

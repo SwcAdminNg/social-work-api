@@ -257,8 +257,12 @@ class CourseLiveSessionDTO(BaseDTO):
     guest_name: str | None = None
     guest_title: str | None = None
     status: LiveSessionStatusEnum
+    # Only tells you a recording exists - fetching an actual playable URL requires
+    # a fresh signed link per request (daily.co doesn't offer a permanent one), so
+    # that's only exposed via GET /learning/courses/{course_id}/items/{item_id},
+    # not on this bulk curriculum-tree view. Same convention as CourseDocument's
+    # download URL, which also isn't included here.
     recording_status: VideoStatusEnum | None = None
-    recording_playback_url: str | None = None
 
 
 class LiveSessionJoinDTO(BaseDTO):

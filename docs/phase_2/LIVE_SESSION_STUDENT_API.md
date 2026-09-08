@@ -68,8 +68,7 @@ type, subject to the same preview/enrollment gating that already applies to `vid
     "guest_name": "Dr. Amara Okafor",
     "guest_title": "Clinical Director, Crisis Response Network",
     "status": "SCHEDULED",
-    "recording_status": null,
-    "recording_playback_url": null
+    "recording_status": null
   }
 }
 ```
@@ -80,8 +79,15 @@ type, subject to the same preview/enrollment gating that already applies to `vid
 | `live_session.duration_minutes` | Planned length of the call. |
 | `live_session.guest_name` / `guest_title` | Optional named guest/lecturer for this specific session, distinct from the course's regular instructor(s). Both `null` when there's no guest — just show the course's normal instructor byline in that case. |
 | `live_session.status` | `SCHEDULED` \| `LIVE` \| `ENDED` \| `CANCELLED`. In practice today a session only ever moves `SCHEDULED` → `ENDED` (set automatically once the call ends) — `LIVE` is a reserved value not currently set by any code path, and `CANCELLED` isn't settable via any endpoint yet. Rely on `live_session_can_join` (below), not `status`, to know whether "Join" should be active right now. |
-| `live_session.recording_status` | `null` until a recording exists, then `PENDING` → `PROCESSING` → `READY` (or `FAILED`). Only meaningful once `status` is `ENDED`. |
-| `live_session.recording_playback_url` | Populated once `recording_status: "READY"`. Render a normal video player, same as a `VIDEO` item's playback URL. |
+| `live_session.recording_status` | `null` until a recording exists, then `PENDING` → `PROCESSING` → `READY` (or `FAILED`). Only meaningful once `status` is `ENDED`. Tells you a recording *exists* — there's no playback URL on this endpoint (see below for why). |
+
+> ⚠️ **No `recording_playback_url` here.** daily.co doesn't offer a permanent playback link — only
+> short-lived signed URLs (expiring within hours) minted on demand. Returning one on this bulk
+> curriculum-tree endpoint would mean an external API call to daily.co per recorded session on every
+> page load, so it's deliberately left off. Once `recording_status: "READY"`, fetch
+> `GET /learning/courses/{course_id}/items/{item_id}` (below) to get a freshly-minted,
+> actually-playable `live_session_recording_url` — call it again each time the student opens the
+> item, don't cache the URL past the current page view.
 
 `live_session` is `null`/absent for every other item type, same pattern as `video`/`document`/
 `link`/`assessment`.
@@ -129,6 +135,7 @@ when a student opens an item:
 | Field | Notes |
 |---|---|
 | `live_session_can_join` | **The one field to gate your "Join" button on.** `true` only while the join window is open (opens 10 minutes before `live_session_scheduled_start_at`, closes 30 minutes after the scheduled end). Don't compute this window yourself client-side — the backend is the source of truth, and it also drives whether the join endpoint (§3) will actually succeed. |
+| `live_session_recording_url` | **Unlike every other URL field on this endpoint, this one is freshly minted on every request** — daily.co doesn't offer a permanent playback link, only a signed URL valid for a few hours. `null` unless `live_session_recording_status: "READY"`. Fetch this endpoint again (don't cache the URL) each time the student opens the item to watch. |
 | All other `live_session_*` fields | Same meaning as the `live_session` object on the course-detail endpoint above — just flattened with a `live_session_` prefix here, matching how `video_url`/`document_url`/`link_url` are flattened on this same endpoint. |
 
 > Note the shape difference: the **course-detail** endpoint nests fields under a `live_session`
@@ -182,8 +189,7 @@ future.
       "status": "SCHEDULED",
       "can_join": false,
       "is_completed": false,
-      "recording_status": null,
-      "recording_playback_url": null
+      "recording_status": null
     }
   ],
   "meta": {
@@ -206,6 +212,7 @@ sessions before later ones.
 | `course_slug` | Use this to build the item's deep link — `/courses/{course_slug}/live-session/{item_id}` — same URL the notification emails use (§7). |
 | `section_id` / `section_title` | Which module/section this session belongs to, in case you want to group the dashboard by course+section. |
 | `can_join` | Same join-window rule as `live_session_can_join` elsewhere — `true` only while the session is actually joinable right now. |
+| `recording_status` | Tells you a recording exists (`READY`) or not — **there's no playback URL on this list endpoint** (same reason as §1: minting one per row would mean an external call to daily.co per recorded session on every dashboard load). Once a row shows `recording_status: "READY"`, fetch `GET /learning/courses/{course_id}/items/{item_id}` for that `item_id` to get an actual playable `live_session_recording_url`. |
 | Every other field | Same meaning as the equivalent `live_session*` field described in §1. |
 
 **Suggested UI treatment:** a "Your upcoming live sessions" list on the student dashboard/home,
@@ -281,7 +288,7 @@ primary "it's starting soon" signal).
 |---|---|
 | `SCHEDULED` (with `live_session_can_join: false`) | Show date/time, guest info, and a countdown ("Starts in ..."). |
 | `SCHEDULED` (with `live_session_can_join: true`) | The join window is open — show a prominent enabled "Join Now" button. This is the state a session is in for its entire actual call duration; there's no separate `LIVE` status transition to key off today (see note above), so `live_session_can_join` is what tells you the call is happening now. |
-| `ENDED` | Hide "Join". If `recording_status: "READY"`, show a video player using `recording_playback_url` (or `live_session_recording_url`) — treat it exactly like a `VIDEO` item's playback. If `recording_status` is `null`/`PENDING`/`PROCESSING`, show "Recording processing, check back soon." If `FAILED`, omit the recording section entirely (no error needed — just nothing to play). |
+| `ENDED` | Hide "Join". If `recording_status: "READY"`, fetch `GET /learning/courses/{course_id}/items/{item_id}` and show a video player using `live_session_recording_url` — treat it exactly like a `VIDEO` item's playback, but re-fetch the URL each time the student opens the item (it's a fresh short-lived link every time, not a stable one you can cache). If `recording_status` is `null`/`PENDING`/`PROCESSING`, show "Recording processing, check back soon." If `FAILED`, omit the recording section entirely (no error needed — just nothing to play). |
 | `CANCELLED` | Reserved for future use — not currently reachable via any endpoint. If you ever see it, treat it like `ENDED` with no recording: hide "Join" and any countdown. |
 
 ---
@@ -377,8 +384,9 @@ page above only exists to handle the case of someone arriving cold from an email
   redirector, not a call screen — the actual call UI is entirely daily.co's own hosted page.
 - [ ] Do **not** add `@daily-co/daily-js` or any embedded call UI — the call intentionally happens on
   daily.co's own subdomain (`socialworknigeria.daily.co`), outside the app.
-- [ ] After `status: "ENDED"` with `recording_status: "READY"`, render `recording_playback_url` in
-  your existing video player component — no new player needed.
+- [ ] After `status: "ENDED"` with `recording_status: "READY"`, fetch the single-item endpoint and
+  render `live_session_recording_url` in your existing video player component — no new player
+  needed, but re-fetch the URL each time the player mounts (it expires; never cache/store it).
 - [ ] Double-check any place you hardcode/switch on `item_type` values (e.g. an enum/union type in
   your frontend code) to make sure `"LIVE_SESSION"` doesn't silently fall through to a default/
   unknown state.

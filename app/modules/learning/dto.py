@@ -339,5 +339,7 @@ class UserLiveSessionDTO(BaseDTO):
     # as `live_session_can_join` on the single-item endpoint.
     can_join: bool
     is_completed: bool
+    # Only tells you a recording exists - fetching one across a whole list would
+    # mean N external calls to daily.co. Fetch the single-item endpoint (which
+    # mints a fresh signed link) once the student picks a specific session to watch.
     recording_status: VideoStatusEnum | None = None
-    recording_playback_url: str | None = None

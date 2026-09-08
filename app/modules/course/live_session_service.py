@@ -221,9 +221,11 @@ class LiveSessionService:
         elif event_type == "recording.ready-to-download":
             recording_id = payload.get("recording_id")
             if recording_id:
-                download_link = await self.daily.get_recording_download_link(recording_id)
+                # Store the id, not a playback URL - daily.co's access-links expire
+                # within hours, so a playable link is minted fresh on every request
+                # (see LearningService.get_item_content) instead of being persisted.
+                live_session.recording_id = recording_id
                 live_session.recording_status = VideoStatusEnum.READY
-                live_session.recording_playback_url = download_link
 
         await self.session.commit()
 
