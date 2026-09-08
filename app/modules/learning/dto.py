@@ -314,3 +314,30 @@ class AssessmentStatsDTO(BaseDTO):
     completed_count: int
     average_score_percentage: float | None = None
     retakes_available_count: int
+
+
+class UserLiveSessionDTO(BaseDTO):
+    """One row per LIVE_SESSION item the user has course access to, across every
+    enrolled course - the cross-course counterpart to the single-item view on
+    `GET /learning/courses/{course_id}/items/{item_id}`."""
+
+    item_id: uuid.UUID
+    title: str
+    course_id: uuid.UUID
+    course_title: str
+    course_slug: str
+    section_id: uuid.UUID
+    section_title: str
+    scheduled_start_at: datetime
+    scheduled_end_at: datetime  # convenience: scheduled_start_at + duration_minutes
+    duration_minutes: int
+    guest_name: str | None = None
+    guest_title: str | None = None
+    status: LiveSessionStatusEnum
+    # True only while `now` is inside the join window (opens 10 minutes before
+    # scheduled_start_at, closes 30 minutes after the scheduled end) - same rule
+    # as `live_session_can_join` on the single-item endpoint.
+    can_join: bool
+    is_completed: bool
+    recording_status: VideoStatusEnum | None = None
+    recording_playback_url: str | None = None

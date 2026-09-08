@@ -31,6 +31,7 @@ from app.modules.learning.dto import (
     QuizResultDTO,
     UserAssessmentDTO,
     UserAssessmentStatusEnum,
+    UserLiveSessionDTO,
 )
 from app.common.pagination import PaginationParams
 from app.core.storage import get_r2_client
@@ -1183,6 +1184,52 @@ class LearningService:
         if end_date is not None and due_date > end_date:
             return False
         return True
+
+    async def list_user_live_sessions(
+        self,
+        user_id: uuid.UUID,
+        pagination: PaginationParams,
+        course_id: uuid.UUID | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> tuple[list[UserLiveSessionDTO], int]:
+        rows = await self.repo.list_user_live_sessions(user_id, course_id)
+
+        now = datetime.now(timezone.utc)
+        result = []
+        for item, course, section, live_session, progress in rows:
+            scheduled_end_at = live_session.scheduled_start_at + timedelta(minutes=live_session.duration_minutes)
+            window_start = live_session.scheduled_start_at - timedelta(minutes=10)
+            window_end = scheduled_end_at + timedelta(minutes=30)
+            result.append(
+                UserLiveSessionDTO(
+                    item_id=item.id,
+                    title=item.title,
+                    course_id=course.id,
+                    course_title=course.title,
+                    course_slug=course.slug,
+                    section_id=section.id,
+                    section_title=section.title,
+                    scheduled_start_at=live_session.scheduled_start_at,
+                    scheduled_end_at=scheduled_end_at,
+                    duration_minutes=live_session.duration_minutes,
+                    guest_name=live_session.guest_name,
+                    guest_title=live_session.guest_title,
+                    status=live_session.status,
+                    can_join=window_start <= now <= window_end,
+                    is_completed=progress.is_completed if progress else False,
+                    recording_status=live_session.recording_status,
+                    recording_playback_url=live_session.recording_playback_url,
+                )
+            )
+
+        result = [dto for dto in result if self._in_date_range(dto.scheduled_start_at, start_date, end_date)]
+        result.sort(key=lambda dto: dto.scheduled_start_at)
+
+        total = len(result)
+        start = pagination.offset
+        end = start + pagination.limit
+        return result[start:end], total
 
     @staticmethod
     def _has_retake_available(dto: UserAssessmentDTO, now: datetime) -> bool:

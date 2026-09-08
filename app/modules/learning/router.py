@@ -19,6 +19,7 @@ from app.modules.learning.dto import (
     EssayUploadUrlRequestDTO,
     EssayUploadUrlResponseDTO,
     LearningItemContentDTO,
+    UserLiveSessionDTO,
     QuizGroupActiveAttemptDTO,
     QuizGroupResultDTO,
     QuizGroupSaveProgressDTO,
@@ -295,4 +296,24 @@ async def get_assessment_stats(
     service = LearningService(db)
     data = await service.get_assessment_stats(current_user.id, start_date, end_date)
     return ApiResponse(message="Assessment stats retrieved successfully", data=data)
+
+
+@router.get(
+    "/live-sessions",
+    response_model=PaginatedResponse[UserLiveSessionDTO],
+    summary="List live sessions across every enrolled course, with an optional date-range filter",
+)
+async def list_live_sessions(
+    course_id: uuid.UUID | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[UserLiveSessionDTO]:
+    service = LearningService(db)
+    items, total = await service.list_user_live_sessions(
+        current_user.id, pagination, course_id, start_date, end_date
+    )
+    return PaginatedResponse.create(items=items, total_items=total, params=pagination)
 

@@ -524,3 +524,37 @@ class LearningRepository:
         stmt = stmt.order_by(CourseItem.created_at.desc())
         result = await self.session.execute(stmt)
         return result.all()
+
+    async def list_user_live_sessions(self, user_id: uuid.UUID, course_id: uuid.UUID | None = None):
+        """All LIVE_SESSION items across every course the user has access to, joined
+        with their per-user completion flag. No date-range/pagination here - the
+        service layer filters/paginates the mapped DTOs, matching list_user_assessments."""
+        from app.modules.course.access_entity import UserCourseAccess
+        from app.modules.course.content_entity import CourseLiveSession
+        from app.modules.course.entity import Course, CourseItem, CourseItemTypeEnum, CourseSection
+
+        stmt = (
+            select(CourseItem, Course, CourseSection, CourseLiveSession, UserItemProgress)
+            .join(CourseSection, CourseItem.section_id == CourseSection.id)
+            .join(Course, CourseSection.course_id == Course.id)
+            .join(UserCourseAccess, UserCourseAccess.course_id == Course.id)
+            .join(CourseLiveSession, CourseLiveSession.course_item_id == CourseItem.id)
+            .outerjoin(
+                UserItemProgress,
+                (UserItemProgress.item_id == CourseItem.id) & (UserItemProgress.user_id == user_id),
+            )
+            .where(
+                UserCourseAccess.user_id == user_id,
+                CourseItem.item_type == CourseItemTypeEnum.LIVE_SESSION,
+                CourseItem.deleted_at.is_(None),
+                CourseSection.deleted_at.is_(None),
+                Course.deleted_at.is_(None),
+            )
+        )
+
+        if course_id:
+            stmt = stmt.where(Course.id == course_id)
+
+        stmt = stmt.order_by(CourseLiveSession.scheduled_start_at.asc())
+        result = await self.session.execute(stmt)
+        return result.all()

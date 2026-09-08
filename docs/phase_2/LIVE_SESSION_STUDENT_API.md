@@ -41,6 +41,9 @@ instructors/admins schedule and manage them.
   curriculum item afterward and find a recording, the same way I'd rewatch any other video lesson.
 - *As a student,* I should never be able to join a live session for a course I'm not enrolled in,
   even if I somehow get the link.
+- *As a student,* I want one place to see every upcoming live session across all my enrolled
+  courses — not have to open each course individually to check if something's scheduled — so I can
+  plan my week, optionally narrowed to a specific date range (e.g. "this week", "this month").
 
 ---
 
@@ -125,7 +128,7 @@ when a student opens an item:
 
 | Field | Notes |
 |---|---|
-| `live_session_can_join` | **The one field to gate your "Join" button on.** `true` only while the join window is open (opens 10 minutes before `live_session_scheduled_start_at`, closes 30 minutes after the scheduled end). Don't compute this window yourself client-side — the backend is the source of truth, and it also drives whether the join endpoint (§2) will actually succeed. |
+| `live_session_can_join` | **The one field to gate your "Join" button on.** `true` only while the join window is open (opens 10 minutes before `live_session_scheduled_start_at`, closes 30 minutes after the scheduled end). Don't compute this window yourself client-side — the backend is the source of truth, and it also drives whether the join endpoint (§3) will actually succeed. |
 | All other `live_session_*` fields | Same meaning as the `live_session` object on the course-detail endpoint above — just flattened with a `live_session_` prefix here, matching how `video_url`/`document_url`/`link_url` are flattened on this same endpoint. |
 
 > Note the shape difference: the **course-detail** endpoint nests fields under a `live_session`
@@ -135,7 +138,83 @@ when a student opens an item:
 
 ---
 
-## 2. Joining the call
+## 2. Live sessions across all your courses (dashboard/upcoming view)
+
+For an "Upcoming Live Sessions" widget or a dedicated schedule page, you don't need to loop over
+every enrolled course and fetch its curriculum individually — there's a single cross-course
+endpoint.
+
+**`GET /learning/live-sessions`**
+
+**Query parameters (all optional):**
+
+| Param | Type | Notes |
+|---|---|---|
+| `course_id` | UUID | Narrow to a single course. Omit to get sessions across every enrolled course. |
+| `start_date` | ISO 8601 datetime | Only sessions with `scheduled_start_at >= start_date`. |
+| `end_date` | ISO 8601 datetime | Only sessions with `scheduled_start_at <= end_date`. |
+| `page` / `page_size` | int | Standard pagination (default `page=1`, `page_size=20`, max `page_size=100`). |
+
+Pass `start_date` and `end_date` together to scope to a range (e.g. "this week"); pass either alone
+for an open-ended bound; omit both for every live session across every enrolled course, past and
+future.
+
+**Response (`200`, paginated):**
+
+```json
+{
+  "success": true,
+  "message": "OK",
+  "data": [
+    {
+      "item_id": "item-uuid",
+      "title": "Live Q&A: Crisis Intervention Techniques",
+      "course_id": "course-uuid",
+      "course_title": "Trauma-Informed Care",
+      "course_slug": "trauma-informed-care",
+      "section_id": "section-uuid",
+      "section_title": "Module 3: Crisis Intervention",
+      "scheduled_start_at": "2026-09-20T15:00:00Z",
+      "scheduled_end_at": "2026-09-20T16:00:00Z",
+      "duration_minutes": 60,
+      "guest_name": "Dr. Amara Okafor",
+      "guest_title": "Clinical Director, Crisis Response Network",
+      "status": "SCHEDULED",
+      "can_join": false,
+      "is_completed": false,
+      "recording_status": null,
+      "recording_playback_url": null
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "page_size": 20,
+    "total_items": 1,
+    "total_pages": 1,
+    "has_next": false,
+    "has_previous": false
+  }
+}
+```
+
+Results are always sorted by `scheduled_start_at` ascending (soonest first) — including past
+sessions when your date range covers them, so a "this week" query naturally lists earlier-in-the-week
+sessions before later ones.
+
+| Field | Notes |
+|---|---|
+| `course_slug` | Use this to build the item's deep link — `/courses/{course_slug}/live-session/{item_id}` — same URL the notification emails use (§7). |
+| `section_id` / `section_title` | Which module/section this session belongs to, in case you want to group the dashboard by course+section. |
+| `can_join` | Same join-window rule as `live_session_can_join` elsewhere — `true` only while the session is actually joinable right now. |
+| Every other field | Same meaning as the equivalent `live_session*` field described in §1. |
+
+**Suggested UI treatment:** a "Your upcoming live sessions" list on the student dashboard/home,
+each row showing course title, session title, date/time, guest (if any), and a "Join" button that's
+only enabled when `can_join: true` — clicking it follows the same join flow as §3.
+
+---
+
+## 3. Joining the call
 
 **The call itself is not embedded in the app.** Clicking "Join" takes the student to daily.co's own
 hosted room page (on their `socialworknigeria.daily.co` subdomain), where daily.co's own call UI
@@ -196,7 +275,7 @@ primary "it's starting soon" signal).
 
 ---
 
-## 3. Rendering by status
+## 4. Rendering by status
 
 | `live_session.status` | Suggested treatment |
 |---|---|
@@ -207,7 +286,7 @@ primary "it's starting soon" signal).
 
 ---
 
-## 4. Completion tracking
+## 5. Completion tracking
 
 **`POST /learning/courses/{course_id}/items/{item_id}/complete`** — works for `LIVE_SESSION` items
 exactly like it does for `VIDEO`/`DOCUMENT`/`LINKS` (unchanged endpoint, no new behavior). There's no
@@ -217,7 +296,7 @@ recording, or via an explicit "Mark as complete" action).
 
 ---
 
-## 5. Emails and calendar invites (automatic — no frontend work needed)
+## 6. Emails and calendar invites (automatic — no frontend work needed)
 
 You don't need to build any of this — it's sent automatically by the backend. Documented here so you
 know what the student already receives and don't duplicate it:
@@ -236,7 +315,7 @@ creates/edits the live session item.
 
 ---
 
-## 6. Frontend page for the email's "Join" link
+## 7. Frontend page for the email's "Join" link
 
 The scheduled/reminder emails link to:
 
@@ -249,7 +328,7 @@ The scheduled/reminder emails link to:
 1. If the visitor isn't logged in, prompt login/signup first (standard auth-gate pattern, same as
    any other deep link into course content).
 2. Once authenticated, call `POST /courses/items/{item_id}/live-session/join` and immediately send
-   the browser to the returned `join_url` (see §2) — e.g. `window.location.assign(join_url)`. The
+   the browser to the returned `join_url` (see §3) — e.g. `window.location.assign(join_url)`. The
    student ends up on daily.co's own page for the actual call; this page's only job is the
    auth-check-then-redirect hop.
 3. If the join call 403s (not enrolled), show a normal "you don't have access to this course" state
@@ -263,28 +342,29 @@ page above only exists to handle the case of someone arriving cold from an email
 
 ---
 
-## 7. Endpoint reference summary
+## 8. Endpoint reference summary
 
 | Endpoint | What's new |
 |---|---|
 | `GET /courses/{slug}`, `/manage/{id}` (and similar course-detail endpoints) | A `LIVE_SESSION` item includes a `live_session` object. |
 | `GET /learning/courses/{course_id}/items/{item_id}` | A `LIVE_SESSION` item includes flat `live_session_*` fields, including the join-window flag `live_session_can_join`. |
+| `GET /learning/live-sessions` | **New.** Cross-course list of live sessions across every enrolled course, with optional `course_id`/`start_date`/`end_date` filters and pagination. |
 | `POST /courses/items/{item_id}/live-session/join` | **New.** Returns a `join_url` (daily.co's own hosted room, auth token baked in) for the current user — redirect the browser there, no in-app call UI to build. |
 | `POST /learning/courses/{course_id}/items/{item_id}/complete` | Unchanged — now also valid for `LIVE_SESSION` items. |
 
 ---
 
-## 8. Error responses you should handle
+## 9. Error responses you should handle
 
 | Status | When |
 |---|---|
-| `400` | Joining outside the session's join window (see §2). |
+| `400` | Joining outside the session's join window (see §3). |
 | `403` | Joining a live session for a course you're not enrolled in. Also unchanged pre-existing cases: not enrolled, section locked, scheduled course outside its access window. |
 | `404` | Item/course id doesn't exist, or the item isn't a live session. |
 
 ---
 
-## 9. Frontend implementation checklist
+## 10. Frontend implementation checklist
 
 - [ ] Curriculum renderer: add `"LIVE_SESSION"` as a fifth item type alongside `VIDEO`/`DOCUMENT`/
   `ASSESSMENT`/`LINKS` — icon (e.g. a calendar/camera glyph), title, scheduled date/time (localized),
@@ -302,4 +382,6 @@ page above only exists to handle the case of someone arriving cold from an email
 - [ ] Double-check any place you hardcode/switch on `item_type` values (e.g. an enum/union type in
   your frontend code) to make sure `"LIVE_SESSION"` doesn't silently fall through to a default/
   unknown state.
-- [ ] No work needed for emails/calendar invites — fully automatic server-side (see §5).
+- [ ] No work needed for emails/calendar invites — fully automatic server-side (see §6).
+- [ ] Build an "Upcoming Live Sessions" dashboard/schedule widget backed by `GET
+  /learning/live-sessions` (§2) — no need to fetch every course's curriculum separately.
