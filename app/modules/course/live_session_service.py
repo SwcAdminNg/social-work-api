@@ -79,9 +79,13 @@ class LiveSessionService:
             is_owner=is_owner,
             exp=token_exp,
         )
+        # The call runs entirely on daily.co's own hosted page (their subdomain,
+        # e.g. socialworknigeria.daily.co) - not embedded in our frontend. Baking
+        # the token into the URL as ?t=... lets the browser land there already
+        # authenticated, no separate sign-in step on daily.co's side.
+        join_url = f"{live_session.daily_room_url}?t={token}"
         return LiveSessionJoinDTO(
-            room_url=live_session.daily_room_url,
-            token=token,
+            join_url=join_url,
             is_owner=is_owner,
             expires_at=window_end,
         )

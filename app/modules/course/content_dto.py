@@ -262,8 +262,10 @@ class CourseLiveSessionDTO(BaseDTO):
 
 
 class LiveSessionJoinDTO(BaseDTO):
-    room_url: str
-    token: str
+    # Full daily.co URL (room + auth token baked in via ?t=...) - the frontend just
+    # redirects/opens this; the call itself runs entirely on daily.co's own hosted
+    # page (their subdomain, e.g. socialworknigeria.daily.co), not embedded in-app.
+    join_url: str
     is_owner: bool
     expires_at: datetime
 

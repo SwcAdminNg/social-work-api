@@ -56,9 +56,13 @@ covers how this shows up for students. Base URL prefix for everything below: `/c
   3. Schedules a reminder email (default: 60 minutes before start) to go out automatically.
 - Editing the schedule (`scheduled_start_at`/`duration_minutes`) before the session starts
   re-notifies every enrolled student with a "rescheduled" email and reschedules the reminder.
-- The room is private — only enrolled students and the instructor/admin can obtain a join token (see
+- The room is private — only enrolled students and the instructor/admin can obtain a join link (see
   the student doc's §2 for the join flow itself; that endpoint isn't one you call from the authoring
   side).
+- **The call itself runs on daily.co's own hosted page** (their `socialworknigeria.daily.co`
+  subdomain) — it's intentionally not embedded inside the student platform. The frontend's only job
+  is to fetch a per-user join URL and redirect the browser there; there's no in-app video call UI to
+  build or maintain.
 - Cloud recording is enabled automatically on every session. Once the call ends and daily.co finishes
   processing, the recording becomes available on the item (`recording_status: "READY"` +
   `recording_playback_url`) with no manual step on your side.

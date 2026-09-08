@@ -137,10 +137,16 @@ when a student opens an item:
 
 ## 2. Joining the call
 
+**The call itself is not embedded in the app.** Clicking "Join" takes the student to daily.co's own
+hosted room page (on their `socialworknigeria.daily.co` subdomain), where daily.co's own call UI
+runs — full grid/speaker view, mute/camera controls, screen share, chat, participant list. Your
+frontend never renders any video/WebRTC UI itself; its only job is to fetch the join URL and send the
+browser there.
+
 **`POST /courses/items/{item_id}/live-session/join`**
 
-Call this the moment the student clicks "Join" — don't pre-fetch a token and hold onto it, since
-tokens are minted fresh per click and expire.
+Call this the moment the student clicks "Join" — don't pre-fetch and hold onto the URL, since the
+auth token baked into it is minted fresh per click and expires.
 
 **Request:** no body.
 
@@ -151,8 +157,7 @@ tokens are minted fresh per click and expire.
   "success": true,
   "message": "Join credentials generated successfully",
   "data": {
-    "room_url": "https://your-domain.daily.co/session-abc123-f9e8d7c6",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "join_url": "https://socialworknigeria.daily.co/session-abc123-f9e8d7c6?t=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "is_owner": false,
     "expires_at": "2026-09-20T16:30:00Z"
   }
@@ -161,27 +166,19 @@ tokens are minted fresh per click and expire.
 
 | Field | Notes |
 |---|---|
-| `room_url` | The daily.co room URL. |
-| `token` | A short-lived meeting token scoped to this room, this user, and this join window. Not reusable after `expires_at`, and not valid in any other room. |
-| `is_owner` | `true` if the caller is the course's instructor/admin (grants moderator-style controls in the call UI — e.g. can start/stop recording); `false` for a regular student. |
-| `expires_at` | When the token — and the room itself — stops accepting joins. |
+| `join_url` | The full daily.co room URL with a per-user auth token already baked in (`?t=...`). Send the browser here directly — nothing else to construct. Not reusable after `expires_at`, and not valid for any other user or session. |
+| `is_owner` | `true` if the caller is the course's instructor/admin (grants moderator-style controls on daily.co's page — e.g. can start/stop recording, remove participants); `false` for a regular student. Informational only — you don't need to do anything with it, daily.co's own UI already adapts based on the token. |
+| `expires_at` | When the link stops working (the join window has closed). |
 
-**Recommended integration:** use daily.co's `@daily-co/daily-js` prebuilt call UI rather than
-building your own video UI from scratch — it gives you the full experience (grid/speaker view,
-mute/camera controls, screen share, chat, participant list) with a few lines:
+**Integration — this is the entire client-side implementation:**
 
 ```js
-import DailyIframe from '@daily-co/daily-js';
-
-const callFrame = DailyIframe.createFrame(document.getElementById('call-container'), {
-  showLeaveButton: true,
-  iframeStyle: { width: '100%', height: '100%', border: '0' },
-});
-await callFrame.join({ url: room_url, token });
+const { data } = await api.post(`/courses/items/${itemId}/live-session/join`);
+window.location.assign(data.join_url); // or window.open(data.join_url, '_blank')
 ```
 
-This is the "best experience" path — full audio/video call UI, no custom WebRTC plumbing needed on
-your end.
+Open in a new tab if you want the student to keep your app open behind it, or navigate the current
+tab away entirely — either is fine, there's no in-app state to preserve during the call.
 
 ### Error responses
 
@@ -247,14 +244,22 @@ The scheduled/reminder emails link to:
 {FRONTEND_URL}/courses/{course_slug}/live-session/{item_id}
 ```
 
-**You need to build this page.** It should:
+**You need to build this page — but it's a redirector, not a call screen.** It should:
 
 1. If the visitor isn't logged in, prompt login/signup first (standard auth-gate pattern, same as
    any other deep link into course content).
-2. Once authenticated, call `POST /courses/items/{item_id}/live-session/join` and render the call
-   using the returned `room_url`/`token` (see §2).
+2. Once authenticated, call `POST /courses/items/{item_id}/live-session/join` and immediately send
+   the browser to the returned `join_url` (see §2) — e.g. `window.location.assign(join_url)`. The
+   student ends up on daily.co's own page for the actual call; this page's only job is the
+   auth-check-then-redirect hop.
 3. If the join call 403s (not enrolled), show a normal "you don't have access to this course" state
    with a link to the course's public page.
+4. If the join call 400s (outside the join window), show the scheduled time and a "come back closer
+   to start time" message instead of redirecting.
+
+Same "Join Now" button inside the app itself (e.g. from the curriculum item card) can skip the
+intermediate page and just call the join endpoint + redirect directly, the same way — the frontend
+page above only exists to handle the case of someone arriving cold from an email link.
 
 ---
 
@@ -264,7 +269,7 @@ The scheduled/reminder emails link to:
 |---|---|
 | `GET /courses/{slug}`, `/manage/{id}` (and similar course-detail endpoints) | A `LIVE_SESSION` item includes a `live_session` object. |
 | `GET /learning/courses/{course_id}/items/{item_id}` | A `LIVE_SESSION` item includes flat `live_session_*` fields, including the join-window flag `live_session_can_join`. |
-| `POST /courses/items/{item_id}/live-session/join` | **New.** Mints a scoped daily.co join token for the current user. |
+| `POST /courses/items/{item_id}/live-session/join` | **New.** Returns a `join_url` (daily.co's own hosted room, auth token baked in) for the current user — redirect the browser there, no in-app call UI to build. |
 | `POST /learning/courses/{course_id}/items/{item_id}/complete` | Unchanged — now also valid for `LIVE_SESSION` items. |
 
 ---
@@ -285,11 +290,13 @@ The scheduled/reminder emails link to:
   `ASSESSMENT`/`LINKS` — icon (e.g. a calendar/camera glyph), title, scheduled date/time (localized),
   and guest byline when `guest_name` is set.
 - [ ] Item detail view: render date/time, guest info, and a "Join"/countdown control driven by
-  `live_session_can_join` and `live_session_status`.
+  `live_session_can_join` and `live_session_status`. "Join" calls the join endpoint and redirects to
+  `join_url` — no in-app video component needed.
 - [ ] Build the `/courses/{slug}/live-session/{item_id}` deep-link page that the scheduled/reminder
-  emails point to (auth-gate → call the join endpoint → render the call).
-- [ ] Integrate `@daily-co/daily-js` (or equivalent) to actually render the video call from
-  `room_url` + `token`.
+  emails point to (auth-gate → call the join endpoint → redirect to `join_url`). This is a thin
+  redirector, not a call screen — the actual call UI is entirely daily.co's own hosted page.
+- [ ] Do **not** add `@daily-co/daily-js` or any embedded call UI — the call intentionally happens on
+  daily.co's own subdomain (`socialworknigeria.daily.co`), outside the app.
 - [ ] After `status: "ENDED"` with `recording_status: "READY"`, render `recording_playback_url` in
   your existing video player component — no new player needed.
 - [ ] Double-check any place you hardcode/switch on `item_type` values (e.g. an enum/union type in

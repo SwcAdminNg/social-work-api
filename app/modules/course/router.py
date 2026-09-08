@@ -838,8 +838,9 @@ async def refresh_video_upload(
 @router.post(
     "/items/{item_id}/live-session/join",
     response_model=ApiResponse[LiveSessionJoinDTO],
-    summary="Mint a daily.co join token for a live session (enrolled students or the "
-    "owning instructor/admin, only within the session's join window)",
+    summary="Get an authenticated join URL for a live session, hosted on daily.co's own "
+    "page (not embedded in-app) - enrolled students or the owning instructor/admin only, "
+    "within the session's join window",
 )
 async def join_live_session(
     item_id: uuid.UUID,
