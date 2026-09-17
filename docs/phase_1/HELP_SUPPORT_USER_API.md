@@ -18,9 +18,17 @@ Base URL prefix: `/support`.
 
 ```
 GET /support/faq
+GET /support/faq?audience=STUDENT
 ```
 
-No auth required. Returns every published FAQ category with its published items, in display order:
+No auth required. Returns every published FAQ category with its published items, in display order.
+
+**`audience`** (optional query param) — one of `STUDENT`, `INSTRUCTOR`, `BOTH`. When passed, only
+returns items whose `audience` matches the given value **or** is `BOTH` (articles for everyone), and
+drops any category left with zero matching items. Omit it to get everything, unfiltered. Pass the
+logged-in user's own type (student vs. instructor) so the Help Centre shows only what's relevant to
+them, per the "recognise whether the logged-in user is a student or an instructor" requirement — but
+still let them browse the wider Help Centre by calling the endpoint without the filter.
 
 ```json
 {
@@ -29,15 +37,37 @@ No auth required. Returns every published FAQ category with its published items,
   "data": [
     {
       "id": "...",
-      "name": "Getting Started",
+      "name": "Getting Started (Student)",
       "order": 1,
       "items": [
-        { "id": "...", "category_id": "...", "question": "How do I reset my password?", "answer": "...", "order": 0, "is_published": true }
+        {
+          "id": "...",
+          "category_id": "...",
+          "question": "How do I reset my password?",
+          "answer": "...",
+          "order": 0,
+          "is_published": true,
+          "audience": "STUDENT",
+          "keywords": ["login", "password reset"],
+          "escalation_route": "Account Access",
+          "related_article_ids": ["...", "..."]
+        }
       ]
     }
   ]
 }
 ```
+
+Field notes:
+- **`audience`** — `STUDENT` / `INSTRUCTOR` / `BOTH`. Which readers the article is written for.
+- **`keywords`** — array of search terms/synonyms to improve FAQ search matching (e.g. searching
+  "forgot password" should still surface an article whose `keywords` include it, even if the
+  `question` text doesn't).
+- **`escalation_route`** — free-text label suggesting which support-ticket category to pre-select if
+  this article doesn't resolve the user's problem (e.g. `"Certificate Issue"`). Purely a hint for the
+  client's "Still need help? Contact Support" flow — it doesn't map to a hard enum server-side.
+- **`related_article_ids`** — UUIDs of other `FAQItem`s to show as "Related help" links. Resolve them
+  against the same `GET /support/faq` payload (or look them up individually) to render titles.
 
 ## 2. Opening a ticket
 

@@ -26,10 +26,38 @@ Base URL prefix: `/support`.
 | POST | `/support/faq/categories` | Create a category. Body: `{ "name": str, "order"?: int }`. |
 | PATCH | `/support/faq/categories/{id}` | Partial update. |
 | DELETE | `/support/faq/categories/{id}` | Soft-delete. Its items are cascade-deleted at the DB level if the category row is ever hard-deleted, but soft-delete leaves items in place (they just stop appearing once their category is gone from `GET /support/faq`, since that endpoint only returns items whose category still resolves). |
-| GET | `/support/faq/items` | Paginated list of **every** item, published or not (unlike the public `GET /support/faq`, which only returns published items grouped by category). |
-| POST | `/support/faq/items` | Create an item. Body: `{ "category_id": uuid, "question": str, "answer": str, "order"?: int, "is_published"?: bool }`. `404` if the category doesn't exist. |
-| PATCH | `/support/faq/items/{id}` | Partial update — including toggling `is_published` to hide/show it on the public FAQ. |
+| GET | `/support/faq/items?audience=INSTRUCTOR&page=1&page_size=20` | Paginated list of **every** item, published or not (unlike the public `GET /support/faq`, which only returns published items grouped by category). `audience` is optional and, unlike the public endpoint, matches **exactly** — `audience=INSTRUCTOR` returns only items tagged `INSTRUCTOR`, not `BOTH` ones too — since admins managing content want to see exactly what's tagged, not what's relevant to a reader. Omit it to see everything. |
+| POST | `/support/faq/items` | Create an item. Body below. `404` if the category doesn't exist. |
+| PATCH | `/support/faq/items/{id}` | Partial update — including toggling `is_published` to hide/show it on the public FAQ. Same body shape as create, all fields optional. |
 | DELETE | `/support/faq/items/{id}` | Soft-delete. |
+
+**FAQ item body** (`POST`/`PATCH /support/faq/items`):
+
+```json
+{
+  "category_id": "uuid",
+  "question": "How do I download my certificate?",
+  "answer": "...",
+  "order": 0,
+  "is_published": true,
+  "audience": "STUDENT",
+  "keywords": ["certificate", "download", "pdf certificate"],
+  "escalation_route": "Certificate Issue",
+  "related_article_ids": ["uuid-of-another-faq-item", "..."]
+}
+```
+
+| Field | Type | Required (create) | Notes |
+|---|---|---|---|
+| `category_id` | uuid | yes | Must reference an existing `FAQCategory`. |
+| `question` | string, ≤500 chars | yes | |
+| `answer` | string | yes | Full article body. |
+| `order` | int | no, default `0` | Display order within its category (ascending). |
+| `is_published` | bool | no, default `true` | Hides the item from the public `GET /support/faq` when `false`; still visible here. |
+| `audience` | `STUDENT` \| `INSTRUCTOR` \| `BOTH` | no, default `BOTH` | Who the article is for. Drives filtering on both this endpoint and the public one. |
+| `keywords` | string[] | no, default `[]` | Search synonyms/terms. |
+| `escalation_route` | string, ≤150 chars, nullable | no | Suggested support-ticket category if the article doesn't resolve the issue. Free text, not an enum. |
+| `related_article_ids` | uuid[] | no, default `[]` | Other `FAQItem` ids to surface as "Related help". Not validated against existing items server-side — pass ids you know exist. |
 
 ## 2. Ticket queue
 
