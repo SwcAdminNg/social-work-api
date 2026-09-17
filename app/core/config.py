@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     password_reset_token_expire_minutes: int = 30
     admin_invite_token_expire_minutes: int = 60 * 24 * 7  # 7 days
+    instructor_setup_token_expire_minutes: int = 60 * 24 * 7  # 7 days
 
     # Two-factor authentication (email OTP and authenticator app TOTP)
     two_factor_challenge_expire_minutes: int = 10

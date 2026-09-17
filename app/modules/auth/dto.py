@@ -24,9 +24,11 @@ class SignUpRequestDTO(CreateDTO):
 
     @model_validator(mode="after")
     def validate_username_and_passwords(self) -> "SignUpRequestDTO":
-        if self.user_type == UserTypeEnum.ADMIN:
+        if self.user_type in (UserTypeEnum.ADMIN, UserTypeEnum.INSTRUCTOR):
             raise ValueError(
-                "Admin accounts cannot be created via sign-up; they must be invited by an existing admin"
+                "Admin and instructor accounts cannot be created via sign-up; admins must be invited by "
+                "an existing admin, and instructors must apply and be approved via the instructor "
+                "application flow"
             )
 
         if not USERNAME_PATTERN.match(self.username.lower()):

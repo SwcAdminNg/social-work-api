@@ -367,3 +367,13 @@ class NotificationService:
             {"user_id": str(new_admin.id)},
             exclude_user_id=new_admin.id,
         )
+
+    async def notify_admins_new_instructor_application(
+        self, application_id: uuid.UUID, first_name: str, last_name: str, email: str
+    ) -> None:
+        await self._notify_admins(
+            NotificationTypeEnum.NEW_INSTRUCTOR_APPLICATION,
+            "New instructor application", f"{first_name} {last_name} ({email}) applied to become an instructor.",
+            f"/dashboard/instructor-applications/{application_id}",
+            {"application_id": str(application_id)},
+        )

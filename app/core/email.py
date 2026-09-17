@@ -132,6 +132,53 @@ class EmailService:
         """
         await self._send(to_email, subject, _wrap_email(body, preheader="Set up your admin account."))
 
+    async def send_instructor_application_approved_email(self, to_email: str, first_name: str, setup_link: str) -> None:
+        subject = "Your instructor application has been approved!"
+        days = settings.instructor_setup_token_expire_minutes // 60 // 24
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">You're in, {first_name}! &#127881;</h2>
+          <p>Great news &mdash; your application to become an instructor at {settings.company_name}
+          has been approved.</p>
+          <p>Click the button below to choose your username and password and finish setting up
+          your instructor account. This link expires in {days} days.</p>
+          {_button("Set Up My Account", setup_link)}
+          <p>If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="word-break: break-all; color: #2563eb;">{setup_link}</p>
+          <p style="color: #6b7280; font-size: 13px;">
+            If this link expires before you get a chance to use it, just reach out to
+            {settings.company_support_email} and we'll send you a fresh one.
+          </p>
+        """
+        await self._send(
+            to_email, subject, _wrap_email(body, preheader="Set up your new instructor account.")
+        )
+
+    async def send_instructor_application_rejected_email(
+        self, to_email: str, first_name: str, reason: str | None
+    ) -> None:
+        subject = "An update on your instructor application"
+        reason_section = (
+            f"""
+              <p style="margin: 16px 0; padding: 12px 16px; background-color: #f3f4f6; border-radius: 8px;">
+                <strong>Reviewer's note:</strong> {reason}
+              </p>
+            """
+            if reason
+            else ""
+        )
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">An update on your application</h2>
+          <p>Hi {first_name},</p>
+          <p>Thank you for your interest in becoming an instructor at {settings.company_name}.
+          After review, we're not able to approve your application at this time.</p>
+          {reason_section}
+          <p>You're welcome to submit a new application in the future. If you have any questions,
+          reach out to us at {settings.company_support_email} &mdash; we're happy to help.</p>
+        """
+        await self._send(
+            to_email, subject, _wrap_email(body, preheader="An update on your instructor application.")
+        )
+
     async def send_subscription_expiring_soon_email(self, to_email: str, first_name: str, plan_name: str, updated_price: float, expiry_date: str) -> None:
         subject = f"Your {plan_name} subscription is expiring soon"
         body = f"""

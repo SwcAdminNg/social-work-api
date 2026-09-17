@@ -47,6 +47,17 @@ class AdminInviteToken(BaseEntity):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class InstructorSetupToken(BaseEntity):
+    __tablename__ = "instructor_setup_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class EmailOtpToken(BaseEntity):
     """A one-time 6-digit code emailed to the user, either to complete an email-based
     2FA login challenge or to confirm email as the chosen 2FA method during setup."""

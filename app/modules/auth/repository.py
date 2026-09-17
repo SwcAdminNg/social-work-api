@@ -8,6 +8,7 @@ from app.common.base_repository import BaseRepository
 from app.modules.auth.entity import (
     AdminInviteToken,
     EmailOtpToken,
+    InstructorSetupToken,
     PasswordResetToken,
     RefreshToken,
     TwoFactorPurposeEnum,
@@ -71,6 +72,31 @@ class AdminInviteTokenRepository(BaseRepository[AdminInviteToken]):
     async def mark_used(self, token: AdminInviteToken) -> None:
         token.used_at = datetime.now(timezone.utc)
         await self.session.flush()
+
+
+class InstructorSetupTokenRepository(BaseRepository[InstructorSetupToken]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, InstructorSetupToken)
+
+    async def get_valid_by_hash(self, token_hash: str) -> InstructorSetupToken | None:
+        stmt = select(InstructorSetupToken).where(
+            InstructorSetupToken.token_hash == token_hash,
+            InstructorSetupToken.used_at.is_(None),
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def mark_used(self, token: InstructorSetupToken) -> None:
+        token.used_at = datetime.now(timezone.utc)
+        await self.session.flush()
+
+    async def invalidate_all_for_user(self, user_id: uuid.UUID) -> None:
+        stmt = (
+            update(InstructorSetupToken)
+            .where(InstructorSetupToken.user_id == user_id, InstructorSetupToken.used_at.is_(None))
+            .values(used_at=datetime.now(timezone.utc))
+        )
+        await self.session.execute(stmt)
 
 
 class EmailOtpTokenRepository(BaseRepository[EmailOtpToken]):

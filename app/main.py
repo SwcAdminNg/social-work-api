@@ -9,6 +9,8 @@ from app.common.responses import ApiErrorResponse
 from app.core.config import settings
 from app.modules.admin.router import router as admin_router
 from app.modules.auth.router import router as auth_router
+from app.modules.instructor_application.router import router as instructor_application_router
+from app.modules.instructor_application.admin_router import router as instructor_application_admin_router
 from app.modules.contact_us.router import router as contact_us_router
 from app.modules.course.router import router as course_router
 from app.modules.course.review_router import router as review_router
@@ -85,6 +87,8 @@ app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(dashboard_router)
 app.include_router(admin_router)
+app.include_router(instructor_application_router)
+app.include_router(instructor_application_admin_router)
 app.include_router(contact_us_router)
 app.include_router(course_router)
 app.include_router(review_router)
