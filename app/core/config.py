@@ -36,6 +36,10 @@ class Settings(BaseSettings):
 
     # Frontend
     frontend_url: str = "http://localhost:3000"
+    # Separate instructor-facing frontend (different Vercel deployment from the
+    # student/admin frontend above) - used for links that must land an instructor
+    # on their own app, e.g. the instructor account setup link.
+    instructor_frontend_url: str = "https://social-work-instructor.vercel.app"
 
     # Resend (email)
     resend_api_key: str

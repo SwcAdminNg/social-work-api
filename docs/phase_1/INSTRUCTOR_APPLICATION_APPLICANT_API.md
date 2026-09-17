@@ -18,6 +18,12 @@ frontend needs:
 Base URL prefix: `/instructor-applications`. Neither endpoint requires an
 `Authorization` header.
 
+The instructor-facing screens (the application form and the `/complete-setup` page) live
+on their own dedicated frontend deployment, `https://social-work-instructor.vercel.app`
+— separate from the main student/admin app. The API's approval email links there
+directly (see §3); this is where a "frontend AI" building this feature should be
+building.
+
 ## Conventions
 
 - **Response envelope**: `ApiResponse<T>` — `{ "success": true, "message": "...", "data": {...} }`.
@@ -158,11 +164,13 @@ candidate can freely re-apply.
 The approval email contains a link shaped like:
 
 ```
-{frontend_url}/instructor/complete-setup?token=<opaque-token>
+https://social-work-instructor.vercel.app/complete-setup?token=<opaque-token>
 ```
 
-Your frontend owns the `/instructor/complete-setup` page/route — build a form that reads
-`token` from the query string and collects a username + password, then calls:
+This points at the **dedicated instructor frontend** (a separate Vercel deployment from
+the student/admin app), not the main platform's domain. Your instructor frontend owns
+the `/complete-setup` page/route — build a form that reads `token` from the query string
+and collects a username + password, then calls:
 
 **POST /instructor-applications/complete-setup**
 
@@ -225,7 +233,7 @@ one." Only an admin can issue a fresh link.
    "This email is already registered — try logging in instead").
 4. Applicant waits (no polling/status page needed — they'll get an email either way).
 5. **If approved**: they receive an email with a "Set Up My Account" button/link
-   → lands on your `/instructor/complete-setup?token=...` page → form for
+   → lands on the instructor app's `/complete-setup?token=...` page → form for
    username + password (+confirm) → call §3 → immediately continue into the existing
    2FA-setup screens using the returned `challenge_token` (same UI you already built for
    `/auth/signup`) → land in the full instructor dashboard, logged in.

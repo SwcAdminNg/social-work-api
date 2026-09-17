@@ -226,7 +226,7 @@ class InstructorApplicationService:
         await self.setup_tokens.create(setup_token)
         await self.session.commit()
 
-        setup_link = f"{settings.frontend_url.rstrip('/')}/instructor/complete-setup?token={raw_token}"
+        setup_link = f"{settings.instructor_frontend_url.rstrip('/')}/complete-setup?token={raw_token}"
         try:
             await email_service.send_instructor_application_approved_email(user.email, user.first_name, setup_link)
         except Exception as e:
