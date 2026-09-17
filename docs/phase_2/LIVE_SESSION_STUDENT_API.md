@@ -274,6 +274,13 @@ tab away entirely — either is fine, there's no in-app state to preserve during
 | `400` | `"This live session hasn't opened for joining yet"` — before the window opens; `"This live session has ended"` — after the window closes. Use `live_session_can_join` from the item-content endpoint to avoid hitting this in normal use; still handle it defensively (e.g. someone leaves the tab open past the window). |
 | `404` | Item doesn't exist, or isn't a live session. |
 
+> ℹ️ **This isn't the only way into a session.** Instructors/admins can also invite external
+> people — no enrollment, no platform account — via a separate personal link
+> (`GET /courses/live-session/guest-join?token=...`, public, no auth). That's a completely different
+> flow from the one on this page and isn't something a regular student ever calls; see
+> [`LIVE_SESSION_INSTRUCTOR_ADMIN_API.md`](./LIVE_SESSION_INSTRUCTOR_ADMIN_API.md#10-inviting-guestexternal-attendees-no-platform-account-required)
+> if you're building the guest-facing landing page too.
+
 **Suggested UI treatment:** show a countdown ("Starts in 2h 15m") when `live_session_can_join` is
 `false` and the session is still `SCHEDULED`, and swap to an enabled "Join Now" button the moment
 it flips `true`. Poll or re-fetch the item content periodically if the student has the page open

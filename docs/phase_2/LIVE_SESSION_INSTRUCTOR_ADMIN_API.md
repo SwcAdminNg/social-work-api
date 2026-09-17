@@ -42,6 +42,11 @@ covers how this shows up for students. Base URL prefix for everything below: `/c
   catch up later, without me needing to manually start/upload a recording.
 - *As an admin,* I want live sessions to respect the exact same enrollment/ownership rules as every
   other curriculum item — I shouldn't need a separate permission model to reason about.
+- *As an instructor,* I sometimes need to bring in someone who isn't enrolled — or doesn't have a
+  platform account at all — to attend one specific session (an external panelist, a guest from a
+  partner organization, a prospective student sitting in). I want to invite them by email and have
+  them land straight in the call, without creating them a user account first, and it shouldn't
+  matter whether I do this before the session or after it's already started.
 
 ---
 
@@ -287,6 +292,9 @@ specific session — treat every live session as "always recorded."
 | `PATCH /courses/items/{item_id}` | Body accepts `scheduled_start_at`, `duration_minutes`, `guest_name`, `guest_title` (LIVE_SESSION only, only while `status: "SCHEDULED"`). Changing `scheduled_start_at` re-notifies enrolled students. |
 | `DELETE /courses/items/{item_id}` | Also deletes the underlying daily.co room for a LIVE_SESSION item. |
 | `GET /courses/manage/{id}`, `GET /courses/{slug}`, item-create response | Item objects include a new `live_session` object for `LIVE_SESSION` items. |
+| `POST /courses/items/{item_id}/live-session/guests` | **New.** Invites one or more people (by email, no platform account required) to this specific session. See §10. |
+| `GET /courses/items/{item_id}/live-session/guests` | **New.** Lists every guest invite for this session (invited/joined/revoked status). See §10. |
+| `DELETE /courses/items/{item_id}/live-session/guests/{invite_id}` | **New.** Revokes a guest invite. See §10. |
 
 ---
 
@@ -294,14 +302,134 @@ specific session — treat every live session as "always recorded."
 
 | Status | When |
 |---|---|
-| `400` | `scheduled_start_at` missing or not in the future when creating/rescheduling a `LIVE_SESSION` item. `scheduled_start_at`/`duration_minutes`/`guest_name`/`guest_title` sent in a `PATCH` for a non-live-session item, or for a live session that's no longer `SCHEDULED`. |
-| `403` | Not the course's owner (and not admin) on any section/item management endpoint (unchanged, pre-existing rule). |
-| `404` | Course/section/item id doesn't exist (unchanged, pre-existing rule). |
+| `400` | `scheduled_start_at` missing or not in the future when creating/rescheduling a `LIVE_SESSION` item. `scheduled_start_at`/`duration_minutes`/`guest_name`/`guest_title` sent in a `PATCH` for a non-live-session item, or for a live session that's no longer `SCHEDULED`. Inviting/listing/revoking guests on a session that's `ENDED`/`CANCELLED` (invite only — see §10). |
+| `403` | Not the course's owner (and not admin) on any section/item management endpoint (unchanged, pre-existing rule) — this also covers the guest-invite endpoints in §10. |
+| `404` | Course/section/item id doesn't exist (unchanged, pre-existing rule). Also: an `invite_id` that doesn't exist or belongs to a different session. |
 | `422` | Standard FastAPI validation error (e.g. `duration_minutes` outside 5–600, `guest_name` over 255 chars, malformed datetime). |
 
 ---
 
-## 10. Frontend implementation checklist
+## 10. Inviting guest/external attendees (no platform account required)
+
+Separate from the named `guest_name`/`guest_title` credited on the invite email (§2) — this is an
+actual **access grant** for people attending the call who aren't enrolled, and may not have an
+account on the platform at all (an external panelist, someone from a partner organization, a
+prospective student sitting in, etc.). They join via a personal emailed link, not by logging in.
+
+**Works whether the session has started or not.** You can invite people before the session, and also
+after it's already underway (`live_session_can_join: true`) — the only thing that blocks an invite is
+the session already being `ENDED`/`CANCELLED`, since there's nothing left to join at that point.
+
+**`POST /courses/items/{item_id}/live-session/guests`**
+
+```json
+{
+  "invites": [
+    { "email": "external.panelist@example.org", "name": "Dr. Chidi Nwosu" },
+    { "email": "prospective.student@example.com" }
+  ]
+}
+```
+
+- `invites` — 1 to 100 entries per call.
+- `email` — required, validated as a real email address.
+- `name` — optional. Used for the invite email's greeting and as the attendee's display name on
+  daily.co's call UI (falls back to their email if omitted).
+- **Re-inviting an already-invited email is safe and idempotent** — it rotates their join link (the
+  old link stops working) and un-revokes them if they'd been revoked, rather than creating a
+  duplicate invite. Use this to resend a lost invite email.
+- `400 Bad Request` ("This live session has already ended") if the session's `status` is `ENDED` or
+  `CANCELLED`.
+- Each successful invite triggers an email (date/time, a "Join Live Session" button, calendar
+  links, `.ics` attachment) — same visual pattern as the student-facing scheduled/reminder emails, but
+  worded for someone without an account. **If the email fails to send for one recipient** (bad
+  address, provider outage), it's logged server-side and does **not** fail the rest of the batch —
+  other recipients in the same call still get invited/emailed, and the failed one still gets a row in
+  the response (retry by re-inviting the same email later).
+
+**Response (`200`):**
+
+```json
+{
+  "success": true,
+  "message": "Guest invites sent successfully",
+  "data": [
+    {
+      "id": "invite-uuid",
+      "live_session_id": "live-session-uuid",
+      "email": "external.panelist@example.org",
+      "name": "Dr. Chidi Nwosu",
+      "invited_by_id": "your-user-uuid",
+      "expires_at": "2026-09-20T16:30:00Z",
+      "revoked_at": null,
+      "last_joined_at": null,
+      "join_count": 0,
+      "created_at": "2026-09-18T09:00:00Z"
+    }
+  ]
+}
+```
+
+`expires_at` matches the session's own join window close (30 minutes after the scheduled end) — the
+invite is only ever valid for *this* occurrence of the session, not reusable for a future one.
+
+**`GET /courses/items/{item_id}/live-session/guests`** — lists every invite for this session (same
+shape as above), most recently created first. Use `last_joined_at`/`join_count` to see who actually
+showed up, and `revoked_at` to see who's been cut off.
+
+**`DELETE /courses/items/{item_id}/live-session/guests/{invite_id}`** — revokes one invite
+immediately; the raw link they were emailed stops working on their next join attempt (`400 Bad
+Request`, `"This invite has been revoked"`). Doesn't un-send the original email — if you need them to
+never have had access at all, this only prevents *further* joins.
+
+**No raw token is ever returned by these endpoints** — the join link is only ever delivered via the
+invite email, same convention as password-reset/admin-invite links elsewhere in the API. There's no
+"copy invite link" affordance to build from this response; if a guest needs to be re-sent it, re-call
+the invite endpoint with their email.
+
+### How the guest actually joins
+
+The guest never logs in. Their emailed link points at:
+
+```
+{FRONTEND_URL}/live-session/guest-join?token=<opaque-token>
+```
+
+Your frontend needs a public page (no auth-gate) at that route which, on load, calls:
+
+**`GET /courses/live-session/guest-join?token=<opaque-token>`** — public, no `Authorization` header.
+
+**Response (`200`):**
+
+```json
+{
+  "success": true,
+  "message": "Join credentials generated successfully",
+  "data": {
+    "join_url": "https://socialworknigeria.daily.co/session-abc123-f9e8d7c6?t=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "expires_at": "2026-09-20T16:30:00Z"
+  }
+}
+```
+
+Same shape as the authenticated join response (§ student doc, §3), minus `is_owner` — a guest is
+never a call owner/moderator. Redirect the browser to `join_url` immediately, same as the
+authenticated flow — don't pre-fetch and hold onto it.
+
+**Error responses on the guest-join endpoint:**
+
+| Status | When |
+|---|---|
+| `404` | Token doesn't match any invite (wrong/mistyped/already-superseded-by-a-resend token), or the underlying live session no longer exists. |
+| `400` | `"This invite has been revoked"` — an admin/instructor revoked it. `"This invite link has expired"` — past the session's join window close, or the invite's own `expires_at`. `"This live session hasn't opened for joining yet"` — same 10-minutes-before-start rule as the authenticated flow; a guest can't join early either. `"This live session has ended"` (session cancelled). |
+
+The join window rules are otherwise identical to the authenticated join flow (§ student doc, §3):
+opens 10 minutes before `scheduled_start_at`, closes 30 minutes after the scheduled end. Inviting
+someone doesn't bypass this window — it only controls *who* is allowed to attempt the join, not *when*.
+
+---
+
+## 11. Frontend implementation checklist
 
 - [ ] Add `"LIVE_SESSION"` as a selectable item type in the curriculum builder, with its own form:
   a date/time picker (`scheduled_start_at`, required), a duration field (`duration_minutes`, minutes,
@@ -322,3 +450,12 @@ specific session — treat every live session as "always recorded."
 - [ ] Double-check any place you hardcode/switch on `item_type` values (e.g. an enum/union type in
   your frontend code) to make sure `"LIVE_SESSION"` doesn't silently fall through to a default/
   unknown state.
+- [ ] Add an "Invite guests" action on the live session item's management view (available regardless
+  of `status` being `SCHEDULED` or the session already being live — only disable it once `ENDED`/
+  `CANCELLED`) — a simple email(+name) list input, posting to §10's invite endpoint.
+- [ ] Show the invited-guests list (§10's `GET .../guests`) with `last_joined_at`/`join_count` so the
+  instructor can see who actually attended, and a "Revoke" action per row.
+- [ ] Build the public `/live-session/guest-join?token=...` landing page (§10) — no auth-gate, no
+  login/signup prompt. It should call the guest-join endpoint on load and redirect to `join_url`,
+  the same "thin redirector" pattern as the authenticated join page, but never asking the visitor to
+  sign in.
