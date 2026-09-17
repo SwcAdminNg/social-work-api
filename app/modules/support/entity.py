@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import ARRAY, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,6 +16,12 @@ class FAQCategory(BaseEntity):
     order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class FAQAudienceEnum(str, enum.Enum):
+    STUDENT = "STUDENT"
+    INSTRUCTOR = "INSTRUCTOR"
+    BOTH = "BOTH"
+
+
 class FAQItem(BaseEntity):
     __tablename__ = "faq_items"
 
@@ -26,6 +32,17 @@ class FAQItem(BaseEntity):
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    audience: Mapped[FAQAudienceEnum] = mapped_column(
+        Enum(FAQAudienceEnum, name="faq_audience_enum", native_enum=True),
+        nullable=False,
+        default=FAQAudienceEnum.BOTH,
+        server_default=FAQAudienceEnum.BOTH.value,
+    )
+    keywords: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    escalation_route: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    related_article_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list
+    )
 
 
 class SupportTicketStatusEnum(str, enum.Enum):

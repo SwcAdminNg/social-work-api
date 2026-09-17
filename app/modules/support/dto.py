@@ -6,7 +6,7 @@ from fastapi import Query
 from pydantic import Field, model_validator
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
-from app.modules.support.entity import SupportSenderTypeEnum, SupportTicketStatusEnum
+from app.modules.support.entity import FAQAudienceEnum, SupportSenderTypeEnum, SupportTicketStatusEnum
 from app.modules.user.dto import UserReadDTO
 
 
@@ -41,6 +41,10 @@ class FAQItemCreateDTO(CreateDTO):
     answer: str
     order: int = 0
     is_published: bool = True
+    audience: FAQAudienceEnum = FAQAudienceEnum.BOTH
+    keywords: list[str] = Field(default_factory=list)
+    escalation_route: str | None = Field(default=None, max_length=150)
+    related_article_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class FAQItemUpdateDTO(UpdateDTO):
@@ -49,6 +53,10 @@ class FAQItemUpdateDTO(UpdateDTO):
     answer: str | None = None
     order: int | None = None
     is_published: bool | None = None
+    audience: FAQAudienceEnum | None = None
+    keywords: list[str] | None = None
+    escalation_route: str | None = Field(default=None, max_length=150)
+    related_article_ids: list[uuid.UUID] | None = None
 
 
 class FAQItemReadDTO(AuditDTO):
@@ -57,6 +65,10 @@ class FAQItemReadDTO(AuditDTO):
     answer: str
     order: int
     is_published: bool
+    audience: FAQAudienceEnum
+    keywords: list[str]
+    escalation_route: str | None = None
+    related_article_ids: list[uuid.UUID]
 
 
 class FAQCategoryWithItemsDTO(BaseDTO):

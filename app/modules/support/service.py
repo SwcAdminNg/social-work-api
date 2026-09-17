@@ -31,6 +31,7 @@ from app.modules.support.dto import (
     SupportTicketReadDTO,
 )
 from app.modules.support.entity import (
+    FAQAudienceEnum,
     FAQCategory,
     FAQItem,
     SupportMessage,
@@ -70,9 +71,11 @@ class FAQService:
         self.category_repo = FAQCategoryRepository(session)
         self.item_repo = FAQItemRepository(session)
 
-    async def list_published_grouped(self) -> list[FAQCategoryWithItemsDTO]:
+    async def list_published_grouped(
+        self, audience: FAQAudienceEnum | None = None
+    ) -> list[FAQCategoryWithItemsDTO]:
         categories = await self.category_repo.list_ordered()
-        items = await self.item_repo.list_published()
+        items = await self.item_repo.list_published(audience)
         items_by_category: dict[uuid.UUID, list[FAQItemReadDTO]] = {}
         for item in items:
             items_by_category.setdefault(item.category_id, []).append(FAQItemReadDTO.model_validate(item))
@@ -81,6 +84,9 @@ class FAQService:
                 id=c.id, name=c.name, order=c.order, items=items_by_category.get(c.id, [])
             )
             for c in categories
+            # When filtering by audience, drop categories left with no matching articles
+            # rather than showing empty groups in the Help Centre.
+            if audience is None or items_by_category.get(c.id)
         ]
 
     async def create_category(self, payload: FAQCategoryCreateDTO) -> FAQCategory:
@@ -106,8 +112,10 @@ class FAQService:
         await self.category_repo.soft_delete(category, current_user.id)
         await self.session.commit()
 
-    async def list_items_for_admin(self, pagination: PaginationParams) -> tuple[list[FAQItem], int]:
-        items, total = await self.item_repo.list_all_for_admin(pagination)
+    async def list_items_for_admin(
+        self, pagination: PaginationParams, audience: FAQAudienceEnum | None = None
+    ) -> tuple[list[FAQItem], int]:
+        items, total = await self.item_repo.list_all_for_admin(pagination, audience)
         return list(items), total
 
     async def create_item(self, payload: FAQItemCreateDTO) -> FAQItem:

@@ -23,6 +23,7 @@ from app.core.database import AsyncSessionLocal, get_db
 from app.core.qstash import verify_qstash_signature
 from app.modules.auth.dependencies import get_current_admin_user, get_current_user, get_user_from_token
 from app.modules.support.dependencies import get_current_support_staff
+from app.modules.support.entity import FAQAudienceEnum
 from app.modules.support.dto import (
     FAQCategoryCreateDTO,
     FAQCategoryReadDTO,
@@ -61,8 +62,13 @@ _PRESENCE_NAMESPACE = "support"
     response_model=ApiResponse[list[FAQCategoryWithItemsDTO]],
     summary="Browse the public help center FAQ (no auth required)",
 )
-async def list_faq(db: AsyncSession = Depends(get_db)) -> ApiResponse[list[FAQCategoryWithItemsDTO]]:
-    data = await FAQService(db).list_published_grouped()
+async def list_faq(
+    audience: FAQAudienceEnum | None = Query(
+        None, description="Only return articles for this audience (plus articles marked BOTH)"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[FAQCategoryWithItemsDTO]]:
+    data = await FAQService(db).list_published_grouped(audience)
     return ApiResponse(message="FAQ retrieved successfully", data=data)
 
 
@@ -117,10 +123,11 @@ async def delete_faq_category(
 )
 async def list_faq_items_for_admin(
     pagination: PaginationParams = Depends(),
+    audience: FAQAudienceEnum | None = Query(None, description="Filter by audience"),
     current_user: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[FAQItemReadDTO]:
-    items, total = await FAQService(db).list_items_for_admin(pagination)
+    items, total = await FAQService(db).list_items_for_admin(pagination, audience)
     return PaginatedResponse.create(
         items=[FAQItemReadDTO.model_validate(i) for i in items], total_items=total, params=pagination
     )
