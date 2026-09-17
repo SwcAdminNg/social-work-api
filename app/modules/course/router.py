@@ -30,6 +30,9 @@ from app.modules.course.content_dto import (
     DocumentUploadCredentialsDTO,
     EssayGradeDTO,
     EssaySubmissionListItemDTO,
+    LiveSessionExternalInviteBulkCreateDTO,
+    LiveSessionExternalInviteReadDTO,
+    LiveSessionExternalJoinDTO,
     LiveSessionJoinDTO,
     QuizAIGenerateRequestDTO,
     QuizAIGenerateResponseDTO,
@@ -848,6 +851,74 @@ async def join_live_session(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[LiveSessionJoinDTO]:
     join_info = await LiveSessionService(db).get_join_info(item_id, current_user)
+    return ApiResponse(message="Join credentials generated successfully", data=join_info)
+
+
+@router.post(
+    "/items/{item_id}/live-session/guests",
+    response_model=ApiResponse[list[LiveSessionExternalInviteReadDTO]],
+    summary="Invite guest/external attendees (no platform account required) to a live "
+    "session - works whether the session has started or not, as long as it hasn't "
+    "ended (admin or the course's owning instructor only)",
+)
+async def invite_live_session_guests(
+    item_id: uuid.UUID,
+    payload: LiveSessionExternalInviteBulkCreateDTO,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[LiveSessionExternalInviteReadDTO]]:
+    invites = await LiveSessionService(db).invite_external_guests(
+        item_id, current_user, [(i.email, i.name) for i in payload.invites]
+    )
+    return ApiResponse(
+        message="Guest invites sent successfully",
+        data=[LiveSessionExternalInviteReadDTO.model_validate(i) for i in invites],
+    )
+
+
+@router.get(
+    "/items/{item_id}/live-session/guests",
+    response_model=ApiResponse[list[LiveSessionExternalInviteReadDTO]],
+    summary="List guest/external invites for a live session (admin or the course's "
+    "owning instructor only)",
+)
+async def list_live_session_guests(
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[LiveSessionExternalInviteReadDTO]]:
+    invites = await LiveSessionService(db).list_external_invites(item_id, current_user)
+    return ApiResponse(
+        message="Guest invites retrieved successfully",
+        data=[LiveSessionExternalInviteReadDTO.model_validate(i) for i in invites],
+    )
+
+
+@router.delete(
+    "/items/{item_id}/live-session/guests/{invite_id}",
+    summary="Revoke a guest/external invite (admin or the course's owning instructor only)",
+)
+async def revoke_live_session_guest(
+    item_id: uuid.UUID,
+    invite_id: uuid.UUID,
+    current_user: User = Depends(get_current_admin_or_instructor),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await LiveSessionService(db).revoke_external_invite(item_id, invite_id, current_user)
+    return ApiResponse(message="Guest invite revoked successfully")
+
+
+@router.get(
+    "/live-session/guest-join",
+    response_model=ApiResponse[LiveSessionExternalJoinDTO],
+    summary="Exchange a guest invite token for a join URL (public, no auth or "
+    "platform account required)",
+)
+async def join_live_session_as_guest(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[LiveSessionExternalJoinDTO]:
+    join_info = await LiveSessionService(db).get_external_join_info(token)
     return ApiResponse(message="Join credentials generated successfully", data=join_info)
 
 

@@ -11,8 +11,14 @@ from app.core.config import settings
 from app.core.daily import get_daily_client
 from app.core.email import email_service
 from app.core.qstash import get_qstash_client
-from app.modules.course.content_dto import LiveSessionJoinDTO
-from app.modules.course.content_entity import CourseLiveSession, LiveSessionStatusEnum, VideoStatusEnum
+from app.core.security import generate_opaque_token, hash_token
+from app.modules.course.content_dto import LiveSessionExternalJoinDTO, LiveSessionJoinDTO
+from app.modules.course.content_entity import (
+    CourseLiveSession,
+    LiveSessionExternalInvite,
+    LiveSessionStatusEnum,
+    VideoStatusEnum,
+)
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.entity import Course, CourseItem
 from app.modules.course.repository import CourseRepository
@@ -46,6 +52,20 @@ class LiveSessionService:
 
     # -- join ------------------------------------------------------------------
 
+    @staticmethod
+    def _join_window(live_session: CourseLiveSession) -> tuple[datetime, datetime]:
+        window_start = live_session.scheduled_start_at - timedelta(minutes=10)
+        window_end = live_session.scheduled_start_at + timedelta(minutes=live_session.duration_minutes + 30)
+        return window_start, window_end
+
+    @staticmethod
+    def _check_join_window(window_start: datetime, window_end: datetime) -> None:
+        now = datetime.now(timezone.utc)
+        if now < window_start:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This live session hasn't opened for joining yet")
+        if now > window_end:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This live session has ended")
+
     async def get_join_info(self, item_id: uuid.UUID, current_user: User) -> LiveSessionJoinDTO:
         item = await self.repo.get_item(item_id)
         if item is None:
@@ -65,13 +85,8 @@ class LiveSessionService:
             if access is None:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not enrolled in this course")
 
-        now = datetime.now(timezone.utc)
-        window_start = live_session.scheduled_start_at - timedelta(minutes=10)
-        window_end = live_session.scheduled_start_at + timedelta(minutes=live_session.duration_minutes + 30)
-        if now < window_start:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This live session hasn't opened for joining yet")
-        if now > window_end:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This live session has ended")
+        window_start, window_end = self._join_window(live_session)
+        self._check_join_window(window_start, window_end)
 
         token_exp = int(window_end.timestamp())
         token = await self.daily.create_meeting_token(
@@ -90,6 +105,146 @@ class LiveSessionService:
             is_owner=is_owner,
             expires_at=window_end,
         )
+
+    # -- external (guest) invites ------------------------------------------------
+
+    async def _get_owned_live_session(
+        self, item_id: uuid.UUID, current_user: User
+    ) -> tuple[CourseItem, Course, CourseLiveSession]:
+        """Loads the live session for `item_id` and checks the caller is an admin
+        or the course's own instructor - the same authorization `get_join_info`
+        applies to owners, reused here since inviting external guests is an
+        authoring action, not something any enrolled student can do."""
+        item = await self.repo.get_item(item_id)
+        if item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        live_session = await self.repo.get_live_session_by_item(item.id)
+        if live_session is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Live session not found for this item")
+
+        section = await self.repo.get_section(item.section_id)
+        course = await self.course_repo.get_by_id(section.course_id) if section else None
+        if course is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+
+        is_owner = current_user.user_type == UserTypeEnum.ADMIN or course.instructor_id == current_user.id
+        if not is_owner:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You don't manage this course's live sessions")
+
+        return item, course, live_session
+
+    async def invite_external_guests(
+        self,
+        item_id: uuid.UUID,
+        current_user: User,
+        invites: list[tuple[str, str | None]],
+    ) -> list[LiveSessionExternalInvite]:
+        """Invites people who aren't (or may not be) enrolled - or platform users
+        at all - to this specific live session, regardless of whether it has
+        already started (only a CANCELLED/ENDED session is rejected, since
+        there's nothing left to join). Each invite is a (email, name) pair;
+        re-inviting an already-invited email rotates its token and un-revokes it
+        rather than creating a duplicate row."""
+        item, course, live_session = await self._get_owned_live_session(item_id, current_user)
+        if live_session.status in (LiveSessionStatusEnum.ENDED, LiveSessionStatusEnum.CANCELLED):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This live session has already ended")
+
+        _, window_end = self._join_window(live_session)
+        content = self._build_notification_content(course, item, live_session)
+
+        created: list[LiveSessionExternalInvite] = []
+        for email, name in invites:
+            email = email.strip().lower()
+            invite = await self.repo.get_external_invite_by_email(live_session.id, email)
+            raw_token = generate_opaque_token()
+            if invite is None:
+                invite = LiveSessionExternalInvite(
+                    live_session_id=live_session.id,
+                    email=email,
+                    name=name,
+                    invited_by_id=current_user.id,
+                    token_hash=hash_token(raw_token),
+                    expires_at=window_end,
+                )
+                self.session.add(invite)
+            else:
+                invite.name = name or invite.name
+                invite.invited_by_id = current_user.id
+                invite.token_hash = hash_token(raw_token)
+                invite.expires_at = window_end
+                invite.revoked_at = None
+            await self.session.flush()
+
+            join_link = f"{settings.frontend_url.rstrip('/')}/live-session/guest-join?token={raw_token}"
+            try:
+                await email_service.send_live_session_external_invite_email(
+                    to_email=email,
+                    guest_display_name=name or email,
+                    course_title=course.title,
+                    session_title=item.title,
+                    start_at_display=content["display"],
+                    join_link=join_link,
+                    google_calendar_link=content["calendar_links"]["google"],
+                    outlook_calendar_link=content["calendar_links"]["outlook"],
+                    ics_bytes=content["ics_bytes"],
+                )
+            except Exception as exc:
+                logger.warning("Failed to send live-session guest invite to %s: %s", email, exc)
+
+            created.append(invite)
+
+        await self.session.commit()
+        return created
+
+    async def list_external_invites(
+        self, item_id: uuid.UUID, current_user: User
+    ) -> list[LiveSessionExternalInvite]:
+        _, _, live_session = await self._get_owned_live_session(item_id, current_user)
+        return list(await self.repo.list_external_invites(live_session.id))
+
+    async def revoke_external_invite(
+        self, item_id: uuid.UUID, invite_id: uuid.UUID, current_user: User
+    ) -> None:
+        _, _, live_session = await self._get_owned_live_session(item_id, current_user)
+        invite = await self.repo.get_external_invite(invite_id)
+        if invite is None or invite.live_session_id != live_session.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found")
+        invite.revoked_at = datetime.now(timezone.utc)
+        await self.session.commit()
+
+    async def get_external_join_info(self, token: str) -> LiveSessionExternalJoinDTO:
+        """Public, unauthenticated join path for an external invite. No enrollment
+        or platform account is checked - only that the token is valid, unrevoked,
+        unexpired, and that the session's own join window has opened."""
+        invite = await self.repo.get_external_invite_by_token_hash(hash_token(token))
+        if invite is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found")
+        if invite.revoked_at is not None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This invite has been revoked")
+        now = datetime.now(timezone.utc)
+        if invite.expires_at < now:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This invite link has expired")
+
+        live_session = await self.repo.get_live_session(invite.live_session_id)
+        if live_session is None or live_session.status == LiveSessionStatusEnum.CANCELLED:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Live session not found")
+
+        window_start, window_end = self._join_window(live_session)
+        self._check_join_window(window_start, window_end)
+
+        token_exp = int(window_end.timestamp())
+        meeting_token = await self.daily.create_meeting_token(
+            room_name=live_session.daily_room_name,
+            user_name=invite.name or invite.email,
+            is_owner=False,
+            exp=token_exp,
+        )
+        invite.last_joined_at = now
+        invite.join_count += 1
+        await self.session.commit()
+
+        join_url = f"{live_session.daily_room_url}?t={meeting_token}"
+        return LiveSessionExternalJoinDTO(join_url=join_url, expires_at=window_end)
 
     # -- notifications -----------------------------------------------------------
 

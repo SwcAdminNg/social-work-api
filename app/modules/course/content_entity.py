@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -107,6 +107,38 @@ class CourseLiveSession(BaseEntity):
     recording_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     invite_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LiveSessionExternalInvite(BaseEntity):
+    """A join grant for someone attending one specific live session who isn't
+    (or may not be) enrolled - or a platform user at all. Distinct from
+    `guest_name`/`guest_title` above, which only credits a featured speaker on
+    the invite email; this is an actual access grant for an attendee, resolved
+    via `token_hash` rather than login + `UserCourseAccess`. One row per
+    (live_session, email) - re-inviting the same address rotates the token
+    and clears any prior revocation instead of creating a duplicate."""
+
+    __tablename__ = "live_session_external_invites"
+    __table_args__ = (
+        UniqueConstraint("live_session_id", "email", name="uq_live_session_external_invite_session_email"),
+    )
+
+    live_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_live_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    invited_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    # Only the hash is ever persisted (see app.core.security.hash_token) - the raw
+    # token lives solely in the emailed join link, same convention as password
+    # reset / admin invite tokens.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    join_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class AssessmentTypeEnum(str, enum.Enum):

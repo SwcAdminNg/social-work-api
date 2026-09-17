@@ -16,6 +16,7 @@ from app.modules.course.content_entity import (
     CourseQuizQuestion,
     CourseQuizSettings,
     CourseVideo,
+    LiveSessionExternalInvite,
 )
 from app.modules.course.entity import CourseItem, CourseSection
 from app.modules.course.instructor_entity import CourseInstructor, CourseSectionInstructor
@@ -110,6 +111,33 @@ class CourseContentRepository:
         if not item_ids:
             return []
         stmt = select(CourseLiveSession).where(CourseLiveSession.course_item_id.in_(item_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    # -- live session external invites --------------------------------------
+
+    async def get_external_invite_by_email(
+        self, live_session_id: uuid.UUID, email: str
+    ) -> LiveSessionExternalInvite | None:
+        stmt = select(LiveSessionExternalInvite).where(
+            LiveSessionExternalInvite.live_session_id == live_session_id,
+            LiveSessionExternalInvite.email == email,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_external_invite_by_token_hash(self, token_hash: str) -> LiveSessionExternalInvite | None:
+        stmt = select(LiveSessionExternalInvite).where(LiveSessionExternalInvite.token_hash == token_hash)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_external_invite(self, id: uuid.UUID) -> LiveSessionExternalInvite | None:
+        stmt = select(LiveSessionExternalInvite).where(LiveSessionExternalInvite.id == id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_external_invites(self, live_session_id: uuid.UUID) -> Sequence[LiveSessionExternalInvite]:
+        stmt = (
+            select(LiveSessionExternalInvite)
+            .where(LiveSessionExternalInvite.live_session_id == live_session_id)
+            .order_by(LiveSessionExternalInvite.created_at.desc())
+        )
         return (await self.session.execute(stmt)).scalars().all()
 
     # -- section guest instructors ----------------------------------------------

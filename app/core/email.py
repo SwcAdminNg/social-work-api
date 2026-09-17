@@ -376,6 +376,47 @@ class EmailService:
             attachments=[attachment],
         )
 
+    async def send_live_session_external_invite_email(
+        self,
+        to_email: str,
+        guest_display_name: str,
+        course_title: str,
+        session_title: str,
+        start_at_display: str,
+        join_link: str,
+        google_calendar_link: str,
+        outlook_calendar_link: str,
+        ics_bytes: bytes,
+    ) -> None:
+        subject = f"You're invited: {session_title} ({course_title})"
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">You've been invited to a live session &#128197;</h2>
+          <p>Hi {guest_display_name},</p>
+          <p>You've been invited to join a live session for <strong>{course_title}</strong>:</p>
+          <p style="font-size: 16px; font-weight: bold; margin: 4px 0;">{session_title}</p>
+          <p style="color: #6b7280; margin-top: 0;">{start_at_display}</p>
+          {_button("Join Live Session", join_link)}
+          <p style="text-align: center; margin: 16px 0; font-size: 13px;">
+            <a href="{google_calendar_link}" style="color: #2563eb; text-decoration: none; margin: 0 8px;">Add to Google Calendar</a>
+            &middot;
+            <a href="{outlook_calendar_link}" style="color: #2563eb; text-decoration: none; margin: 0 8px;">Add to Outlook</a>
+          </p>
+          <p style="color: #6b7280; font-size: 13px;">
+            This link is personal to you and doesn't require a {settings.company_name} account - just
+            open it at the time of the session to join. A calendar invite (.ics) is attached as well.
+          </p>
+        """
+        attachment = {
+            "filename": "live-session.ics",
+            "content": base64.b64encode(ics_bytes).decode("ascii"),
+        }
+        await self._send(
+            to_email,
+            subject,
+            _wrap_email(body, preheader=f"You're invited to {session_title} - {start_at_display}"),
+            attachments=[attachment],
+        )
+
     async def send_live_session_reminder_email(
         self,
         to_email: str,

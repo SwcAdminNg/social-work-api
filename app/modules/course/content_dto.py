@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from pydantic import Field
+from pydantic import EmailStr, Field
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.course.content_entity import (
@@ -271,6 +271,33 @@ class LiveSessionJoinDTO(BaseDTO):
     # page (their subdomain, e.g. socialworknigeria.daily.co), not embedded in-app.
     join_url: str
     is_owner: bool
+    expires_at: datetime
+
+
+class LiveSessionExternalInviteCreateDTO(CreateDTO):
+    email: EmailStr
+    name: str | None = Field(default=None, max_length=255)
+
+
+class LiveSessionExternalInviteBulkCreateDTO(CreateDTO):
+    invites: list[LiveSessionExternalInviteCreateDTO] = Field(min_length=1, max_length=100)
+
+
+class LiveSessionExternalInviteReadDTO(AuditDTO):
+    live_session_id: uuid.UUID
+    email: str
+    name: str | None = None
+    invited_by_id: uuid.UUID | None = None
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    last_joined_at: datetime | None = None
+    join_count: int
+
+
+class LiveSessionExternalJoinDTO(BaseDTO):
+    # Same shape as LiveSessionJoinDTO, kept separate since a guest is never an
+    # owner and this is reached via a one-off token rather than a logged-in user.
+    join_url: str
     expires_at: datetime
 
 
