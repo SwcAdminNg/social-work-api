@@ -12,6 +12,8 @@ from app.common.base_entity import BaseEntity
 class CommunityTypeEnum(str, enum.Enum):
     COURSE = "COURSE"
     GENERAL = "GENERAL"
+    INSTRUCTOR_GENERAL = "INSTRUCTOR_GENERAL"
+    ADMIN_GENERAL = "ADMIN_GENERAL"
     HELP = "HELP"
     CUSTOM = "CUSTOM"
 
@@ -23,14 +25,17 @@ class CommunityMembershipAddedViaEnum(str, enum.Enum):
 
 class Community(BaseEntity):
     """A group-chat room. Every community - including the dynamic-membership types
-    (COURSE/GENERAL/HELP) - gets a durable row here so messages, membership checks
-    and WebSocket channels have a stable id to reference.
+    (COURSE/GENERAL/INSTRUCTOR_GENERAL/ADMIN_GENERAL/HELP) - gets a durable row
+    here so messages, membership checks and WebSocket channels have a stable id
+    to reference.
 
-    Membership for COURSE/GENERAL/HELP is resolved dynamically (see
-    `app/modules/community/membership.py`) rather than stored - a COURSE community's
-    members are always exactly its course's current enrollees + instructors, a
-    GENERAL/HELP community's members are always every active user. Only CUSTOM
-    communities have real rows in `CommunityMembership`.
+    Membership for COURSE/GENERAL/INSTRUCTOR_GENERAL/ADMIN_GENERAL/HELP is resolved
+    dynamically (see `app/modules/community/membership.py`) rather than stored - a
+    COURSE community's members are always exactly its course's current enrollees +
+    instructors, a HELP community's members are every active user, and
+    GENERAL/INSTRUCTOR_GENERAL/ADMIN_GENERAL are each scoped to active users of one
+    `UserTypeEnum` (USER/INSTRUCTOR/ADMIN respectively). Only CUSTOM communities
+    have real rows in `CommunityMembership`.
 
     `course_id` is unique among COURSE-type rows (enforced by a partial unique
     index in the migration, since it's NULL for every other type)."""

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.base_repository import BaseRepository
 from app.common.pagination import PaginationParams
 from app.modules.user.dto import UserFilterParams
-from app.modules.user.entity import User, UserTypeEnum
+from app.modules.user.entity import InstructorDocument, User, UserTypeEnum
 
 
 class UserRepository(BaseRepository[User]):
@@ -88,3 +88,20 @@ class UserRepository(BaseRepository[User]):
     async def list_recent(self, limit: int) -> Sequence[User]:
         stmt = self._base_select().order_by(User.created_at.desc()).limit(limit)
         return (await self.session.execute(stmt)).scalars().all()
+
+
+class InstructorDocumentRepository(BaseRepository[InstructorDocument]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, InstructorDocument)
+
+    async def list_for_user(self, user_id: uuid.UUID) -> Sequence[InstructorDocument]:
+        stmt = self._base_select().where(InstructorDocument.user_id == user_id).order_by(
+            InstructorDocument.created_at.desc()
+        )
+        return (await self.session.execute(stmt)).scalars().all()
+
+    async def get_for_user(self, document_id: uuid.UUID, user_id: uuid.UUID) -> InstructorDocument | None:
+        stmt = self._base_select().where(
+            InstructorDocument.id == document_id, InstructorDocument.user_id == user_id
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()

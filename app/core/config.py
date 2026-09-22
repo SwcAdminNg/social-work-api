@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     company_name: str = "Social Work Nigeria"
     company_address: str = "Okonkwo Estate, Zaramagada-Fwavei, RVWV+VJ6, Rayfield Rd, Jos 930103, Plateau, Nigeria"
     company_phone: str = "+234 (0) 800 123 4567"
-    company_support_email: str = "support@socialworknigeria.com"
+    company_support_email: str = "support@socialworknigeria.org"
     company_info_email: str = "info@socialworknigeria.com"
     company_logo_url: str = "https://www.socialworknigeria.org/_next/image?url=%2Fimages%2Flogo%2Fswc-dark-logo.png&w=640&q=75"
     # Local logo file (checked first, before falling back to company_logo_url) so

@@ -1,7 +1,9 @@
 import enum
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.base_entity import BaseEntity
@@ -68,3 +70,29 @@ class User(BaseEntity):
     # Encrypted (not hashed, since it must be decryptable to verify codes) TOTP seed.
     totp_secret_encrypted: Mapped[str | None] = mapped_column(String(255), nullable=True)
     two_factor_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Instructor CV, kept up to date from their profile (distinct from the CV
+    # submitted with their original InstructorApplication, which is immutable
+    # application history). Nullable/optional for USER and ADMIN accounts too,
+    # though only the instructor-profile endpoints let it be set.
+    cv_storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    cv_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class InstructorDocument(BaseEntity):
+    """A named supporting document an instructor attaches to their profile (e.g.
+    "License" -> the license PDF, "Certification" -> the certificate image).
+    Unlike `User.cv_storage_key` (a single slot), an instructor can hold any
+    number of these - each is its own row so it can be named, replaced and
+    removed independently."""
+
+    __tablename__ = "instructor_documents"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)

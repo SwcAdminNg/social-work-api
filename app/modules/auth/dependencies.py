@@ -72,3 +72,9 @@ async def get_current_admin_or_instructor(current_user: User = Depends(get_curre
     if current_user.user_type not in (UserTypeEnum.ADMIN, UserTypeEnum.INSTRUCTOR):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin or instructor access required")
     return current_user
+
+
+async def get_current_instructor_user(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.user_type != UserTypeEnum.INSTRUCTOR:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Instructor access required")
+    return current_user

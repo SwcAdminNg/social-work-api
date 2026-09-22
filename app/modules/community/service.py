@@ -178,19 +178,33 @@ class CommunityService:
         return [await self._build_community_dto(c) for c in communities]
 
     async def _communities_for_user(self, user: User) -> list[Community]:
-        """Every community `user` belongs to (General, Help, their course
-        communities, and any custom communities they're a member of - or, for an
-        admin, every community that exists). Shared by `list_for_user` and
-        `get_unread_count`, which both need this same set."""
-        general = await self.get_or_create_singleton(CommunityTypeEnum.GENERAL, "General")
+        """Every community `user` belongs to (their user-type General, Help, their
+        course communities, and any custom communities they're a member of - or,
+        for an admin, every community that exists, including every other
+        user-type's General). Shared by `list_for_user` and `get_unread_count`,
+        which both need this same set."""
         help_community = await self.get_or_create_singleton(CommunityTypeEnum.HELP, "Help")
-        communities: list[Community] = [general, help_community]
+        communities: list[Community] = [help_community]
 
         if user.user_type == UserTypeEnum.ADMIN:
+            general = await self.get_or_create_singleton(CommunityTypeEnum.GENERAL, "General")
+            instructor_general = await self.get_or_create_singleton(
+                CommunityTypeEnum.INSTRUCTOR_GENERAL, "Instructor Community"
+            )
+            admin_general = await self.get_or_create_singleton(CommunityTypeEnum.ADMIN_GENERAL, "Admin Community")
+            communities.extend([general, instructor_general, admin_general])
             communities.extend(await self.repository.list_by_type(CommunityTypeEnum.COURSE))
             custom_all, _ = await self.repository.list_custom(PaginationParams(page=1, page_size=1000))
             communities.extend(custom_all)
         else:
+            if user.user_type == UserTypeEnum.INSTRUCTOR:
+                singleton = await self.get_or_create_singleton(
+                    CommunityTypeEnum.INSTRUCTOR_GENERAL, "Instructor Community"
+                )
+            else:
+                singleton = await self.get_or_create_singleton(CommunityTypeEnum.GENERAL, "General")
+            communities.append(singleton)
+
             course_ids = await self._accessible_course_ids(user.id)
             communities.extend(await self.repository.list_for_courses(course_ids))
 

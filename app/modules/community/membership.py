@@ -41,12 +41,26 @@ async def _has_membership_row(db: AsyncSession, community_id: uuid.UUID, user_id
     return (await db.execute(stmt)).scalar_one_or_none() is not None
 
 
+_SINGLETON_USER_TYPE = {
+    CommunityTypeEnum.GENERAL: UserTypeEnum.USER,
+    CommunityTypeEnum.INSTRUCTOR_GENERAL: UserTypeEnum.INSTRUCTOR,
+    CommunityTypeEnum.ADMIN_GENERAL: UserTypeEnum.ADMIN,
+}
+
+
 async def is_member(db: AsyncSession, community: Community, user: User) -> bool:
     if user.user_type == UserTypeEnum.ADMIN:
         return True
 
-    if community.type in (CommunityTypeEnum.GENERAL, CommunityTypeEnum.HELP):
+    if community.type == CommunityTypeEnum.HELP:
         return user.is_active and not user.is_suspended
+
+    if community.type in _SINGLETON_USER_TYPE:
+        return (
+            user.user_type == _SINGLETON_USER_TYPE[community.type]
+            and user.is_active
+            and not user.is_suspended
+        )
 
     if community.type == CommunityTypeEnum.COURSE:
         if community.course_id is None:
@@ -65,8 +79,16 @@ async def list_member_ids(db: AsyncSession, community: Community) -> list[uuid.U
     community. That blanket access is an authorization bypass, not membership:
     an admin who never enrolled/was added shouldn't inflate a roster, a member
     count, or the "who's online in this room" list."""
-    if community.type in (CommunityTypeEnum.GENERAL, CommunityTypeEnum.HELP):
+    if community.type == CommunityTypeEnum.HELP:
         stmt = select(User.id).where(User.deleted_at.is_(None), User.is_active.is_(True))
+        return list((await db.execute(stmt)).scalars().all())
+
+    if community.type in _SINGLETON_USER_TYPE:
+        stmt = select(User.id).where(
+            User.deleted_at.is_(None),
+            User.is_active.is_(True),
+            User.user_type == _SINGLETON_USER_TYPE[community.type],
+        )
         return list((await db.execute(stmt)).scalars().all())
 
     if community.type == CommunityTypeEnum.COURSE:

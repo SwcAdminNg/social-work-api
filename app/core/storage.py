@@ -54,6 +54,12 @@ class R2Client:
     def build_instructor_cv_key(self, application_id: uuid.UUID, file_name: str) -> str:
         return f"instructor-applications/{application_id}/cv/{uuid.uuid4()}-{file_name}"
 
+    def build_user_cv_key(self, user_id: uuid.UUID, file_name: str) -> str:
+        return f"users/{user_id}/cv/{uuid.uuid4()}-{file_name}"
+
+    def build_instructor_document_key(self, user_id: uuid.UUID, file_name: str) -> str:
+        return f"users/{user_id}/documents/{uuid.uuid4()}-{file_name}"
+
     def upload_bytes(self, key: str, data: bytes, content_type: str) -> None:
         """Direct server-side upload, unlike `generate_upload_url` - used only for
         content we generate ourselves (e.g. rendered certificate PDFs), never for

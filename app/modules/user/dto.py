@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from fastapi import Query
@@ -21,6 +22,9 @@ class UserReadDTO(AuditDTO):
     is_active: bool
     is_suspended: bool
     last_login_at: datetime | None = None
+    cv_file_name: str | None = Field(
+        default=None, description="File name of the instructor's uploaded CV, if any."
+    )
     two_factor_enabled: bool = Field(
         description="Whether two-factor authentication is set up. All users are required to set it up."
     )
@@ -72,3 +76,41 @@ class ProfilePictureUploadRequest(CreateDTO):
 class ProfilePictureUploadResponse(CreateDTO):
     upload_url: str
     profile_picture_url: str
+
+
+class CvUploadRequestDTO(CreateDTO):
+    file_name: str = Field(max_length=255)
+    content_type: str | None = None
+
+
+class CvUploadResponseDTO(CreateDTO):
+    upload_url: str
+    cv_file_name: str
+
+
+class CvDownloadResponseDTO(BaseDTO):
+    download_url: str
+    cv_file_name: str
+
+
+class InstructorDocumentUploadRequestDTO(CreateDTO):
+    name: str = Field(min_length=1, max_length=255, description='A label for the document, e.g. "License"')
+    file_name: str = Field(max_length=255)
+    content_type: str | None = None
+
+
+class InstructorDocumentUploadResponseDTO(CreateDTO):
+    document_id: uuid.UUID
+    upload_url: str
+
+
+class InstructorDocumentUpdateDTO(UpdateDTO):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+
+
+class InstructorDocumentReadDTO(AuditDTO):
+    name: str
+    file_name: str
+    mime_type: str | None = None
+    file_size_bytes: int | None = None
+    download_url: str
