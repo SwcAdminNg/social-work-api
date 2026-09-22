@@ -17,11 +17,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Added in their own migration/transaction - Postgres won't let a just-added
-    # enum value be used (e.g. in the data backfill INSERT in the next migration)
-    # within the same transaction it was added in.
-    op.execute("ALTER TYPE community_type_enum ADD VALUE IF NOT EXISTS 'INSTRUCTOR_GENERAL'")
-    op.execute("ALTER TYPE community_type_enum ADD VALUE IF NOT EXISTS 'ADMIN_GENERAL'")
+    # This project's env.py runs every migration in a single `alembic upgrade`
+    # invocation inside one outer transaction (see alembic/env.py), so simply
+    # putting this in its own migration file does NOT give it its own
+    # transaction - Postgres still refuses to let a just-added enum value be
+    # used (e.g. in the data backfill INSERT in the next migration) until the
+    # ADD VALUE itself has actually committed. `autocommit_block()` forces this
+    # statement to run and commit immediately, outside the outer transaction.
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE community_type_enum ADD VALUE IF NOT EXISTS 'INSTRUCTOR_GENERAL'")
+        op.execute("ALTER TYPE community_type_enum ADD VALUE IF NOT EXISTS 'ADMIN_GENERAL'")
 
 
 def downgrade() -> None:
