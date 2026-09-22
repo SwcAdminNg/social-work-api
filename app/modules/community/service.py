@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.core import presence
+from app.core.profanity import assert_no_profanity
 from app.core.storage import get_r2_client
 from app.core.ws_pubsub import channel_name, publish_event
 from app.modules.community import membership
@@ -376,6 +377,7 @@ class CommunityService:
     ) -> CommunityMessageReadDTO:
         community = await self._get_community_or_404(community_id)
         await self.assert_member(community, user)
+        assert_no_profanity(payload.body)
 
         if payload.reply_to_message_id is not None:
             parent = await self.message_repo.get_message_by_id(payload.reply_to_message_id)

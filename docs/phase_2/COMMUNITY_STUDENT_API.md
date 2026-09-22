@@ -129,7 +129,7 @@ Ordered **most recent first** — page 1 is the bottom of the chat. Load page 2,
 
 | Field | Notes |
 |---|---|
-| `body` | Can be an empty string **if** you're sending an attachment and/or a `resource_reference_id` — but at least one of the three must be present, or you get `422`. |
+| `body` | Can be an empty string **if** you're sending an attachment and/or a `resource_reference_id` — but at least one of the three must be present, or you get `422`. Blocked with `400` if it contains foul language — see §2.3. |
 | `reply_to_message_id` | Optional. Must be a message in the **same community** — `400` otherwise. One level of quoting only (WhatsApp-style) — you can reply to a reply, but it always quotes its own direct parent, not the whole chain. |
 | `resource_reference_id` | Optional — see §3.3. `400` if the resource doesn't exist. |
 | `attachment_*` | Optional — see §3 for the upload flow. |
@@ -137,6 +137,23 @@ Ordered **most recent first** — page 1 is the bottom of the chat. Load page 2,
 Response: `ApiResponse<CommunityMessageReadDTO>` (201) — same shape as §2.1's items.
 
 Prefer sending messages over the **WebSocket** (§4) when you have one open — the REST endpoint exists mainly for environments that can't hold a socket open.
+
+### 2.3 Foul-language filter
+
+Every message `body` (REST **and** WebSocket, §4.1) is screened server-side against a blocklist of foul words/phrases before it's persisted or broadcast. Matching is case-insensitive and tolerant of basic obfuscation (extra spacing/punctuation, repeated letters), so simple attempts to dodge it (`f.u.c.k`, `F  U  C  K`, `fuuuck`) are still caught. This only inspects text `body` — attachments and shared resources are never scanned.
+
+If a message is blocked:
+
+- **REST** (`POST /community/{community_id}/messages`): `400` with the standard error envelope:
+  ```json
+  { "success": false, "message": "This message was blocked because it contains foul language." }
+  ```
+- **WebSocket** (§4.1 `"message"` frame): the socket stays open and you get an `"error"` frame (§4.2):
+  ```json
+  { "type": "error", "detail": "This message was blocked because it contains foul language." }
+  ```
+
+Surface this to the user as an inline "your message contains language that isn't allowed here" notice rather than a generic failure toast — nothing was sent or stored, so there's nothing to retract or edit.
 
 ---
 

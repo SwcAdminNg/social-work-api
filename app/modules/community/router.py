@@ -194,7 +194,8 @@ async def list_community_messages(
     "/{community_id}/messages",
     response_model=ApiResponse[CommunityMessageReadDTO],
     status_code=status.HTTP_201_CREATED,
-    summary="Post a message to a community (HTTP fallback for clients not using the WebSocket)",
+    summary="Post a message to a community (HTTP fallback for clients not using the WebSocket). "
+    "400 if the body contains foul language.",
 )
 async def post_community_message(
     community_id: uuid.UUID,
