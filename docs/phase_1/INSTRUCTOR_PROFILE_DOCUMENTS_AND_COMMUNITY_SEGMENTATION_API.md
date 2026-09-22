@@ -4,7 +4,8 @@ Covers two related changes:
 
 1. **Instructor profile documents** — instructors can now maintain a CV and any number of
    named supporting documents (e.g. `License`, `Certification`) directly from their profile,
-   independent of the one-time CV submitted with their original `InstructorApplication`.
+   independent of the one-time CV submitted with their original `InstructorApplication`. Admins
+   get read-only visibility into both.
 2. **Community segmentation by user type** — the `General` community is now scoped to
    students (`UserTypeEnum.USER`) only. Two new singleton communities, `Instructor Community`
    and `Admin Community`, give instructors and admins their own equivalent space. `Help`
@@ -116,7 +117,35 @@ curl -X POST https://api.example.com/users/me/documents/<document_id>/upload-url
 
 ---
 
-## 3. Community segmentation by user type
+## 3. Admin visibility into an instructor's CV and documents
+
+Base URL prefix: `/users`. Read-only, admin equivalents of the `/users/me/*` endpoints above —
+lets an admin review an instructor's uploaded CV and supporting documents (e.g. during
+onboarding or a support request) without the instructor sharing files out of band. Both require
+an `ADMIN` user (`get_current_admin_user`) — `403` otherwise.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/users/{user_id}/cv-download-url` | Get a pre-signed download URL for the given user's CV. `400` if `user_id` isn't an `INSTRUCTOR`, `404` if the user doesn't exist or hasn't uploaded a CV. |
+| GET | `/users/{user_id}/documents` | List the given instructor's documents, each with a fresh pre-signed `download_url`. `400` if `user_id` isn't an `INSTRUCTOR`, `404` if the user doesn't exist. Same `InstructorDocumentReadDTO` shape as the self-service listing. |
+
+These are **read-only** — an admin cannot upload, rename, replace, or delete an instructor's CV
+or documents on their behalf; only the instructor themselves can, via the `/users/me/*`
+endpoints above. There is no admin endpoint to list *which* instructors have/haven't uploaded a
+CV in bulk today — `GET /users?user_type=INSTRUCTOR` returns each instructor's `cv_file_name`
+(`null` if none), which is enough to spot gaps by eye or client-side filter.
+
+### Example: an admin reviewing an instructor's license before approving something
+
+```bash
+curl https://api.example.com/users/<instructor_user_id>/documents \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# => { "data": [ { "name": "License", "download_url": "https://...", ... } ] }
+```
+
+---
+
+## 4. Community segmentation by user type
 
 Base URL prefix: `/community`. No endpoint shape changed — `GET /community` (and every other
 existing community endpoint) behaves exactly as before from a client's perspective. What

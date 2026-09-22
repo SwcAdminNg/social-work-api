@@ -23,7 +23,7 @@ from app.modules.user.dto import (
     UserRoleUpdateDTO,
     UserUpdateDTO,
 )
-from app.modules.user.entity import User
+from app.modules.user.entity import User, UserTypeEnum
 from app.modules.user.service import UserService
 
 router = APIRouter(prefix="/users", tags=["Users"], route_class=NoNullAPIRoute)
@@ -184,6 +184,45 @@ async def get_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
         
     return ApiResponse(message="User details retrieved successfully", data=UserReadDTO.model_validate(user))
+
+
+async def _get_instructor_or_404(user_id: str, db: AsyncSession) -> User:
+    user = await UserService(db).get_by_id(user_id)
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.user_type != UserTypeEnum.INSTRUCTOR:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This user is not an instructor")
+    return user
+
+
+@router.get(
+    "/{user_id}/cv-download-url",
+    response_model=ApiResponse[CvDownloadResponseDTO],
+    summary="Get a pre-signed URL to download an instructor's CV (admin only)",
+)
+async def get_instructor_cv_download_url(
+    user_id: str,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CvDownloadResponseDTO]:
+    instructor = await _get_instructor_or_404(user_id, db)
+    data = await UserService(db).get_cv_download_url(instructor)
+    return ApiResponse(message="Download URL generated successfully", data=data)
+
+
+@router.get(
+    "/{user_id}/documents",
+    response_model=ApiResponse[list[InstructorDocumentReadDTO]],
+    summary="List an instructor's additional profile documents (e.g. License, Certification) (admin only)",
+)
+async def list_instructor_documents(
+    user_id: str,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[InstructorDocumentReadDTO]]:
+    instructor = await _get_instructor_or_404(user_id, db)
+    data = await UserService(db).list_documents(instructor)
+    return ApiResponse(message="Documents retrieved successfully", data=data)
 
 
 @router.post("/{user_id}/suspend", response_model=ApiResponse[UserReadDTO], summary="Suspend a user (admin only)")
