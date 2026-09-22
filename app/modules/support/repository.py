@@ -12,6 +12,7 @@ from app.modules.support.entity import (
     FAQAudienceEnum,
     FAQCategory,
     FAQItem,
+    FAQVisibilityEnum,
     SupportMessage,
     SupportTicket,
     SupportTicketStatusEnum,
@@ -32,8 +33,12 @@ class FAQItemRepository(BaseRepository[FAQItem]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, FAQItem)
 
-    async def list_published(self, audience: FAQAudienceEnum | None = None) -> Sequence[FAQItem]:
+    async def list_published(
+        self, audience: FAQAudienceEnum | None = None, public_only: bool = False
+    ) -> Sequence[FAQItem]:
         stmt = self._base_select().where(FAQItem.is_published.is_(True))
+        if public_only:
+            stmt = stmt.where(FAQItem.visibility == FAQVisibilityEnum.GENERAL)
         if audience is not None:
             stmt = stmt.where(
                 or_(FAQItem.audience == audience, FAQItem.audience == FAQAudienceEnum.BOTH)
@@ -42,11 +47,16 @@ class FAQItemRepository(BaseRepository[FAQItem]):
         return (await self.session.execute(stmt)).scalars().all()
 
     async def list_all_for_admin(
-        self, pagination: PaginationParams, audience: FAQAudienceEnum | None = None
+        self,
+        pagination: PaginationParams,
+        audience: FAQAudienceEnum | None = None,
+        visibility: FAQVisibilityEnum | None = None,
     ) -> tuple[Sequence[FAQItem], int]:
         stmt = self._base_select()
         if audience is not None:
             stmt = stmt.where(FAQItem.audience == audience)
+        if visibility is not None:
+            stmt = stmt.where(FAQItem.visibility == visibility)
         stmt = stmt.order_by(FAQItem.order.asc(), FAQItem.created_at.asc())
         total = (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
         stmt = stmt.offset(pagination.offset).limit(pagination.limit)

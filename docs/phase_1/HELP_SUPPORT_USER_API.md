@@ -9,8 +9,8 @@ Base URL prefix: `/support`.
 
 ## Conventions
 
-- **Auth**: `GET /support/faq` is public (no `Authorization` header needed) — everything else
-  requires `Authorization: Bearer <token>` for any authenticated user.
+- **Auth**: `GET /support/faq` accepts an **optional** `Authorization: Bearer <token>` — see below.
+  Everything else requires it, for any authenticated user.
 - **Response envelope**: `ApiResponse<T>` for single items, `PaginatedResponse<T>` for lists.
 - **Null stripping**: absent/null fields are stripped from JSON responses.
 
@@ -19,16 +19,29 @@ Base URL prefix: `/support`.
 ```
 GET /support/faq
 GET /support/faq?audience=STUDENT
+GET /support/faq
+Authorization: Bearer <token>
 ```
 
-No auth required. Returns every published FAQ category with its published items, in display order.
+Auth is **optional** here, and changes what comes back:
+
+- **No `Authorization` header** (anonymous/public visitor): only articles marked `visibility: GENERAL`
+  are returned.
+- **`Authorization: Bearer <token>`** (any signed-in account — student, instructor or admin): every
+  published article is returned, `GENERAL` and `ACCOUNT` alike. There's no additional gate beyond
+  "has an account" — an instructor can still see student-flagged `ACCOUNT` articles unless further
+  narrowed with `audience` below, and vice versa.
+
+Either way, only published FAQ categories/items are returned, in display order, and a category left
+with zero matching items after filtering is dropped rather than shown empty.
 
 **`audience`** (optional query param) — one of `STUDENT`, `INSTRUCTOR`, `BOTH`. When passed, only
 returns items whose `audience` matches the given value **or** is `BOTH` (articles for everyone), and
-drops any category left with zero matching items. Omit it to get everything, unfiltered. Pass the
-logged-in user's own type (student vs. instructor) so the Help Centre shows only what's relevant to
-them, per the "recognise whether the logged-in user is a student or an instructor" requirement — but
-still let them browse the wider Help Centre by calling the endpoint without the filter.
+drops any category left with zero matching items. Omit it to get everything you're allowed to see
+(per the auth rule above), unfiltered. Pass the logged-in user's own type (student vs. instructor) so
+the Help Centre shows only what's relevant to them — but still let them browse the wider Help Centre
+by calling the endpoint without the filter. `audience` is independent of the auth-based `visibility`
+gate above: it only narrows *which* articles among the ones you're already allowed to see.
 
 ```json
 {
@@ -47,6 +60,7 @@ still let them browse the wider Help Centre by calling the endpoint without the 
           "answer": "...",
           "order": 0,
           "is_published": true,
+          "visibility": "GENERAL",
           "audience": "STUDENT",
           "keywords": ["login", "password reset"],
           "escalation_route": "Account Access",

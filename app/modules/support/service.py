@@ -34,6 +34,7 @@ from app.modules.support.entity import (
     FAQAudienceEnum,
     FAQCategory,
     FAQItem,
+    FAQVisibilityEnum,
     SupportMessage,
     SupportSenderTypeEnum,
     SupportTicket,
@@ -72,10 +73,10 @@ class FAQService:
         self.item_repo = FAQItemRepository(session)
 
     async def list_published_grouped(
-        self, audience: FAQAudienceEnum | None = None
+        self, audience: FAQAudienceEnum | None = None, public_only: bool = False
     ) -> list[FAQCategoryWithItemsDTO]:
         categories = await self.category_repo.list_ordered()
-        items = await self.item_repo.list_published(audience)
+        items = await self.item_repo.list_published(audience, public_only)
         items_by_category: dict[uuid.UUID, list[FAQItemReadDTO]] = {}
         for item in items:
             items_by_category.setdefault(item.category_id, []).append(FAQItemReadDTO.model_validate(item))
@@ -84,9 +85,9 @@ class FAQService:
                 id=c.id, name=c.name, order=c.order, items=items_by_category.get(c.id, [])
             )
             for c in categories
-            # When filtering by audience, drop categories left with no matching articles
-            # rather than showing empty groups in the Help Centre.
-            if audience is None or items_by_category.get(c.id)
+            # When filtering by audience and/or to public-only articles, drop categories
+            # left with no matching articles rather than showing empty groups in the Help Centre.
+            if (audience is None and not public_only) or items_by_category.get(c.id)
         ]
 
     async def create_category(self, payload: FAQCategoryCreateDTO) -> FAQCategory:
@@ -113,9 +114,12 @@ class FAQService:
         await self.session.commit()
 
     async def list_items_for_admin(
-        self, pagination: PaginationParams, audience: FAQAudienceEnum | None = None
+        self,
+        pagination: PaginationParams,
+        audience: FAQAudienceEnum | None = None,
+        visibility: FAQVisibilityEnum | None = None,
     ) -> tuple[list[FAQItem], int]:
-        items, total = await self.item_repo.list_all_for_admin(pagination, audience)
+        items, total = await self.item_repo.list_all_for_admin(pagination, audience, visibility)
         return list(items), total
 
     async def create_item(self, payload: FAQItemCreateDTO) -> FAQItem:

@@ -186,7 +186,7 @@ class LiveSessionService:
                     join_link=join_link,
                     google_calendar_link=content["calendar_links"]["google"],
                     outlook_calendar_link=content["calendar_links"]["outlook"],
-                    ics_bytes=content["ics_bytes"],
+                    ics_bytes=self._build_ics_for_recipient(live_session, item, content, email, name),
                 )
             except Exception as exc:
                 logger.warning("Failed to send live-session guest invite to %s: %s", email, exc)
@@ -254,16 +254,29 @@ class LiveSessionService:
         display = start.strftime("%A, %B %d, %Y at %I:%M %p UTC")
         description = f"Live session for {course.title}: {item.title}"
         calendar_links = build_calendar_links(item.title, description, start, end, live_session.daily_room_url)
-        ics_bytes = build_ics(
+        return {"display": display, "calendar_links": calendar_links, "start": start, "end": end, "description": description}
+
+    def _build_ics_for_recipient(
+        self,
+        live_session: CourseLiveSession,
+        item: CourseItem,
+        content: dict,
+        attendee_email: str,
+        attendee_name: str | None,
+    ) -> bytes:
+        """Built fresh per recipient - see `build_ics`'s docstring for why each
+        recipient needs their own ATTENDEE-bearing .ics rather than one shared file."""
+        return build_ics(
             uid=f"live-session-{live_session.id}@{settings.company_name.lower().replace(' ', '-')}",
             summary=item.title,
-            description=description,
-            start=start,
-            end=end,
+            description=content["description"],
+            start=content["start"],
+            end=content["end"],
             location_url=live_session.daily_room_url,
             organizer_email=settings.company_support_email,
+            attendee_email=attendee_email,
+            attendee_name=attendee_name,
         )
-        return {"display": display, "calendar_links": calendar_links, "ics_bytes": ics_bytes}
 
     async def notify_enrolled_students(
         self,
@@ -298,7 +311,9 @@ class LiveSessionService:
                         join_link=join_link,
                         google_calendar_link=content["calendar_links"]["google"],
                         outlook_calendar_link=content["calendar_links"]["outlook"],
-                        ics_bytes=content["ics_bytes"],
+                        ics_bytes=self._build_ics_for_recipient(
+                            live_session, item, content, user.email, f"{user.first_name} {user.last_name}"
+                        ),
                     )
                     await notifications.notify_live_session_scheduled(
                         user, course.id, course.slug, item.id, item.title, content["display"]
@@ -314,7 +329,9 @@ class LiveSessionService:
                         join_link=join_link,
                         google_calendar_link=content["calendar_links"]["google"],
                         outlook_calendar_link=content["calendar_links"]["outlook"],
-                        ics_bytes=content["ics_bytes"],
+                        ics_bytes=self._build_ics_for_recipient(
+                            live_session, item, content, user.email, f"{user.first_name} {user.last_name}"
+                        ),
                     )
                     await notifications.notify_live_session_rescheduled(
                         user, course.id, course.slug, item.id, item.title, content["display"]

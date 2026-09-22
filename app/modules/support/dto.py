@@ -6,7 +6,7 @@ from fastapi import Query
 from pydantic import Field, model_validator
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
-from app.modules.support.entity import FAQAudienceEnum, SupportSenderTypeEnum, SupportTicketStatusEnum
+from app.modules.support.entity import FAQAudienceEnum, FAQVisibilityEnum, SupportSenderTypeEnum, SupportTicketStatusEnum
 from app.modules.user.dto import UserReadDTO
 
 
@@ -41,6 +41,10 @@ class FAQItemCreateDTO(CreateDTO):
     answer: str
     order: int = 0
     is_published: bool = True
+    visibility: FAQVisibilityEnum = Field(
+        default=FAQVisibilityEnum.GENERAL,
+        description="GENERAL is public (no account needed); ACCOUNT requires the caller to be signed in.",
+    )
     audience: FAQAudienceEnum = FAQAudienceEnum.BOTH
     keywords: list[str] = Field(default_factory=list)
     escalation_route: str | None = Field(default=None, max_length=150)
@@ -53,6 +57,7 @@ class FAQItemUpdateDTO(UpdateDTO):
     answer: str | None = None
     order: int | None = None
     is_published: bool | None = None
+    visibility: FAQVisibilityEnum | None = None
     audience: FAQAudienceEnum | None = None
     keywords: list[str] | None = None
     escalation_route: str | None = Field(default=None, max_length=150)
@@ -65,6 +70,7 @@ class FAQItemReadDTO(AuditDTO):
     answer: str
     order: int
     is_published: bool
+    visibility: FAQVisibilityEnum
     audience: FAQAudienceEnum
     keywords: list[str]
     escalation_route: str | None = None

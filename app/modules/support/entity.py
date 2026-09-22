@@ -22,6 +22,17 @@ class FAQAudienceEnum(str, enum.Enum):
     BOTH = "BOTH"
 
 
+class FAQVisibilityEnum(str, enum.Enum):
+    """Who can see this article at all, before `audience` even applies - GENERAL
+    is public (no account needed), ACCOUNT requires any signed-in user (any
+    `UserTypeEnum`). Orthogonal to `audience`: `audience` narrows *which*
+    signed-in role an ACCOUNT article targets, it doesn't grant anonymous
+    visibility on its own."""
+
+    GENERAL = "GENERAL"
+    ACCOUNT = "ACCOUNT"
+
+
 class FAQItem(BaseEntity):
     __tablename__ = "faq_items"
 
@@ -32,6 +43,12 @@ class FAQItem(BaseEntity):
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    visibility: Mapped[FAQVisibilityEnum] = mapped_column(
+        Enum(FAQVisibilityEnum, name="faq_visibility_enum", native_enum=True),
+        nullable=False,
+        default=FAQVisibilityEnum.GENERAL,
+        server_default=FAQVisibilityEnum.GENERAL.value,
+    )
     audience: Mapped[FAQAudienceEnum] = mapped_column(
         Enum(FAQAudienceEnum, name="faq_audience_enum", native_enum=True),
         nullable=False,
