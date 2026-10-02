@@ -783,6 +783,18 @@ their answer (enforced on the student-facing endpoints, not here) — grade only
 lock it in. There's currently no "un-grade"/reset endpoint; if you need to reopen a submission for
 resubmission, that requires a direct data fix for now.
 
+> **Moderated essays (content governance).** When governance is enabled and the essay's
+> `requires_moderation` is on (the default for final assessments), this call no longer grades
+> directly: it saves the marker's **draft mark**. That mark goes Marker → Moderator → Approver, and
+> only reaches the student when it is published. In that case `is_published` is ignored. The body also
+> accepts `recommendation` (`PASS`/`FAIL`) and `submit_for_moderation`. Every grade, moderated or
+> not, is now kept in the mark history instead of being overwritten in place. See
+> [`ESSAY_MODERATION_API.md`](../phase_3/ESSAY_MODERATION_API.md).
+>
+> **Who can call it:** this endpoint (and the submissions list) now needs a marking permission
+> (MARK_ASSESSMENT, MODERATE_ASSESSMENT or APPROVE_RESULTS) for the course, rather than ownership
+> of it. A course's owning instructor and admins have it by default.
+
 ---
 
 ## 7. Generic item management (unchanged, included for completeness)

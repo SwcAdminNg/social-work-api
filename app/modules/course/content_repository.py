@@ -33,10 +33,16 @@ class CourseContentRepository:
 
     # -- sections ----------------------------------------------------------
 
-    async def list_sections(self, course_id: uuid.UUID) -> Sequence[CourseSection]:
+    async def list_sections(
+        self, course_id: uuid.UUID, revision_id: uuid.UUID | None = None
+    ) -> Sequence[CourseSection]:
+        """The live sections by default; pass `revision_id` for that revision's
+        draft working copy (the caller must be inside `include_drafts`). Layer
+        filtering is explicit here so it holds even when drafts are visible."""
+        layer = CourseSection.revision_id.is_(None) if revision_id is None else CourseSection.revision_id == revision_id
         stmt = (
             select(CourseSection)
-            .where(CourseSection.course_id == course_id, CourseSection.deleted_at.is_(None))
+            .where(CourseSection.course_id == course_id, CourseSection.deleted_at.is_(None), layer)
             .order_by(CourseSection.order_index)
         )
         return (await self.session.execute(stmt)).scalars().all()

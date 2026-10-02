@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.base_entity import BaseEntity
+from app.modules.marking.entity import LearnerResultStatusEnum
 
 
 class UserCourseProgress(BaseEntity):
@@ -121,3 +122,8 @@ class EssaySubmission(BaseEntity):
     # re-opens the submission for another attempt as long as this stays below
     # CourseEssaySettings.max_attempts - see LearningService._authorize_essay_submission.
     graded_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Where marking of the current attempt stands (null = not marked yet). The
+    # full marking history lives in essay_marks - see app/modules/marking.
+    result_status: Mapped[LearnerResultStatusEnum | None] = mapped_column(
+        Enum(LearnerResultStatusEnum, name="learner_result_status_enum", native_enum=True), nullable=True
+    )

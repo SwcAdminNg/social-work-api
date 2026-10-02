@@ -20,6 +20,11 @@ from app.modules.certificate.router import router as certificate_router
 from app.modules.community.router import router as community_router
 from app.modules.notification.router import router as notification_router
 from app.modules.group.router import router as group_router
+from app.modules.governance.admin_router import router as governance_admin_router
+from app.modules.governance.router import router as governance_router
+from app.modules.governance.revision_router import course_router as governance_course_router
+from app.modules.governance.revision_router import router as governance_review_router
+from app.modules.marking.router import router as marking_router
 from app.modules.support.router import router as support_router
 from app.modules.health.router import router as health_router
 from app.modules.payment.router import router as payment_router
@@ -106,3 +111,8 @@ app.include_router(community_router)
 app.include_router(notification_router)
 app.include_router(customer_support_router)
 app.include_router(home_router)
+app.include_router(governance_router)
+app.include_router(governance_admin_router)
+app.include_router(governance_review_router)
+app.include_router(governance_course_router)
+app.include_router(marking_router)

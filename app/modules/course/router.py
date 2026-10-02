@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.api_route import NoNullAPIRoute
@@ -9,7 +9,8 @@ from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.core.qstash import verify_qstash_signature
-from app.modules.auth.dependencies import get_current_admin_or_instructor, get_current_user, get_current_user_optional, get_current_admin_user
+from app.modules.auth.dependencies import get_current_user, get_current_user_optional, get_current_admin_user
+from app.modules.governance.dependencies import get_current_content_staff
 from app.modules.course.content_dto import (
     AssessmentAIProviderEnum,
     CourseAssessmentUpdateDTO,
@@ -82,7 +83,7 @@ router = APIRouter(prefix="/courses", tags=["Courses"], route_class=NoNullAPIRou
 )
 async def create_course(
     payload: CourseCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseReadDTO]:
     service = CourseService(db)
@@ -101,7 +102,7 @@ async def create_course(
 async def get_thumbnail_upload_url(
     course_id: uuid.UUID,
     payload: CourseThumbnailUploadRequest,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseThumbnailUploadResponse]:
     data = await CourseService(db).generate_thumbnail_upload_url(course_id, payload, current_user)
@@ -344,7 +345,7 @@ async def unbookmark_course(
 async def list_manage_courses(
     pagination: PaginationParams = Depends(),
     filters: CourseManageFilterParams = Depends(),
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[CourseReadDTO]:
     service = CourseService(db)
@@ -365,19 +366,51 @@ async def list_manage_courses(
 )
 async def get_manage_course(
     id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    layer: str = Query(
+        "auto",
+        pattern="^(auto|live|draft)$",
+        description="auto (default): the open working copy when there is one, else live. "
+        "live: what learners see. draft: the working copy (404 if none).",
+    ),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseManageDetailDTO]:
+    from app.core.config import settings
+    from app.modules.governance.draft_service import DraftService
+    from app.modules.governance.dto import CourseGovernanceDTO
+    from app.modules.governance.presenter import summaries
+
     service = CourseService(db)
     course = await service.get_for_manage(id, current_user)
-    sections = await CourseContentService(db).build_tree(course.id, manage=True)
+    drafts = DraftService(db)
+    revision = await drafts.get_open_revision(course.id)
+    # Edits only land in the working copy while governance is on, so that's
+    # also the only time the manage view shows it.
+    show_draft = settings.content_governance_enabled and drafts.is_cloned(revision) and layer != "live"
+    if layer == "draft" and not show_draft:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This course has no draft working copy")
+    sections = await CourseContentService(db).build_tree(
+        course.id, manage=True, revision_id=revision.id if show_draft else None
+    )
     course_read = CourseReadDTO.model_validate(course)
+    if show_draft:
+        # Pending edits to the course's own academic fields, shown in place.
+        for field, value in (revision.course_changes or {}).items():
+            if field in CourseReadDTO.model_fields:
+                setattr(course_read, field, value)
     await service.attach_instructors([course_read])
     await service.attach_estimated_time([course_read])
     enrolled_ids, _ = await service.get_course_access_details(current_user, [course.id])
     course_read.is_enrolled = course.id in enrolled_ids
     await service.attach_progress_status([course_read], current_user)
-    data = CourseManageDetailDTO(**course_read.model_dump(), sections=sections)
+    governance = CourseGovernanceDTO(
+        governance_enabled=settings.content_governance_enabled,
+        lifecycle=course.governance_status,
+        current_version_label=course.current_version_label,
+        layer="draft" if show_draft else "live",
+        open_revision=(await summaries(db, [revision], {course.id: course}))[0] if revision else None,
+    )
+    data = CourseManageDetailDTO(**course_read.model_dump(), sections=sections, governance=governance)
     return ApiResponse(message="Course retrieved successfully", data=data)
 
 
@@ -427,7 +460,7 @@ async def get_course_by_slug(
 async def update_course(
     id: uuid.UUID,
     payload: CourseUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseReadDTO]:
     service = CourseService(db)
@@ -446,7 +479,7 @@ async def update_course(
 async def set_course_published(
     id: uuid.UUID,
     is_published: bool,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseReadDTO]:
     service = CourseService(db)
@@ -465,7 +498,7 @@ async def set_course_published(
 )
 async def delete_course(
     id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseService(db).delete(id, current_user)
@@ -492,7 +525,7 @@ async def delete_course(
 async def create_quiz_group_section(
     item_id: uuid.UUID,
     payload: QuizGroupSectionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseQuizGroupSectionManageDTO]:
     section = await CourseContentService(db).create_quiz_group_section(item_id, payload, current_user)
@@ -511,7 +544,7 @@ async def create_quiz_group_section(
 async def update_quiz_group_section(
     section_id: uuid.UUID,
     payload: QuizGroupSectionUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).update_quiz_group_section(section_id, payload, current_user)
@@ -525,7 +558,7 @@ async def update_quiz_group_section(
 )
 async def delete_quiz_group_section(
     section_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_quiz_group_section(section_id, current_user)
@@ -542,7 +575,7 @@ async def delete_quiz_group_section(
 async def create_quiz_group_question(
     section_id: uuid.UUID,
     payload: QuizQuestionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseQuizQuestionManageDTO]:
     question, created_options = await CourseContentService(db).create_question_in_group_section(
@@ -574,7 +607,7 @@ async def autocomplete_quiz_from_document_for_group_section(
     persist: bool = Form(default=True),
     provider: AssessmentAIProviderEnum = Form(default=AssessmentAIProviderEnum.GEMINI),
     model: str | None = Form(default=None, min_length=1, max_length=100),
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[QuizAIAutocompleteResponseDTO]:
     data = await CourseContentService(db).autocomplete_quiz_from_document_for_group_section(
@@ -601,7 +634,7 @@ async def autocomplete_quiz_from_document_for_group_section(
 async def generate_quiz_from_prompt_for_group_section(
     section_id: uuid.UUID,
     payload: QuizAIGenerateRequestDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[QuizAIGenerateResponseDTO]:
     data = await CourseContentService(db).generate_quiz_from_prompt_for_group_section(
@@ -624,7 +657,7 @@ async def generate_quiz_from_prompt_for_group_section(
 async def create_section(
     course_id: uuid.UUID,
     payload: CourseSectionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseSectionManageReadDTO]:
     section = await CourseContentService(db).create_section(course_id, payload, current_user)
@@ -645,7 +678,7 @@ async def create_section(
 async def reorder_sections(
     course_id: uuid.UUID,
     payload: CourseSectionReorderDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).reorder_sections(course_id, payload, current_user)
@@ -661,7 +694,7 @@ async def update_section(
     course_id: uuid.UUID,
     section_id: uuid.UUID,
     payload: CourseSectionUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseSectionManageReadDTO]:
     section = await CourseContentService(db).update_section(course_id, section_id, payload, current_user)
@@ -682,7 +715,7 @@ async def update_section(
 async def delete_section(
     course_id: uuid.UUID,
     section_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_section(course_id, section_id, current_user)
@@ -711,7 +744,7 @@ async def create_item(
     course_id: uuid.UUID,
     section_id: uuid.UUID,
     payload: CourseItemCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ItemCreateResponseDTO]:
     item, video_credentials, document_credentials = await CourseContentService(db).create_item(
@@ -742,7 +775,7 @@ async def create_item(
 async def update_item(
     item_id: uuid.UUID,
     payload: CourseItemUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).update_item(item_id, payload, current_user)
@@ -756,7 +789,7 @@ async def update_item(
 )
 async def delete_item(
     item_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_item(item_id, current_user)
@@ -772,7 +805,7 @@ async def reorder_items(
     course_id: uuid.UUID,
     section_id: uuid.UUID,
     payload: CourseItemReorderDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).reorder_items(course_id, section_id, payload, current_user)
@@ -792,7 +825,7 @@ async def reorder_items(
 async def finalize_document(
     item_id: uuid.UUID,
     payload: DocumentFinalizeDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).finalize_document(item_id, payload, current_user)
@@ -826,7 +859,7 @@ async def get_document_download_url(
 )
 async def refresh_video_upload(
     item_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[VideoUploadCredentialsDTO]:
     credentials = await CourseContentService(db).refresh_video_upload(item_id, current_user)
@@ -864,7 +897,7 @@ async def join_live_session(
 async def invite_live_session_guests(
     item_id: uuid.UUID,
     payload: LiveSessionExternalInviteBulkCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[list[LiveSessionExternalInviteReadDTO]]:
     invites = await LiveSessionService(db).invite_external_guests(
@@ -884,7 +917,7 @@ async def invite_live_session_guests(
 )
 async def list_live_session_guests(
     item_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[list[LiveSessionExternalInviteReadDTO]]:
     invites = await LiveSessionService(db).list_external_invites(item_id, current_user)
@@ -901,7 +934,7 @@ async def list_live_session_guests(
 async def revoke_live_session_guest(
     item_id: uuid.UUID,
     invite_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await LiveSessionService(db).revoke_external_invite(item_id, invite_id, current_user)
@@ -957,7 +990,7 @@ async def live_session_reminder_cron(
 async def create_quiz_question(
     item_id: uuid.UUID,
     payload: QuizQuestionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseQuizQuestionManageDTO]:
     question, created_options = await CourseContentService(db).create_question(item_id, payload, current_user)
@@ -987,7 +1020,7 @@ async def autocomplete_quiz_from_document(
     persist: bool = Form(default=True),
     provider: AssessmentAIProviderEnum = Form(default=AssessmentAIProviderEnum.GEMINI),
     model: str | None = Form(default=None, min_length=1, max_length=100),
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[QuizAIAutocompleteResponseDTO]:
     data = await CourseContentService(db).autocomplete_quiz_from_document(
@@ -1014,7 +1047,7 @@ async def autocomplete_quiz_from_document(
 async def generate_quiz_from_prompt(
     item_id: uuid.UUID,
     payload: QuizAIGenerateRequestDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[QuizAIGenerateResponseDTO]:
     data = await CourseContentService(db).generate_quiz_from_prompt(item_id, payload, current_user)
@@ -1029,7 +1062,7 @@ async def generate_quiz_from_prompt(
 async def update_quiz_question(
     question_id: uuid.UUID,
     payload: QuizQuestionUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).update_question(question_id, payload, current_user)
@@ -1043,7 +1076,7 @@ async def update_quiz_question(
 )
 async def delete_quiz_question(
     question_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_question(question_id, current_user)
@@ -1059,7 +1092,7 @@ async def delete_quiz_question(
 async def create_quiz_option(
     question_id: uuid.UUID,
     payload: QuizOptionCreateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseQuizOptionManageDTO]:
     option = await CourseContentService(db).create_option(question_id, payload, current_user)
@@ -1077,7 +1110,7 @@ async def create_quiz_option(
 async def update_quiz_option(
     option_id: uuid.UUID,
     payload: QuizOptionUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).update_option(option_id, payload, current_user)
@@ -1091,7 +1124,7 @@ async def update_quiz_option(
 )
 async def delete_quiz_option(
     option_id: uuid.UUID,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).delete_option(option_id, current_user)
@@ -1119,7 +1152,7 @@ async def delete_quiz_option(
 async def update_assessment_settings(
     item_id: uuid.UUID,
     payload: CourseAssessmentUpdateDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).update_assessment_settings(item_id, payload, current_user)
@@ -1139,7 +1172,7 @@ async def update_assessment_settings(
 async def list_essay_submissions(
     item_id: uuid.UUID,
     pagination: PaginationParams = Depends(),
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[EssaySubmissionListItemDTO]:
     items, total = await CourseContentService(db).list_essay_submissions(item_id, pagination, current_user)
@@ -1156,7 +1189,7 @@ async def grade_essay_submission(
     item_id: uuid.UUID,
     user_id: uuid.UUID,
     payload: EssayGradeDTO,
-    current_user: User = Depends(get_current_admin_or_instructor),
+    current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
     await CourseContentService(db).grade_essay_submission(item_id, user_id, payload, current_user)

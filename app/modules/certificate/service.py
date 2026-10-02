@@ -111,10 +111,15 @@ class CertificateService:
     ) -> Course:
         from app.modules.course.service import CourseService
 
+        from app.modules.governance.draft_service import DraftService
+
         course = await CourseService(self.session).get_for_manage(course_id, current_user)
+        # Certificate rules are high-risk academic settings: on a published
+        # course under governance they're staged in the working copy for review.
+        changes: dict = {}
 
         if payload.clear_template:
-            course.certificate_template_id = None
+            changes["certificate_template_id"] = None
         elif payload.certificate_template_id is not None:
             template = await self.template_repo.get_by_id(payload.certificate_template_id)
             if template is None:
@@ -125,11 +130,12 @@ class CertificateService:
                 and template.owner_id != current_user.id
             ):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot use another instructor's template")
-            course.certificate_template_id = template.id
+            changes["certificate_template_id"] = template.id
 
         if payload.certificate_enabled is not None:
-            course.certificate_enabled = payload.certificate_enabled
+            changes["certificate_enabled"] = payload.certificate_enabled
 
+        await DraftService(self.session).stage_course_changes(course, changes, current_user)
         await self.course_repo.update(course)
         await self.session.commit()
         return course

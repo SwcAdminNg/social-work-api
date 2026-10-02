@@ -7,15 +7,20 @@ from app.modules.course.content_entity import (  # noqa: F401
     CourseAssessment,
     CourseDocument,
     CourseEssaySettings,
+    CourseLink,
+    CourseLiveSession,
+    CourseQuizGroupSection,
+    CourseQuizGroupSettings,
     CourseQuizOption,
     CourseQuizQuestion,
     CourseQuizSettings,
     CourseVideo,
+    LiveSessionExternalInvite,
 )
-from app.modules.course.entity import Course, CourseItem, CourseSection  # noqa: F401
+from app.modules.course.entity import Course, CourseCatalog, CourseItem, CourseSection  # noqa: F401
 from app.modules.course.access_entity import UserCourseAccess  # noqa: F401
 from app.modules.course.bookmark_entity import CourseBookmark  # noqa: F401
-from app.modules.course.instructor_entity import CourseInstructor  # noqa: F401
+from app.modules.course.instructor_entity import CourseInstructor, CourseSectionInstructor  # noqa: F401
 from app.modules.course.review_entity import CourseReview  # noqa: F401
 from app.modules.payment.entity import SavedCard, SubscriptionPlan, Transaction, TransactionItem, UserSubscription  # noqa: F401
 from app.modules.coupon.entity import Coupon, CouponRedemption  # noqa: F401
@@ -25,6 +30,7 @@ from app.modules.user.activity_entity import ActivityLog  # noqa: F401
 from app.modules.learning.entity import (  # noqa: F401
     EssaySubmission,
     QuizAttempt,
+    QuizGroupAttempt,
     UserCourseProgress,
     UserItemProgress,
 )
@@ -39,3 +45,15 @@ from app.modules.community.entity import (  # noqa: F401
     CommunityRead,
 )
 from app.modules.notification.entity import Notification  # noqa: F401
+from app.modules.governance.entity import (  # noqa: F401
+    CourseRevision,
+    CourseVersion,
+    GovernanceAuditLog,
+    ReviewComment,
+    ReviewDecision,
+    ReviewEvidence,
+    ReviewStage,
+    RevisionContributor,
+    StaffRoleAssignment,
+)
+from app.modules.marking.entity import EssayMark  # noqa: F401

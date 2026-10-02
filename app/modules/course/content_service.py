@@ -1,3 +1,4 @@
+import functools
 import uuid
 from datetime import datetime, timezone
 
@@ -85,14 +86,33 @@ from app.modules.course.entity import Course, CourseItem, CourseItemTypeEnum, Co
 from app.modules.course.instructor_entity import CourseInstructor, CourseSectionInstructor
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.entity import EssaySubmission
+from app.modules.governance.draft_scope import include_drafts
+from app.modules.governance.draft_service import DraftService
 from app.modules.learning.repository import LearningRepository
 from app.modules.user.entity import User, UserTypeEnum
+
+
+def _draft_aware(method):
+    """Runs a manage-side method with draft-layer rows visible (see
+    app/modules/governance/draft_scope.py) - the ids it receives may belong to a
+    published course's hidden working copy."""
+
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        with include_drafts(self.session):
+            return await method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class CourseContentService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = CourseContentRepository(session)
+        self.drafts = DraftService(session)
+        # The governance revision the current write belongs to (None when
+        # governance is off). Set by the _authorize_* helpers.
+        self.revision = None
         self.course_repo = CourseRepository(session)
         self.learning_repo = LearningRepository(session)
         self._r2 = None
@@ -121,15 +141,24 @@ class CourseContentService:
 
     # -- authorization helpers ----------------------------------------------
 
-    def _ensure_can_manage(self, course: Course, user: User) -> None:
-        if user.user_type != UserTypeEnum.ADMIN and course.instructor_id != user.id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not manage this course")
+    async def _ensure_can_manage(self, course: Course, user: User) -> None:
+        from app.modules.course.service import CourseService
 
-    async def _authorize_course(self, course_id: uuid.UUID, user: User) -> Course:
+        await CourseService(self.session).ensure_can_manage(course, user)
+
+    @property
+    def _writing_draft(self) -> bool:
+        """True when the current write lands in a published course's hidden
+        working copy rather than on live rows."""
+        return self.drafts.is_cloned(self.revision)
+
+    async def _authorize_course(self, course_id: uuid.UUID, user: User, for_write: bool = True) -> Course:
         course = await self.course_repo.get_by_id(course_id)
         if course is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
-        self._ensure_can_manage(course, user)
+        await self._ensure_can_manage(course, user)
+        if for_write:
+            self.revision = await self.drafts.prepare_write(course, user)
         return course
 
     async def _authorize_section(
@@ -139,11 +168,16 @@ class CourseContentService:
         section = await self.repo.get_section(section_id)
         if section is None or section.course_id != course.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
+        section = await self.drafts.translate_section(section, self.revision)
         return course, section
 
     async def _authorize_item(
-        self, item_id: uuid.UUID, user: User
+        self, item_id: uuid.UUID, user: User, for_write: bool = True
     ) -> tuple[Course, CourseSection, CourseItem]:
+        """Resolves an item for management. With `for_write`, a live item of a
+        published course is translated to its working-copy counterpart (opening
+        the working copy on first edit). Without it (marking/grading), a draft
+        item id is translated back to the live item learners actually submit to."""
         item = await self.repo.get_item(item_id)
         if item is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
@@ -153,17 +187,29 @@ class CourseContentService:
         course = await self.course_repo.get_by_id(section.course_id)
         if course is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-        self._ensure_can_manage(course, user)
+        await self._ensure_can_manage(course, user)
+        if for_write:
+            self.revision = await self.drafts.prepare_write(course, user)
+            item = await self.drafts.translate_item(item, self.revision)
+        else:
+            item = await self.drafts.to_live_item(item)
+            if item is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "This item has not been published yet")
+        if item.section_id != section.id:
+            section = await self.repo.get_section(item.section_id)
         return course, section, item
 
     # -- sections --------------------------------------------------------------
 
+    @_draft_aware
     async def create_section(
         self, course_id: uuid.UUID, payload: CourseSectionCreateDTO, current_user: User
     ) -> CourseSection:
         course = await self._authorize_course(course_id, current_user)
         section = CourseSection(
-            course_id=course.id, **payload.model_dump(exclude={"guest_instructors"})
+            course_id=course.id,
+            revision_id=self.revision.id if self._writing_draft else None,
+            **payload.model_dump(exclude={"guest_instructors"}),
         )
         self.session.add(section)
         await self.session.flush()
@@ -171,6 +217,7 @@ class CourseContentService:
         await self.session.commit()
         return section
 
+    @_draft_aware
     async def update_section(
         self,
         course_id: uuid.UUID,
@@ -232,6 +279,7 @@ class CourseContentService:
             )
         await self.session.flush()
 
+    @_draft_aware
     async def delete_section(
         self, course_id: uuid.UUID, section_id: uuid.UUID, current_user: User
     ) -> None:
@@ -241,11 +289,14 @@ class CourseContentService:
         # Deleting a section drops its items from every enrolled student's item
         # count too (progress queries join through non-deleted sections), so their
         # progress/completion needs recomputing the same as an item add/remove.
-        from app.modules.learning.service import LearningService
-        await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
+        # A working-copy delete changes nothing learners see until it's published.
+        if not self._writing_draft:
+            from app.modules.learning.service import LearningService
+            await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
 
         await self.session.commit()
 
+    @_draft_aware
     async def reorder_sections(
         self, course_id: uuid.UUID, payload: CourseSectionReorderDTO, current_user: User
     ) -> None:
@@ -253,11 +304,13 @@ class CourseContentService:
         for entry in payload.sections:
             section = await self.repo.get_section(entry.id)
             if section is not None and section.course_id == course_id:
+                section = await self.drafts.translate_section(section, self.revision)
                 section.order_index = entry.order_index
         await self.session.commit()
 
     # -- items -----------------------------------------------------------------
 
+    @_draft_aware
     async def create_item(
         self,
         course_id: uuid.UUID,
@@ -266,10 +319,12 @@ class CourseContentService:
         current_user: User,
     ) -> tuple[CourseItem, VideoUploadCredentialsDTO | None, DocumentUploadCredentialsDTO | None]:
         course, section = await self._authorize_section(course_id, section_id, current_user)
-        course.content_updated_at = datetime.now(timezone.utc)
+        if not self._writing_draft:
+            course.content_updated_at = datetime.now(timezone.utc)
 
         item = CourseItem(
             section_id=section.id,
+            revision_id=self.revision.id if self._writing_draft else None,
             title=payload.title,
             item_type=payload.item_type,
             order_index=payload.order_index,
@@ -335,11 +390,14 @@ class CourseContentService:
             self.session.add(live_session)
             await self.session.flush()
 
-            from app.modules.course.live_session_service import LiveSessionService
+            # In a working copy the session isn't live yet: invites and the
+            # reminder go out when the revision is published (RevisionService).
+            if not self._writing_draft:
+                from app.modules.course.live_session_service import LiveSessionService
 
-            live_session_service = LiveSessionService(self.session)
-            await live_session_service.notify_enrolled_students(course, item, live_session, kind="scheduled")
-            await live_session_service.schedule_reminder(live_session.id, payload.scheduled_start_at)
+                live_session_service = LiveSessionService(self.session)
+                await live_session_service.notify_enrolled_students(course, item, live_session, kind="scheduled")
+                await live_session_service.schedule_reminder(live_session.id, payload.scheduled_start_at)
         elif payload.item_type == CourseItemTypeEnum.ASSESSMENT:
             if payload.assessment_type is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "assessment_type is required for assessment items")
@@ -380,6 +438,11 @@ class CourseContentService:
                         max_attempts=self._resolve_settings_max_attempts(
                             payload.essay_settings, payload.is_final_assessment
                         ),
+                        requires_moderation=(
+                            payload.essay_settings.requires_moderation
+                            if payload.essay_settings.requires_moderation is not None
+                            else payload.is_final_assessment
+                        ),
                     )
                 )
             elif payload.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
@@ -400,8 +463,9 @@ class CourseContentService:
         # student, so anyone who'd already finished the course (e.g. one that gets
         # new modules added week by week) needs to be un-completed until they
         # catch up on the new content - see LearningService.recalculate_progress_for_enrolled_users.
-        from app.modules.learning.service import LearningService
-        await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
+        if not self._writing_draft:
+            from app.modules.learning.service import LearningService
+            await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
 
         await self.session.commit()
         return item, video_credentials, document_credentials
@@ -435,6 +499,7 @@ class CourseContentService:
                     status.HTTP_400_BAD_REQUEST, "This section already has a final assessment"
                 )
 
+    @_draft_aware
     async def update_item(
         self, item_id: uuid.UUID, payload: CourseItemUpdateDTO, current_user: User
     ) -> CourseItem:
@@ -458,7 +523,10 @@ class CourseContentService:
             if field in payload.model_fields_set
         }
         if live_session_fields:
-            live_session = await self.repo.get_live_session_by_item(item.id)
+            # Scheduling is operational, not academic content: it always applies
+            # to the live session row (a working-copy item reaches it through
+            # draft_of_id), keeping reschedule notices and the Daily room in sync.
+            live_session = await self.repo.get_live_session_by_item(item.draft_of_id or item.id)
             if live_session is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not a live session")
             if live_session.status != LiveSessionStatusEnum.SCHEDULED:
@@ -481,14 +549,19 @@ class CourseContentService:
                 )
                 await self.session.flush()
 
-                from app.modules.course.live_session_service import LiveSessionService
+                # A session added in an unpublished working copy has no learners
+                # to tell yet - they're invited when it's published.
+                if item.revision_id is None or item.draft_of_id is not None:
+                    from app.modules.course.live_session_service import LiveSessionService
 
-                live_session_service = LiveSessionService(self.session)
-                live_session.reminder_sent_at = None
-                await live_session_service.notify_enrolled_students(
-                    course, item, live_session, kind="rescheduled", previous_start_display=previous_start_display
-                )
-                await live_session_service.schedule_reminder(live_session.id, live_session.scheduled_start_at)
+                    live_item = await self.drafts.to_live_item(item) or item
+                    live_session_service = LiveSessionService(self.session)
+                    live_session.reminder_sent_at = None
+                    await live_session_service.notify_enrolled_students(
+                        course, live_item, live_session, kind="rescheduled",
+                        previous_start_display=previous_start_display,
+                    )
+                    await live_session_service.schedule_reminder(live_session.id, live_session.scheduled_start_at)
 
         link_fields = {
             field: getattr(payload, field)
@@ -506,25 +579,29 @@ class CourseContentService:
         await self.session.commit()
         return item
 
+    @_draft_aware
     async def delete_item(self, item_id: uuid.UUID, current_user: User) -> None:
         course, _, item = await self._authorize_item(item_id, current_user)
 
-        if item.item_type == CourseItemTypeEnum.DOCUMENT:
-            document = await self.repo.get_document_by_item(item.id)
-            if document:
-                self.r2.delete_object(document.storage_key)
-        elif item.item_type == CourseItemTypeEnum.LIVE_SESSION:
+        # The document's R2 object is deliberately kept: published course
+        # versions snapshot it (rollback can restore the item) and a draft
+        # working copy may share the same storage key.
+        # A working-copy item that shadows a live session leaves the live room
+        # alone - it is only closed if the deletion is published.
+        if item.item_type == CourseItemTypeEnum.LIVE_SESSION and item.draft_of_id is None:
             live_session = await self.repo.get_live_session_by_item(item.id)
             if live_session:
                 await self.daily.delete_room(live_session.daily_room_name)
 
         item.mark_deleted(current_user.id)
 
-        from app.modules.learning.service import LearningService
-        await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
+        if not self._writing_draft:
+            from app.modules.learning.service import LearningService
+            await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
 
         await self.session.commit()
 
+    @_draft_aware
     async def reorder_items(
         self,
         course_id: uuid.UUID,
@@ -532,15 +609,19 @@ class CourseContentService:
         payload: CourseItemReorderDTO,
         current_user: User,
     ) -> None:
-        await self._authorize_section(course_id, section_id, current_user)
+        _, section = await self._authorize_section(course_id, section_id, current_user)
         for entry in payload.items:
             item = await self.repo.get_item(entry.id)
-            if item is not None and item.section_id == section_id:
+            if item is None:
+                continue
+            item = await self.drafts.translate_item(item, self.revision)
+            if item.section_id == section.id:
                 item.order_index = entry.order_index
         await self.session.commit()
 
     # -- document --------------------------------------------------------------
 
+    @_draft_aware
     async def finalize_document(
         self, item_id: uuid.UUID, payload: DocumentFinalizeDTO, current_user: User
     ) -> CourseDocument:
@@ -587,6 +668,7 @@ class CourseContentService:
 
     # -- video -------------------------------------------------------------------
 
+    @_draft_aware
     async def refresh_video_upload(self, item_id: uuid.UUID, current_user: User) -> VideoUploadCredentialsDTO:
         _, _, item = await self._authorize_item(item_id, current_user)
         video = await self.repo.get_video_by_item(item.id)
@@ -595,24 +677,29 @@ class CourseContentService:
         return VideoUploadCredentialsDTO(**self.bunny.build_tus_credentials(video.bunny_video_guid))
 
     async def handle_bunny_webhook(self, video_guid: str, bunny_status: int) -> None:
+        # Several rows can share one guid - a draft working copy of a published
+        # course clones its CourseVideo rows (see governance DraftService), so
+        # every copy must pick up the processing status, not just one of them.
         stmt = select(CourseVideo).where(CourseVideo.bunny_video_guid == video_guid)
-        video = (await self.session.execute(stmt)).scalar_one_or_none()
-        if video is None:
+        videos = (await self.session.execute(stmt)).scalars().all()
+        if not videos:
             return
 
-        # Bunny Stream status codes: 3=Finished/Ready, 5/6=error states.
-        if bunny_status == 3:
-            video.status = VideoStatusEnum.READY
-            video.playback_url = self.bunny.build_playback_url(video_guid)
-            video.thumbnail_url = self.bunny.build_thumbnail_url(video_guid)
-        elif bunny_status in (5, 6):
-            video.status = VideoStatusEnum.FAILED
-        else:
-            video.status = VideoStatusEnum.PROCESSING
+        for video in videos:
+            # Bunny Stream status codes: 3=Finished/Ready, 5/6=error states.
+            if bunny_status == 3:
+                video.status = VideoStatusEnum.READY
+                video.playback_url = self.bunny.build_playback_url(video_guid)
+                video.thumbnail_url = self.bunny.build_thumbnail_url(video_guid)
+            elif bunny_status in (5, 6):
+                video.status = VideoStatusEnum.FAILED
+            else:
+                video.status = VideoStatusEnum.PROCESSING
         await self.session.commit()
 
     # -- assessment settings -----------------------------------------------------
 
+    @_draft_aware
     async def update_assessment_settings(
         self, item_id: uuid.UUID, payload: CourseAssessmentUpdateDTO, current_user: User
     ) -> CourseAssessment:
@@ -659,6 +746,7 @@ class CourseContentService:
 
     # -- quiz group sections (nested quizzes) --------------------------------
 
+    @_draft_aware
     async def create_quiz_group_section(
         self, item_id: uuid.UUID, payload: QuizGroupSectionCreateDTO, current_user: User
     ) -> CourseQuizGroupSection:
@@ -673,37 +761,45 @@ class CourseContentService:
         await self.session.commit()
         return section
 
-    async def _course_for_group_section(self, section: CourseQuizGroupSection, current_user: User) -> None:
+    async def _course_for_group_section(
+        self, section: CourseQuizGroupSection, current_user: User
+    ) -> CourseQuizGroupSection:
+        """Authorizes and returns the group section to write to (its working-copy
+        counterpart when the course is published)."""
         await self._course_for_assessment(section.assessment_id, current_user)
+        return await self.drafts.translate_group_section(section, self.revision)
 
+    @_draft_aware
     async def update_quiz_group_section(
         self, section_id: uuid.UUID, payload: QuizGroupSectionUpdateDTO, current_user: User
     ) -> CourseQuizGroupSection:
         section = await self.repo.get_quiz_group_section(section_id)
         if section is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
-        await self._course_for_group_section(section, current_user)
+        section = await self._course_for_group_section(section, current_user)
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(section, field, value)
         await self.session.flush()
         await self.session.commit()
         return section
 
+    @_draft_aware
     async def delete_quiz_group_section(self, section_id: uuid.UUID, current_user: User) -> None:
         section = await self.repo.get_quiz_group_section(section_id)
         if section is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
-        await self._course_for_group_section(section, current_user)
+        section = await self._course_for_group_section(section, current_user)
         section.mark_deleted(current_user.id)
         await self.session.commit()
 
+    @_draft_aware
     async def create_question_in_group_section(
         self, section_id: uuid.UUID, payload: QuizQuestionCreateDTO, current_user: User
     ) -> tuple[CourseQuizQuestion, list[CourseQuizOption]]:
         section = await self.repo.get_quiz_group_section(section_id)
         if section is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Section not found")
-        await self._course_for_group_section(section, current_user)
+        section = await self._course_for_group_section(section, current_user)
 
         question, options = await self._create_quiz_question(section.assessment_id, payload, section_id=section.id)
         await self.session.commit()
@@ -711,6 +807,7 @@ class CourseContentService:
 
     # -- quiz questions/options ----------------------------------------------
 
+    @_draft_aware
     async def create_question(
         self, item_id: uuid.UUID, payload: QuizQuestionCreateDTO, current_user: User
     ) -> tuple[CourseQuizQuestion, list[CourseQuizOption]]:
@@ -749,6 +846,7 @@ class CourseContentService:
 
         return question, options
 
+    @_draft_aware
     async def autocomplete_quiz_from_document(
         self,
         item_id: uuid.UUID,
@@ -795,6 +893,7 @@ class CourseContentService:
             created_questions=created_question_dtos,
         )
 
+    @_draft_aware
     async def generate_quiz_from_prompt(
         self,
         item_id: uuid.UUID,
@@ -829,6 +928,7 @@ class CourseContentService:
             created_questions=created_question_dtos,
         )
 
+    @_draft_aware
     async def autocomplete_quiz_from_document_for_group_section(
         self,
         section_id: uuid.UUID,
@@ -852,6 +952,8 @@ class CourseContentService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz group not found for this section")
             
         course, course_section, item = await self._authorize_item(assessment.course_item_id, current_user)
+        group_section = await self.drafts.translate_group_section(group_section, self.revision)
+        assessment = await self.repo.get_assessment(group_section.assessment_id)
 
         extracted_text = extract_assessment_text(file_name, content_type, file_bytes)
         generated = await generate_quiz_questions_from_text(
@@ -880,6 +982,7 @@ class CourseContentService:
             created_questions=created_question_dtos,
         )
 
+    @_draft_aware
     async def generate_quiz_from_prompt_for_group_section(
         self,
         section_id: uuid.UUID,
@@ -895,6 +998,8 @@ class CourseContentService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz group not found for this section")
             
         course, course_section, item = await self._authorize_item(assessment.course_item_id, current_user)
+        group_section = await self.drafts.translate_group_section(group_section, self.revision)
+        assessment = await self.repo.get_assessment(group_section.assessment_id)
 
         generated = await generate_quiz_questions_from_prompt(
             instructor_prompt=payload.prompt,
@@ -953,7 +1058,8 @@ class CourseContentService:
                     ],
                 )
             )
-        course.content_updated_at = datetime.now(timezone.utc)
+        if not self._writing_draft:
+            course.content_updated_at = datetime.now(timezone.utc)
         await self.session.commit()
         return created_question_dtos
 
@@ -983,8 +1089,10 @@ class CourseContentService:
         course = await self.course_repo.get_by_id(section.course_id) if section else None
         if course is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
-        self._ensure_can_manage(course, current_user)
+        await self._ensure_can_manage(course, current_user)
+        self.revision = await self.drafts.prepare_write(course, current_user)
 
+    @_draft_aware
     async def update_question(
         self, question_id: uuid.UUID, payload: QuizQuestionUpdateDTO, current_user: User
     ) -> CourseQuizQuestion:
@@ -992,6 +1100,7 @@ class CourseContentService:
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
         await self._course_for_assessment(question.assessment_id, current_user)
+        question = await self.drafts.translate_question(question, self.revision)
         fields = payload.model_dump(exclude_unset=True)
         allow_multiple_answers = fields.get("allow_multiple_answers", question.allow_multiple_answers)
         if "allow_multiple_answers" in fields or "multi_answer_mode" in fields:
@@ -1004,14 +1113,17 @@ class CourseContentService:
         await self.session.commit()
         return question
 
+    @_draft_aware
     async def delete_question(self, question_id: uuid.UUID, current_user: User) -> None:
         question = await self.repo.get_question(question_id)
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
         await self._course_for_assessment(question.assessment_id, current_user)
+        question = await self.drafts.translate_question(question, self.revision)
         question.mark_deleted(current_user.id)
         await self.session.commit()
 
+    @_draft_aware
     async def create_option(
         self, question_id: uuid.UUID, payload: QuizOptionCreateDTO, current_user: User
     ) -> CourseQuizOption:
@@ -1019,55 +1131,111 @@ class CourseContentService:
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
         await self._course_for_assessment(question.assessment_id, current_user)
+        question = await self.drafts.translate_question(question, self.revision)
         option = CourseQuizOption(question_id=question.id, **payload.model_dump())
         self.session.add(option)
         await self.session.flush()
         await self.session.commit()
         return option
 
-    async def _course_for_option(self, option: CourseQuizOption, current_user: User) -> None:
+    async def _course_for_option(self, option: CourseQuizOption, current_user: User) -> CourseQuizOption:
         question = await self.repo.get_question(option.question_id)
         if question is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
         await self._course_for_assessment(question.assessment_id, current_user)
+        return await self.drafts.translate_option(option, self.revision)
 
+    @_draft_aware
     async def update_option(
         self, option_id: uuid.UUID, payload: QuizOptionUpdateDTO, current_user: User
     ) -> CourseQuizOption:
         option = await self.repo.get_option(option_id)
         if option is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Option not found")
-        await self._course_for_option(option, current_user)
+        option = await self._course_for_option(option, current_user)
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(option, field, value)
         await self.session.flush()
         await self.session.commit()
         return option
 
+    @_draft_aware
     async def delete_option(self, option_id: uuid.UUID, current_user: User) -> None:
         option = await self.repo.get_option(option_id)
         if option is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Option not found")
-        await self._course_for_option(option, current_user)
+        option = await self._course_for_option(option, current_user)
         option.mark_deleted(current_user.id)
         await self.session.commit()
 
     # -- essay grading (instructor/admin) ----------------------------------------
 
-    async def list_essay_submissions(
-        self, item_id: uuid.UUID, pagination: PaginationParams, current_user: User
-    ) -> tuple[list[EssaySubmissionListItemDTO], int]:
-        _, _, item = await self._authorize_item(item_id, current_user)
+    async def authorize_marking_item(
+        self, item_id: uuid.UUID, user: User
+    ) -> tuple[Course, CourseSection, CourseItem]:
+        """Resolves an essay item for marking work. Accepts a working-copy item id
+        too (as shown in the manage tree) but always returns the *live* item -
+        learners submit to live items. Requires a marking-hierarchy permission
+        (MARK_ASSESSMENT, MODERATE_ASSESSMENT or APPROVE_RESULTS) for the course,
+        rather than content-editing rights."""
+        from app.modules.governance.permission_service import PermissionService
+        from app.modules.marking.service import MARKING_PERMISSIONS
+
+        with include_drafts(self.session):
+            item = await self.repo.get_item(item_id)
+            if item is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+            item = await self.drafts.to_live_item(item)
+        if item is None or item.deleted_at is not None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "This item has not been published yet")
+        section = await self.repo.get_section(item.section_id)
+        course = await self.course_repo.get_by_id(section.course_id) if section else None
+        if course is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        perms = await PermissionService(self.session).permissions(user, course)
+        if not perms & MARKING_PERMISSIONS:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You don't mark, moderate or approve results on this course")
         assessment = await self.repo.get_assessment_by_item(item.id)
         if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Essay not found for this item")
+        return course, section, item
+
+    async def list_essay_submissions(
+        self, item_id: uuid.UUID, pagination: PaginationParams, current_user: User
+    ) -> tuple[list[EssaySubmissionListItemDTO], int]:
+        from app.modules.marking.entity import IN_PROGRESS_STATUSES, EssayMark
+
+        _, _, item = await self.authorize_marking_item(item_id, current_user)
 
         records, total = await self.learning_repo.list_essay_submissions_for_item(item.id, pagination)
+        active_marks: dict[uuid.UUID, EssayMark] = {}
+        submission_ids = [submission.id for submission, _ in records]
+        if submission_ids:
+            rows = (
+                await self.session.execute(
+                    select(EssayMark)
+                    .where(
+                        EssayMark.submission_id.in_(submission_ids),
+                        EssayMark.status.in_(IN_PROGRESS_STATUSES),
+                        EssayMark.deleted_at.is_(None),
+                    )
+                    .order_by(EssayMark.created_at)
+                )
+            ).scalars().all()
+            active_marks = {m.submission_id: m for m in rows}
+
         result = []
         for submission, user in records:
             document_download_url = None
             if submission.document_storage_key:
                 document_download_url = self.r2.generate_download_url(submission.document_storage_key)
+            mark = active_marks.get(submission.id)
+            working_score = None
+            if mark is not None:
+                working = mark.final_score if mark.final_score is not None else (
+                    mark.moderated_score if mark.moderated_score is not None else mark.score
+                )
+                working_score = float(working)
             result.append(
                 EssaySubmissionListItemDTO(
                     user_id=user.id,
@@ -1080,54 +1248,50 @@ class CourseContentService:
                     score=float(submission.score) if submission.score is not None else None,
                     is_published=submission.is_published,
                     feedback=submission.feedback,
+                    result_status=submission.result_status,
+                    current_mark_id=mark.id if mark else None,
+                    working_score=working_score,
                 )
             )
         return result, total
 
     async def grade_essay_submission(
         self, item_id: uuid.UUID, user_id: uuid.UUID, payload: EssayGradeDTO, current_user: User
-    ) -> EssaySubmission:
-        course, section, item = await self._authorize_item(item_id, current_user)
+    ):
+        """Records the marker's grade. Essays requiring moderation get a draft mark
+        that goes Marker -> Moderator -> Approver before the learner sees it;
+        others are graded (and optionally published) in one step as before. Either
+        way the grade is kept in the essay_marks history (app/modules/marking)."""
+        from app.modules.marking.service import MarkingService
+
+        course, section, item = await self.authorize_marking_item(item_id, current_user)
         assessment = await self.repo.get_assessment_by_item(item.id)
-        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Essay not found for this item")
-
-        submission = await self.learning_repo.get_essay_submission(user_id, item.id)
-        if submission is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "This student has not submitted this essay")
-
-        submission = await self.learning_repo.grade_essay_submission(
-            submission,
+        return await MarkingService(self.session).grade(
+            course, section, item, assessment, user_id,
             score=payload.score,
             feedback=payload.feedback,
             is_published=payload.is_published,
-            graded_by=current_user.id,
+            recommendation=payload.recommendation,
+            submit_for_moderation=payload.submit_for_moderation,
+            actor=current_user,
         )
-
-        if assessment.is_final_assessment:
-            # Grading a final-assessment essay can trigger the same module/course
-            # reset-on-fail mechanic as a quiz or quiz-group submission - just from
-            # the instructor's grading action instead of a student action, since
-            # essays are graded asynchronously rather than auto-scored.
-            essay_settings = await self.repo.get_essay_settings(assessment.id)
-            pass_mark = essay_settings.pass_mark_percentage if essay_settings else 70
-            max_attempts = essay_settings.max_attempts if essay_settings else None
-            passed = payload.score >= pass_mark
-            attempts_remaining = None if max_attempts is None else max(max_attempts - submission.graded_attempts, 0)
-
-            from app.modules.learning.service import LearningService
-
-            await LearningService(self.session)._handle_final_assessment_outcome(
-                user_id, course.id, section.id, item.id, passed, attempts_remaining
-            )
-
-        await self.session.commit()
-        return submission
 
     # -- tree assembly for course detail endpoints ------------------------------
 
-    async def build_tree(self, course_id: uuid.UUID, manage: bool, enrolled: bool = False) -> list:
-        sections = await self.repo.list_sections(course_id)
+    async def build_tree(
+        self, course_id: uuid.UUID, manage: bool, enrolled: bool = False, revision_id: uuid.UUID | None = None
+    ) -> list:
+        """`revision_id` renders that revision's draft working copy (manage views
+        and reviewer previews only); the default is the live content."""
+        if revision_id is not None:
+            with include_drafts(self.session):
+                return await self._build_tree(course_id, manage, enrolled, revision_id)
+        return await self._build_tree(course_id, manage, enrolled, None)
+
+    async def _build_tree(
+        self, course_id: uuid.UUID, manage: bool, enrolled: bool, revision_id: uuid.UUID | None
+    ) -> list:
+        sections = await self.repo.list_sections(course_id, revision_id)
         section_ids = [s.id for s in sections]
         items = await self.repo.list_items_for_sections(section_ids)
         item_ids = [i.id for i in items]
@@ -1136,8 +1300,12 @@ class CourseContentService:
         documents = {d.course_item_id: d for d in await self.repo.list_documents_for_items(item_ids)}
         links = {l.course_item_id: l for l in await self.repo.list_links_for_items(item_ids)}
         assessments = {a.course_item_id: a for a in await self.repo.list_assessments_for_items(item_ids)}
+        live_session_rows = await self.repo.list_live_sessions_for_items(
+            item_ids + [i.draft_of_id for i in items if i.draft_of_id is not None]
+        )
+        by_item = {ls.course_item_id: ls for ls in live_session_rows}
         live_sessions = {
-            ls.course_item_id: ls for ls in await self.repo.list_live_sessions_for_items(item_ids)
+            i.id: by_item.get(i.id) or by_item.get(i.draft_of_id) for i in items if (i.id in by_item or i.draft_of_id in by_item)
         }
 
         guest_instructors_by_section: dict[uuid.UUID, list[CourseInstructorReadDTO]] = {}
@@ -1349,6 +1517,7 @@ class CourseContentService:
                         submission_mode=essay_settings.submission_mode,
                         pass_mark_percentage=essay_settings.pass_mark_percentage,
                         max_attempts=essay_settings.max_attempts,
+                        requires_moderation=essay_settings.requires_moderation,
                     )
             elif assessment.assessment_type == AssessmentTypeEnum.QUIZ_GROUP:
                 section_dtos = []

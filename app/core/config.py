@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     assessment_ai_max_file_size_bytes: int = 10 * 1024 * 1024
     assessment_ai_max_input_chars: int = 40000
 
+    # Learning content governance (see app/modules/governance). Off by default:
+    # publishing then behaves exactly as before (owner/admin toggles is_published,
+    # admins act as superusers) while versions and audit rows still accrue. Turn
+    # on per environment once reviewer roles have been granted.
+    content_governance_enabled: bool = False
+    # Days a reviewer has to act on a stage before it shows as overdue.
+    review_sla_days: int = 5
 
     @property
     def database_url(self) -> str:

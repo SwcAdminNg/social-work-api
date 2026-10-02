@@ -270,7 +270,9 @@ class LearningService:
 
     async def enroll_course(self, user_id: uuid.UUID, course_id: uuid.UUID) -> dict:
         course = await self.course_repo.get_by_id(course_id)
-        if not course:
+        # An unpublished (draft/archived) course can't be enrolled in by id -
+        # matching the cart/checkout paths, which already require is_published.
+        if not course or not course.is_published:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
 
         access = await self.repo.get_user_course_access(user_id, course_id)
@@ -1066,6 +1068,7 @@ class LearningService:
         submission = await self.repo.upsert_essay_submission(
             user_id, item_id, content_text=content_text, reset_grade=reset_grade
         )
+        submission.result_status = None
         # A regular essay counts as "done" the moment it's submitted, same as
         # before. A *final* essay assessment doesn't know pass/fail yet at
         # submission time (an instructor grades it later) - it only gets marked
@@ -1094,6 +1097,7 @@ class LearningService:
             user_id, item_id, document_storage_key=storage_key, document_file_name=file_name,
             reset_grade=reset_grade,
         )
+        submission.result_status = None
         if not assessment.is_final_assessment:
             await self.repo.mark_item_completed(user_id, item_id)
             await self._recalculate_progress(user_id, course_id)
@@ -1132,6 +1136,15 @@ class LearningService:
 
         existing = await self.repo.get_essay_submission(user_id, item_id)
         reset_grade = False
+        from app.modules.marking.entity import IN_PROGRESS_STATUSES
+
+        if existing is not None and existing.result_status in IN_PROGRESS_STATUSES and existing.score is None:
+            # A marker/moderator is working on this attempt - changing it now would
+            # pull the essay out from under them.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This essay is being marked and can't be changed until the result is released",
+            )
         if existing is not None and existing.score is not None:
             # A regular essay locks resubmission on any grade. A *final* essay
             # assessment instead re-opens for another attempt after a *failed*

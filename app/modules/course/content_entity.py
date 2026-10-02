@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.base_entity import BaseEntity
+from app.modules.governance.enums import AssessmentDesignStatusEnum
 
 
 class VideoProviderEnum(str, enum.Enum):
@@ -183,6 +184,14 @@ class CourseAssessment(BaseEntity):
     # as the course-wide final exam: passing it completes the course, exhausting its
     # retries without passing resets the *entire* course instead of just one section.
     is_final_assessment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Framework assessment status. Moves with the revision that changes this
+    # assessment (Academic Review -> Moderation -> QA Review -> Approved -> Live).
+    design_status: Mapped[AssessmentDesignStatusEnum] = mapped_column(
+        Enum(AssessmentDesignStatusEnum, name="assessment_design_status_enum", native_enum=True),
+        nullable=False,
+        default=AssessmentDesignStatusEnum.DRAFT,
+        server_default=AssessmentDesignStatusEnum.DRAFT.value,
+    )
 
 
 class CourseQuizSettings(BaseEntity):
@@ -213,6 +222,12 @@ class CourseEssaySettings(BaseEntity):
     # semantics work the same way across all three assessment types.
     pass_mark_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=70)
     max_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When on (and content governance is enabled), a marker's grade is only a
+    # draft: it goes through moderation and approval before the learner sees it
+    # (framework 5.2). Defaults on for final assessments.
+    requires_moderation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
 
 class CourseQuizGroupSettings(BaseEntity):
@@ -246,6 +261,10 @@ class CourseQuizGroupSection(BaseEntity):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     questions_to_ask: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Draft layer: the live row this working-copy row shadows (see DraftService).
+    draft_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_quiz_group_sections.id"), nullable=True
+    )
 
 
 class CourseQuizQuestion(BaseEntity):
@@ -266,6 +285,10 @@ class CourseQuizQuestion(BaseEntity):
     multi_answer_mode: Mapped[MultiAnswerModeEnum | None] = mapped_column(
         Enum(MultiAnswerModeEnum, name="multi_answer_mode_enum", native_enum=True), nullable=True
     )
+    # Draft layer - attempts store question ids, so a merge must keep them stable.
+    draft_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_quiz_questions.id"), nullable=True
+    )
 
 
 class CourseQuizOption(BaseEntity):
@@ -277,3 +300,6 @@ class CourseQuizOption(BaseEntity):
     text: Mapped[str] = mapped_column(String(500), nullable=False)
     is_correct: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    draft_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_quiz_options.id"), nullable=True
+    )

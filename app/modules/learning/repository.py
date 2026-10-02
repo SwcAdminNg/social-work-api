@@ -349,7 +349,14 @@ class LearningRepository:
         stmt = (
             select(func.count(CourseItem.id))
             .join(CourseSection, CourseItem.section_id == CourseSection.id)
-            .where(CourseSection.course_id == course_id, CourseItem.deleted_at.is_(None), CourseSection.deleted_at.is_(None))
+            .where(
+                CourseSection.course_id == course_id,
+                CourseItem.deleted_at.is_(None),
+                CourseSection.deleted_at.is_(None),
+                # Live rows only - explicit so it also holds inside include_drafts.
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
+            )
         )
         result = await self.session.execute(stmt)
         return result.scalar() or 0
@@ -364,7 +371,9 @@ class LearningRepository:
                 CourseSection.course_id == course_id,
                 UserItemProgress.is_completed.is_(True),
                 CourseItem.deleted_at.is_(None),
-                CourseSection.deleted_at.is_(None)
+                CourseSection.deleted_at.is_(None),
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
             )
         )
         result = await self.session.execute(stmt)
@@ -511,6 +520,8 @@ class LearningRepository:
                 CourseItem.item_type == CourseItemTypeEnum.ASSESSMENT,
                 CourseItem.deleted_at.is_(None),
                 CourseSection.deleted_at.is_(None),
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
                 Course.deleted_at.is_(None)
             )
         )
@@ -548,6 +559,8 @@ class LearningRepository:
                 CourseItem.item_type == CourseItemTypeEnum.LIVE_SESSION,
                 CourseItem.deleted_at.is_(None),
                 CourseSection.deleted_at.is_(None),
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
                 Course.deleted_at.is_(None),
             )
         )

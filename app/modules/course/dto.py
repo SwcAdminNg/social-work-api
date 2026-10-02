@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.course.entity import CourseAccessModeEnum, CourseCategoryEnum, CourseLevelEnum
 from pydantic import BaseModel
+from app.modules.governance.enums import CourseLifecycleEnum
 
 
 class CourseProgressStatusEnum(str, enum.Enum):
@@ -136,6 +137,10 @@ class CourseReadDTO(AuditDTO):
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
     certificate_enabled: bool
+    # Content governance lifecycle (DRAFT/PUBLISHED/ARCHIVED) and the published
+    # version learners currently see - see app/modules/governance.
+    governance_status: CourseLifecycleEnum | None = None
+    current_version_label: str | None = None
     instructors: list[CourseInstructorReadDTO] = Field(default_factory=list)
     estimated_total_minutes: int | None = Field(
         default=None,

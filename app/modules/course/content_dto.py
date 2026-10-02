@@ -14,6 +14,7 @@ from app.modules.course.content_entity import (
 )
 from app.modules.course.dto import CourseInstructorReadDTO, CourseReadDTO, PublicCourseReadDTO
 from app.modules.course.entity import CourseItemTypeEnum
+from app.modules.marking.entity import LearnerResultStatusEnum, MarkRecommendationEnum
 
 # ---------------------------------------------------------------------------
 # Sections
@@ -71,6 +72,11 @@ class CourseEssaySettingsInDTO(CreateDTO):
     # pass/fail concept and unlimited resubmission regardless of these.
     pass_mark_percentage: int = Field(default=70, ge=0, le=100)
     max_attempts: int | None = Field(default=None, ge=1)
+    requires_moderation: bool | None = Field(
+        default=None,
+        description="Route marks through moderation and approval before learners see them. "
+        "Defaults to on for final assessments. Applies while content governance is enabled.",
+    )
 
 
 class CourseEssaySettingsPatchDTO(UpdateDTO):
@@ -79,6 +85,7 @@ class CourseEssaySettingsPatchDTO(UpdateDTO):
     submission_mode: EssaySubmissionModeEnum | None = None
     pass_mark_percentage: int | None = Field(default=None, ge=0, le=100)
     max_attempts: int | None = Field(default=None, ge=1)
+    requires_moderation: bool | None = None
 
 
 class CourseQuizGroupSettingsInDTO(CreateDTO):
@@ -419,6 +426,7 @@ class CourseEssayDetailDTO(BaseDTO):
     submission_mode: EssaySubmissionModeEnum
     pass_mark_percentage: int
     max_attempts: int | None
+    requires_moderation: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +563,14 @@ class CourseDetailDTO(CourseReadDTO):
 
 
 from app.modules.course.dto import CourseReadDTO, PublicCourseReadDTO
+from app.modules.governance.dto import CourseGovernanceDTO
+
+
 class CourseManageDetailDTO(CourseReadDTO):
     sections: list[CourseSectionManageReadDTO] = Field(default_factory=list)
+    # Which content `sections` shows (live, or the open working copy) and the
+    # course's governance state. Absent when governance data isn't requested.
+    governance: CourseGovernanceDTO | None = None
 
 class PublicCourseDetailDTO(PublicCourseReadDTO):
     sections: list[CourseSectionReadDTO] = Field(default_factory=list)
@@ -578,9 +592,22 @@ class EssaySubmissionListItemDTO(BaseDTO):
     score: float | None
     is_published: bool
     feedback: str | None
+    # Marking workflow state of the current attempt (see app/modules/marking).
+    result_status: LearnerResultStatusEnum | None = None
+    current_mark_id: uuid.UUID | None = None
+    # The in-progress mark's working score (marker's, or the moderator's amendment).
+    working_score: float | None = None
 
 
 class EssayGradeDTO(CreateDTO):
     score: float = Field(ge=0, le=100)
     feedback: str | None = None
-    is_published: bool = False
+    is_published: bool = Field(
+        default=False,
+        description="Only honoured when the essay doesn't require moderation; otherwise results are "
+        "published after moderation and approval.",
+    )
+    recommendation: MarkRecommendationEnum | None = Field(default=None, description="Marker's pass/fail recommendation")
+    submit_for_moderation: bool = Field(
+        default=False, description="Moderated essays: send this draft mark straight to the moderator"
+    )

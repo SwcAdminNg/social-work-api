@@ -38,6 +38,8 @@ class CourseRepository(BaseRepository[Course]):
                 CourseSection.course_id.in_(course_ids),
                 CourseItem.deleted_at.is_(None),
                 CourseSection.deleted_at.is_(None),
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
             )
             .group_by(CourseSection.course_id)
         )
@@ -111,11 +113,15 @@ class CourseRepository(BaseRepository[Course]):
         pagination: PaginationParams,
         filters: CourseManageFilterParams | None = None,
         instructor_id: uuid.UUID | None = None,
-        catalog_categories: list[str] | None = None
+        catalog_categories: list[str] | None = None,
+        extra_course_ids: Sequence[uuid.UUID] | None = None,
     ) -> tuple[Sequence[Course], int]:
         stmt = self._base_select()
         if instructor_id is not None:
-            stmt = stmt.where(Course.instructor_id == instructor_id)
+            if extra_course_ids:
+                stmt = stmt.where(or_(Course.instructor_id == instructor_id, Course.id.in_(extra_course_ids)))
+            else:
+                stmt = stmt.where(Course.instructor_id == instructor_id)
         stmt = self._apply_filters(stmt, filters, catalog_categories)
         if filters is not None and filters.is_published is not None:
             stmt = stmt.where(Course.is_published == filters.is_published)

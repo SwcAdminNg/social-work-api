@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +62,49 @@ class NotificationService:
             logger.warning("Failed to publish notification %s to user %s: %s", type.value, user_id, exc)
 
         return notification
+
+    async def notify_many(
+        self,
+        user_ids: Sequence[uuid.UUID],
+        type: NotificationTypeEnum,
+        title: str,
+        body: str | None = None,
+        link: str | None = None,
+        metadata_json: dict | None = None,
+    ) -> None:
+        """Fan one notification out to many users with a single commit, then
+        publish each realtime event. Unlike `_create` (one commit per row) this is
+        safe to call for a whole reviewer pool. Callers must invoke it *after*
+        their own transaction has committed - it commits the session."""
+        recipients = list(dict.fromkeys(user_ids))  # dedupe, keep order
+        if not recipients:
+            return
+        # Every column the read DTO needs is set client-side, so the realtime
+        # payload can be built without a per-row refresh after the commit.
+        now = datetime.now(timezone.utc)
+        notifications = [
+            Notification(
+                id=uuid.uuid4(), user_id=uid, type=type, title=title, body=body, link=link,
+                metadata_json=metadata_json, is_read=False, read_at=None, created_at=now,
+            )
+            for uid in recipients
+        ]
+        self.session.add_all(notifications)
+        await self.session.commit()
+
+        for notification in notifications:
+            try:
+                dto = NotificationReadDTO(
+                    id=notification.id, created_at=now, type=type, title=title, body=body, link=link,
+                    metadata_json=metadata_json, is_read=False,
+                )
+                await publish_event(
+                    _CHANNEL_NAMESPACE, notification.user_id, {"type": "notification", "data": dto.model_dump(mode="json")}
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to publish notification %s to user %s: %s", type.value, notification.user_id, exc
+                )
 
     async def _notify_admins(
         self,

@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.base_entity import BaseEntity
+from app.modules.governance.enums import CourseLifecycleEnum
 
 
 class CourseLevelEnum(str, enum.Enum):
@@ -95,6 +96,17 @@ class Course(BaseEntity):
     certificate_template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("certificate_templates.id", ondelete="SET NULL"), nullable=True
     )
+    # Governance lifecycle of the live course (see app/modules/governance).
+    # `is_published` is kept in sync (True only when PUBLISHED) so every existing
+    # learner-facing filter keeps working unchanged.
+    governance_status: Mapped[CourseLifecycleEnum] = mapped_column(
+        Enum(CourseLifecycleEnum, name="course_lifecycle_enum", native_enum=True),
+        nullable=False,
+        default=CourseLifecycleEnum.DRAFT,
+        server_default=CourseLifecycleEnum.DRAFT.value,
+    )
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    current_version_label: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class CourseCatalog(BaseEntity):
@@ -115,6 +127,15 @@ class CourseSection(BaseEntity):
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Draft layer (see governance DraftService). NULL = a live row learners see;
+    # set = part of that revision's hidden working copy of a published course.
+    revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_revisions.id"), nullable=True, index=True
+    )
+    # The live row this draft row shadows; NULL on a draft row means "newly added".
+    draft_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sections.id"), nullable=True, index=True
+    )
 
 
 class CourseItem(BaseEntity):
@@ -130,3 +151,40 @@ class CourseItem(BaseEntity):
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_preview: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Draft layer - same meaning as on CourseSection.
+    revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_revisions.id"), nullable=True, index=True
+    )
+    draft_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), nullable=True, index=True
+    )
+
+
+# -- draft layer visibility ------------------------------------------------------
+#
+# Rows of a revision's hidden working copy (revision_id set) must never reach a
+# learner. Rather than trusting every query to remember a filter, every ORM
+# SELECT in every session gets `revision_id IS NULL` on CourseSection and
+# CourseItem automatically - including joins, counts and subqueries. Governance
+# and manage code that genuinely needs draft rows opts in for a block of work
+# with `include_drafts(session)` (see app/modules/governance/draft_scope.py) or
+# per statement with `.execution_options(include_drafts=True)`.
+
+from sqlalchemy import event  # noqa: E402
+from sqlalchemy.orm import Session, with_loader_criteria  # noqa: E402
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _hide_draft_layer(state) -> None:
+    if (
+        not state.is_select
+        or state.is_column_load  # refresh() of an already-loaded object
+        or state.is_relationship_load
+        or state.execution_options.get("include_drafts", False)
+        or state.session.info.get("include_drafts", False)
+    ):
+        return
+    state.statement = state.statement.options(
+        with_loader_criteria(CourseSection, lambda cls: cls.revision_id.is_(None), include_aliases=True),
+        with_loader_criteria(CourseItem, lambda cls: cls.revision_id.is_(None), include_aliases=True),
+    )

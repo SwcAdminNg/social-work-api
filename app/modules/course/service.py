@@ -51,9 +51,16 @@ class CourseService:
         self.session = session
         self.repository = CourseRepository(session)
 
-    def ensure_can_manage(self, course: Course, user: User) -> None:
-        if user.user_type != UserTypeEnum.ADMIN and course.instructor_id != user.id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not manage this course")
+    async def ensure_can_manage(self, course: Course, user: User) -> None:
+        # EDIT_DRAFT_CONTENT for this course: the owning instructor and admins
+        # implicitly (same as before governance), plus anyone granted a role such
+        # as Content Developer or Course Lead for it (see governance permissions).
+        from app.modules.governance.permission_service import PermissionService
+        from app.modules.governance.permissions import PermissionEnum
+
+        await PermissionService(self.session).ensure(
+            user, PermissionEnum.EDIT_DRAFT_CONTENT, course, "You do not manage this course"
+        )
 
     async def ensure_course_viewable(self, course: Course, user: User | None) -> None:
         """Blocks viewing a SCHEDULED course entirely outside its access window.
@@ -78,6 +85,12 @@ class CourseService:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "This course's access window has ended")
 
     async def create(self, payload: CourseCreateDTO, instructor: User) -> Course:
+        from app.modules.governance.permission_service import PermissionService
+        from app.modules.governance.permissions import PermissionEnum
+
+        await PermissionService(self.session).ensure(
+            instructor, PermissionEnum.CREATE_CONTENT, None, "You can't create courses"
+        )
         slug = await ensure_unique_slug(self.session, Course, slugify(payload.title))
         course = Course(
             **payload.model_dump(exclude=_NON_COLUMN_FIELDS), slug=slug, instructor_id=instructor.id
@@ -282,8 +295,17 @@ class CourseService:
     async def list_manage(
         self, pagination: PaginationParams, filters: CourseManageFilterParams, current_user: User
     ) -> tuple[Sequence[Course], int]:
-        instructor_id = None if current_user.user_type == UserTypeEnum.ADMIN else current_user.id
-        return await self.repository.list_manage(pagination, filters, instructor_id)
+        from app.modules.governance.permission_service import PermissionService
+        from app.modules.governance.permissions import PermissionEnum
+
+        # A platform-wide draft editor (admins, or anyone with a global grant) sees
+        # every course; everyone else sees courses they own plus any course they
+        # hold a course-scoped editing role on.
+        permissions = PermissionService(self.session)
+        if await permissions.has(current_user, PermissionEnum.EDIT_DRAFT_CONTENT):
+            return await self.repository.list_manage(pagination, filters, None)
+        scoped_ids = await permissions.course_ids_with_permission(current_user, PermissionEnum.EDIT_DRAFT_CONTENT)
+        return await self.repository.list_manage(pagination, filters, current_user.id, extra_course_ids=scoped_ids)
 
     async def get_by_slug_published(self, slug: str) -> Course:
         cache_key = f"course:slug:{slug}"
@@ -316,14 +338,24 @@ class CourseService:
         course = await self.repository.get_by_id(id)
         if course is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
-        self.ensure_can_manage(course, current_user)
+        await self.ensure_can_manage(course, current_user)
         return course
 
     async def update(self, id: uuid.UUID, payload: CourseUpdateDTO, current_user: User) -> Course:
+        from app.modules.governance.draft_service import DraftService
+        from app.modules.governance.tree import ACADEMIC_COURSE_FIELDS
+
         course = await self.get_for_manage(id, current_user)
         update_data = payload.model_dump(exclude_unset=True, exclude=_NON_COLUMN_FIELDS)
+        # Academic fields (title, description, learning outcomes, ...) of a
+        # published course go to its working copy for review; operational ones
+        # (price, access window, ...) still apply immediately.
+        academic = {k: v for k, v in update_data.items() if k in ACADEMIC_COURSE_FIELDS}
         for field, value in update_data.items():
-            setattr(course, field, value)
+            if field not in academic:
+                setattr(course, field, value)
+        if academic:
+            await DraftService(self.session).stage_course_changes(course, academic, current_user)
         await self.repository.update(course)
 
         if "instructors" in payload.model_fields_set and payload.instructors is not None:
@@ -338,6 +370,11 @@ class CourseService:
         return course
 
     async def set_published(self, id: uuid.UUID, is_published: bool, current_user: User) -> Course:
+        from app.core.config import settings
+
+        if settings.content_governance_enabled:
+            return await self._set_published_governed(id, is_published, current_user)
+
         course = await self.get_for_manage(id, current_user)
         if is_published:
             item_count_stmt = (
@@ -353,6 +390,14 @@ class CourseService:
                     "Course must have at least one curriculum item before publishing",
                 )
         course.is_published = is_published
+        # Governance off: the old toggle, but history still accrues - each
+        # publish with changed content becomes a new course version.
+        from app.modules.governance.version_service import VersionService
+
+        versions = VersionService(self.session)
+        versions.record_legacy_lifecycle(course, current_user, is_published)
+        if is_published:
+            await versions.record_legacy_publish(course, current_user)
         await self.repository.update(course)
         await self.session.commit()
         
@@ -361,6 +406,37 @@ class CourseService:
         await delete_cache("course_catalogs:public")
         await delete_cache("home:stats")
         
+        return course
+
+    async def _set_published_governed(self, id: uuid.UUID, is_published: bool, current_user: User) -> Course:
+        """With governance on, the old publish toggle maps onto the workflow:
+        publishing publishes the open revision only once it is READY_TO_PUBLISH
+        (never bypassing review); unpublishing archives the course."""
+        from app.modules.governance.draft_service import DraftService
+        from app.modules.governance.enums import ContentStatusEnum
+        from app.modules.governance.revision_service import RevisionService
+
+        course = await self.get_by_id(id)
+        revisions = RevisionService(self.session)
+        if not is_published:
+            return await revisions.archive(course.id, None, current_user)
+
+        revision = await DraftService(self.session).get_open_revision(course.id)
+        if revision is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Nothing to publish: submit the course for review first (content governance is enabled)",
+            )
+        if revision.status != ContentStatusEnum.READY_TO_PUBLISH:
+            stage = revision.current_stage.value if revision.current_stage else None
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Revision {revision.id} is {revision.status.value}"
+                + (f", waiting on {stage}" if stage else "")
+                + " - it can be published once every required approval is in",
+            )
+        await revisions.publish(revision.id, current_user)
+        await self.session.refresh(course)
         return course
 
     async def delete(self, id: uuid.UUID, current_user: User) -> None:
