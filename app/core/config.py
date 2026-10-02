@@ -1,6 +1,7 @@
 from functools import lru_cache
 from urllib.parse import quote
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,11 +12,14 @@ class Settings(BaseSettings):
     app_env: str = "local"
     debug: bool = True
 
-    postgres_user: str
-    postgres_password: str
-    postgres_host: str
+    # Either provide DATABASE_URL (e.g. Railway's ${{Postgres.DATABASE_URL}}) or the
+    # discrete POSTGRES_* parts below. DATABASE_URL wins when both are set.
+    raw_database_url: str = Field(default="", validation_alias="DATABASE_URL")
+    postgres_user: str = ""
+    postgres_password: str = ""
+    postgres_host: str = ""
     postgres_port: int = 5432
-    postgres_db: str
+    postgres_db: str = ""
 
     # JWT / tokens
     jwt_secret_key: str
@@ -127,20 +131,30 @@ class Settings(BaseSettings):
     # Days a reviewer has to act on a stage before it shows as overdue.
     review_sla_days: int = 5
 
-    @property
-    def database_url(self) -> str:
+    @model_validator(mode="after")
+    def _require_database_config(self) -> "Settings":
+        if not self.raw_database_url and not (self.postgres_user and self.postgres_host and self.postgres_db):
+            raise ValueError("Set DATABASE_URL, or POSTGRES_USER, POSTGRES_HOST and POSTGRES_DB (plus POSTGRES_PASSWORD)")
+        return self
+
+    def _url_with_driver(self, driver: str) -> str:
+        if self.raw_database_url:
+            # Providers hand out postgres:// or postgresql://; swap in the driver we need.
+            rest = self.raw_database_url.split("://", 1)[1]
+            return f"postgresql+{driver}://{rest}"
         return (
-            f"postgresql+asyncpg://{quote(self.postgres_user, safe='')}:{quote(self.postgres_password, safe='')}"
+            f"postgresql+{driver}://{quote(self.postgres_user, safe='')}:{quote(self.postgres_password, safe='')}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
     @property
+    def database_url(self) -> str:
+        return self._url_with_driver("asyncpg")
+
+    @property
     def sync_database_url(self) -> str:
         """Used by Alembic, which runs migrations synchronously."""
-        return (
-            f"postgresql+psycopg2://{quote(self.postgres_user, safe='')}:{quote(self.postgres_password, safe='')}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+        return self._url_with_driver("psycopg2")
 
 
 @lru_cache

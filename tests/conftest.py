@@ -14,3 +14,6 @@ if TEST_DB:
     if not TEST_DB.endswith("_test"):
         raise RuntimeError("TEST_POSTGRES_DB must end with '_test' - it is dropped and recreated on every run")
     os.environ["POSTGRES_DB"] = TEST_DB
+    # An empty DATABASE_URL disables the URL path so the POSTGRES_* parts (and the
+    # disposable DB above) are used - never drop a database a DATABASE_URL points at.
+    os.environ["DATABASE_URL"] = ""
