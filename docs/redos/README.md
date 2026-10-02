@@ -7,6 +7,8 @@ The content approval and governance feature (Create → Review → Quality Check
 | [`ADMIN_ENDPOINT_CHANGES.md`](./ADMIN_ENDPOINT_CHANGES.md) | The admin dashboard (platform admins, plus the new reviewer roles such as Academic Reviewer, QA, Course Lead and Head of Learning) |
 | [`INSTRUCTOR_ENDPOINT_CHANGES.md`](./INSTRUCTOR_ENDPOINT_CHANGES.md) | The instructor app (course authoring and essay marking) |
 | [`STUDENT_ENDPOINT_CHANGES.md`](./STUDENT_ENDPOINT_CHANGES.md) | The student app |
+| [`USER_ACCESS_ON_LOGIN_AND_PROFILE.md`](./USER_ACCESS_ON_LOGIN_AND_PROFILE.md) | Any app: roles, permissions and capability flags now come back on login and `GET /users/me` |
+| [`INSTRUCTOR_CONTENT_GOVERNANCE_GUIDE.md`](./INSTRUCTOR_CONTENT_GOVERNANCE_GUIDE.md) | The instructor app: the complete guide (user stories, flows, full API and errors) to build from |
 
 The full reference for the new endpoints is in `docs/phase_3/`:
 - [`CONTENT_GOVERNANCE_ADMIN_API.md`](../phase_3/CONTENT_GOVERNANCE_ADMIN_API.md)

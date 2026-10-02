@@ -49,6 +49,7 @@ from app.modules.notification.service import NotificationService
 from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import TwoFactorMethodEnum, User
 from app.modules.user.repository import UserRepository
+from app.modules.governance.access_service import build_user_access
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,10 @@ class AuthService:
         except Exception as e:
             logger.error(f"Failed to create login notification for {user.email}: {e}")
 
-        return AuthSessionDTO(user=UserReadDTO.model_validate(user), tokens=tokens)
+        return AuthSessionDTO(
+            user=UserReadDTO.model_validate(user), tokens=tokens,
+            access=await build_user_access(self.session, user),
+        )
 
     async def resend_login_2fa_code(self, challenge_token: str) -> None:
         decoded = self._decode_challenge_token(challenge_token, TWO_FACTOR_PENDING_TOKEN_TYPE)
@@ -193,7 +197,10 @@ class AuthService:
         user = await self._load_active_user(decoded)
         await self._confirm_totp_setup(user, code)
         tokens = await self._issue_token_pair(user)
-        return AuthSessionDTO(user=UserReadDTO.model_validate(user), tokens=tokens)
+        return AuthSessionDTO(
+            user=UserReadDTO.model_validate(user), tokens=tokens,
+            access=await build_user_access(self.session, user),
+        )
 
     async def start_email_setup_forced(self, challenge_token: str) -> None:
         decoded = self._decode_challenge_token(challenge_token, TWO_FACTOR_SETUP_TOKEN_TYPE)
@@ -205,7 +212,10 @@ class AuthService:
         user = await self._load_active_user(decoded)
         await self._confirm_email_setup(user, code)
         tokens = await self._issue_token_pair(user)
-        return AuthSessionDTO(user=UserReadDTO.model_validate(user), tokens=tokens)
+        return AuthSessionDTO(
+            user=UserReadDTO.model_validate(user), tokens=tokens,
+            access=await build_user_access(self.session, user),
+        )
 
     # -- Voluntary switch (already authenticated) -------------------------------------
 

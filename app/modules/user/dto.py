@@ -6,6 +6,7 @@ from pydantic import Field
 
 from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO, UpdateDTO
 from app.modules.user.entity import GenderEnum, PlatformEnum, TwoFactorMethodEnum, UserTypeEnum
+from app.modules.governance.dto import UserAccessDTO
 
 
 class UserReadDTO(AuditDTO):
@@ -36,6 +37,12 @@ class UserReadDTO(AuditDTO):
             "/auth/2fa/totp/* endpoints."
         ),
     )
+
+
+class MyProfileDTO(UserReadDTO):
+    """The signed-in user's own profile, plus what they may see and do."""
+
+    access: UserAccessDTO | None = None
 
 
 class UserUpdateDTO(UpdateDTO):

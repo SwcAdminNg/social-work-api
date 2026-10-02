@@ -19,6 +19,7 @@ from app.modules.user.dto import (
     ProfilePictureUploadRequest,
     ProfilePictureUploadResponse,
     UserFilterParams,
+    MyProfileDTO,
     UserReadDTO,
     UserRoleUpdateDTO,
     UserUpdateDTO,
@@ -44,19 +45,32 @@ async def list_users(
     )
 
 
-@router.get("/me", response_model=ApiResponse[UserReadDTO], summary="Get the current authenticated user's profile")
-async def get_my_profile(current_user: User = Depends(get_current_user)) -> ApiResponse[UserReadDTO]:
-    return ApiResponse(message="Profile retrieved successfully", data=UserReadDTO.model_validate(current_user))
+async def _my_profile(db: AsyncSession, user: User) -> MyProfileDTO:
+    from app.modules.governance.access_service import build_user_access
+
+    return MyProfileDTO(**UserReadDTO.model_validate(user).model_dump(), access=await build_user_access(db, user))
 
 
-@router.patch("/me", response_model=ApiResponse[UserReadDTO], summary="Update the current authenticated user's profile")
+@router.get(
+    "/me",
+    response_model=ApiResponse[MyProfileDTO],
+    summary="Get the current authenticated user's profile, including their governance roles, "
+    "permissions and capability flags (`access`)",
+)
+async def get_my_profile(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> ApiResponse[MyProfileDTO]:
+    return ApiResponse(message="Profile retrieved successfully", data=await _my_profile(db, current_user))
+
+
+@router.patch("/me", response_model=ApiResponse[MyProfileDTO], summary="Update the current authenticated user's profile")
 async def update_my_profile(
     payload: UserUpdateDTO,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[UserReadDTO]:
+) -> ApiResponse[MyProfileDTO]:
     updated_user = await UserService(db).update_profile(current_user, payload)
-    return ApiResponse(message="Profile updated successfully", data=UserReadDTO.model_validate(updated_user))
+    return ApiResponse(message="Profile updated successfully", data=await _my_profile(db, updated_user))
 
 
 @router.post(

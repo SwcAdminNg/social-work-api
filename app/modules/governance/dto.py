@@ -52,6 +52,50 @@ class EffectiveRoleDTO(BaseDTO):
     assignment_id: uuid.UUID | None = None
 
 
+class CourseAccessDTO(BaseDTO):
+    """Roles granted on one specific course (e.g. Course Lead of course X)."""
+
+    course_id: uuid.UUID
+    course_title: str | None = None
+    roles: list[StaffRoleEnum]
+    permissions: list[PermissionEnum]
+
+
+class UserCapabilitiesDTO(BaseDTO):
+    """Navigation-level yes/no flags: true when the user can do this on at least
+    one course. Use them to show or hide menus and screens; per-item buttons
+    still come from each resource's `available_actions`."""
+
+    can_create_courses: bool = False
+    can_edit_content: bool = False
+    can_submit_for_review: bool = False
+    can_review_content: bool = False
+    can_publish: bool = False
+    can_archive: bool = False
+    can_mark_essays: bool = False
+    can_moderate_marks: bool = False
+    can_approve_results: bool = False
+    can_force_approve: bool = False
+    can_manage_staff_roles: bool = False
+    can_view_audit_log: bool = False
+    can_access_approval_centre: bool = False
+
+
+class UserAccessDTO(BaseDTO):
+    """The user's governance roles and permissions, returned on login and on
+    GET/PATCH /users/me."""
+
+    governance_enabled: bool = Field(description="Whether the content approval workflow is switched on")
+    roles: list[StaffRoleEnum] = Field(description="Platform-wide roles (explicit grants and implicit ones)")
+    permissions: list[PermissionEnum] = Field(description="Platform-wide permission codes")
+    owned_course_count: int = Field(description="Courses this user owns (instructors)")
+    owned_course_permissions: list[PermissionEnum] = Field(
+        description="Permissions the user has on every course they own"
+    )
+    course_access: list[CourseAccessDTO] = Field(description="Roles granted on specific courses")
+    capabilities: UserCapabilitiesDTO
+
+
 class MyPermissionsDTO(BaseDTO):
     course_id: uuid.UUID | None = None
     governance_enabled: bool

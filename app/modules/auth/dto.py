@@ -5,6 +5,7 @@ from pydantic import EmailStr, Field, model_validator
 from app.common.base_dto import BaseDTO, CreateDTO
 from app.modules.user.dto import UserReadDTO
 from app.modules.user.entity import PlatformEnum, TwoFactorMethodEnum, UserTypeEnum
+from app.modules.governance.dto import UserAccessDTO
 
 OTP_CODE_PATTERN = r"^\d{6}$"
 
@@ -81,6 +82,9 @@ class TokenPairDTO(BaseDTO):
 class AuthSessionDTO(BaseDTO):
     user: UserReadDTO
     tokens: TokenPairDTO
+    # What this user may see and do (governance roles, permissions and UI
+    # capability flags) - see app/modules/governance/access_service.py.
+    access: UserAccessDTO | None = None
 
 
 class MessageDTO(BaseDTO):
