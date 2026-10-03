@@ -58,6 +58,13 @@ Certificate (one per student per course, issued automatically)
   course "just works" the moment at least one global template exists, with zero configuration
   needed. If there is no global template *and* the course has none assigned, no certificate is
   issued (silently — course completion itself is unaffected either way).
+- **The student must pass the course, not just finish it**: completing every item isn't enough.
+  The student's overall score — the average of their best score on every assessment in the course
+  (quizzes, quiz groups, and essays once their grade is released) — must reach the course's
+  `certificate_pass_mark_percentage` (default `70`, set via §3). Below it, no certificate is issued.
+  While an essay grade is still unreleased the result is pending; the certificate is issued
+  automatically once the grade is released, if the student passed. A course with no assessments
+  has nothing to fail. Certificates already issued are never revoked by this rule.
 - **Student profile picture is required**: no new certificate is issued unless the student has a
   profile picture URL on their account. If they completed the course first, they can upload a
   profile picture and request their certificate again; issuance will be attempted then.
@@ -300,6 +307,7 @@ other course-management endpoint (`403` otherwise, `404` if the course doesn't e
 |---|---|---|
 | `certificate_enabled` | bool \| null | Omit to leave unchanged. `false` stops certificates being issued for this course going forward — existing already-issued certificates are untouched. |
 | `certificate_template_id` | UUID \| null | Assign a specific template. Must be a global template, or one you own (`403` if you try to use another instructor's private template) — admins can assign any template. |
+| `certificate_pass_mark_percentage` | int (0–100) \| null | Omit to leave unchanged. Overall score (average of the student's best score on every assessment) required to earn the certificate. Default `70`. Like the other certificate settings, it's a high-risk change that goes through review on a published course under governance. |
 | `clear_template` | bool | Default `false`. Set `true` to explicitly **unset** the course's template (falls back to the global default, §1) — this takes priority over `certificate_template_id` if both are sent. |
 
 ### Examples
@@ -307,6 +315,11 @@ other course-management endpoint (`403` otherwise, `404` if the course doesn't e
 Assign a specific template:
 ```json
 { "certificate_template_id": "8e47937e-e0c0-4932-8e32-c6dc3ad36b2e" }
+```
+
+Require an overall score of 60% for the certificate:
+```json
+{ "certificate_pass_mark_percentage": 60 }
 ```
 
 Turn certificates off for this course entirely:

@@ -98,6 +98,9 @@ class CertificateImageUploadResponseDTO(BaseModel):
 
 class CourseCertificateSettingsUpdateDTO(BaseModel):
     certificate_enabled: bool | None = None
+    # Overall score a student must reach to earn the certificate - see
+    # CertificateService.evaluate_course_result.
+    certificate_pass_mark_percentage: int | None = Field(default=None, ge=0, le=100)
     # Explicit null clears the course's own template (falls back to a global one).
     certificate_template_id: uuid.UUID | None = None
     clear_template: bool = False
@@ -105,6 +108,7 @@ class CourseCertificateSettingsUpdateDTO(BaseModel):
 
 class CourseCertificateSettingsReadDTO(BaseModel):
     certificate_enabled: bool
+    certificate_pass_mark_percentage: int
     certificate_template_id: uuid.UUID | None
     effective_template: CertificateTemplateReadDTO | None
 

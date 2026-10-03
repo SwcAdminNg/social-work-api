@@ -90,6 +90,12 @@ class Course(BaseEntity):
     # let students earn a certificate for a moving target. Instructors opt in
     # explicitly once the course is a fixed, completable body of content.
     certificate_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # A student must reach this overall score (the average of their best score on
+    # every assessment in the course) to earn the certificate - completing every
+    # item isn't enough on its own. See CertificateService.evaluate_course_result.
+    certificate_pass_mark_percentage: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=70, server_default="70"
+    )
     # Null falls back to the first active global (owner_id=None) CertificateTemplate
     # - see CertificateService._resolve_template - so a course "just works" the
     # moment at least one global template has been seeded/created.

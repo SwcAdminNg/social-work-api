@@ -21,6 +21,7 @@ FIELD_RISK: dict[str, dict[str, RiskLevelEnum]] = {
         "what_you_will_learn": HIGH,
         "certificate_enabled": HIGH,
         "certificate_template_id": HIGH,
+        "certificate_pass_mark_percentage": HIGH,
         "description": MEDIUM,
         "prerequisite": MEDIUM,
         "requirements": MEDIUM,

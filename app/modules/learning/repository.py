@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload
 from app.common.pagination import PaginationParams
 
 from app.modules.course.access_entity import UserCourseAccess
+from app.modules.course.content_entity import AssessmentTypeEnum, CourseAssessment
 from app.modules.course.entity import Course, CourseItem, CourseSection
 from app.modules.learning.entity import (
     EssaySubmission,
@@ -360,6 +361,72 @@ class LearningRepository:
         )
         result = await self.session.execute(stmt)
         return result.scalar() or 0
+
+    async def get_best_assessment_scores(
+        self, user_id: uuid.UUID, course_id: uuid.UUID
+    ) -> dict[uuid.UUID, float | None]:
+        """{assessment item id: the student's best score (0-100)} for every live
+        assessment in the course - the highest of their current quiz / submitted
+        quiz-group attempts, or their essay's *published* grade. None means no
+        score yet (not attempted, or an essay still awaiting a released grade).
+        Attempts wiped by a section/course reset are soft-deleted, so they don't count."""
+        stmt = (
+            select(CourseItem.id, CourseAssessment.assessment_type)
+            .join(CourseSection, CourseItem.section_id == CourseSection.id)
+            .join(CourseAssessment, CourseAssessment.course_item_id == CourseItem.id)
+            .where(
+                CourseSection.course_id == course_id,
+                CourseItem.deleted_at.is_(None),
+                CourseSection.deleted_at.is_(None),
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
+            )
+        )
+        types = dict((await self.session.execute(stmt)).all())
+        scores: dict[uuid.UUID, float | None] = {item_id: None for item_id in types}
+        if not scores:
+            return scores
+
+        def ids_of(assessment_type: AssessmentTypeEnum) -> list[uuid.UUID]:
+            return [item_id for item_id, t in types.items() if t == assessment_type]
+
+        if quiz_ids := ids_of(AssessmentTypeEnum.QUIZ):
+            stmt = (
+                select(QuizAttempt.item_id, func.max(QuizAttempt.score))
+                .where(
+                    QuizAttempt.user_id == user_id,
+                    QuizAttempt.item_id.in_(quiz_ids),
+                    QuizAttempt.deleted_at.is_(None),
+                )
+                .group_by(QuizAttempt.item_id)
+            )
+            scores.update({item_id: float(score) for item_id, score in (await self.session.execute(stmt)).all()})
+
+        if group_ids := ids_of(AssessmentTypeEnum.QUIZ_GROUP):
+            stmt = (
+                select(QuizGroupAttempt.item_id, func.max(QuizGroupAttempt.score))
+                .where(
+                    QuizGroupAttempt.user_id == user_id,
+                    QuizGroupAttempt.item_id.in_(group_ids),
+                    QuizGroupAttempt.status == QuizGroupAttemptStatusEnum.SUBMITTED,
+                    QuizGroupAttempt.score.is_not(None),
+                    QuizGroupAttempt.deleted_at.is_(None),
+                )
+                .group_by(QuizGroupAttempt.item_id)
+            )
+            scores.update({item_id: float(score) for item_id, score in (await self.session.execute(stmt)).all()})
+
+        if essay_ids := ids_of(AssessmentTypeEnum.ESSAY):
+            stmt = select(EssaySubmission.item_id, EssaySubmission.score).where(
+                EssaySubmission.user_id == user_id,
+                EssaySubmission.item_id.in_(essay_ids),
+                EssaySubmission.is_published.is_(True),
+                EssaySubmission.score.is_not(None),
+                EssaySubmission.deleted_at.is_(None),
+            )
+            scores.update({item_id: float(score) for item_id, score in (await self.session.execute(stmt)).all()})
+
+        return scores
 
     async def count_completed_items(self, user_id: uuid.UUID, course_id: uuid.UUID) -> int:
         stmt = (

@@ -72,6 +72,13 @@ class CourseCreateDTO(CreateDTO, _TimedAccessValidatorMixin):
         description="Whether completing this course can earn a certificate. Leave off for "
         "courses that are continuously updated rather than a fixed, completable body of content.",
     )
+    certificate_pass_mark_percentage: int = Field(
+        default=70,
+        ge=0,
+        le=100,
+        description="Overall score (average of the student's best score on every assessment in the "
+        "course) a student must reach to earn the certificate.",
+    )
 
 
 class CourseUpdateDTO(UpdateDTO, _TimedAccessValidatorMixin):
@@ -92,6 +99,7 @@ class CourseUpdateDTO(UpdateDTO, _TimedAccessValidatorMixin):
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
     certificate_enabled: bool | None = None
+    certificate_pass_mark_percentage: int | None = Field(default=None, ge=0, le=100)
 
     @model_validator(mode="after")
     def _validate_access_window(self):
@@ -137,6 +145,7 @@ class CourseReadDTO(AuditDTO):
     access_start_date: datetime | None = None
     access_end_date: datetime | None = None
     certificate_enabled: bool
+    certificate_pass_mark_percentage: int = 70
     # Content governance lifecycle (DRAFT/PUBLISHED/ARCHIVED) and the published
     # version learners currently see - see app/modules/governance.
     governance_status: CourseLifecycleEnum | None = None

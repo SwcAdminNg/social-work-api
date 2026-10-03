@@ -14,6 +14,7 @@ MOVED = "MOVED"
 COURSE_DIFF_FIELDS = (
     "title", "description", "prerequisite", "level", "category", "what_you_will_learn",
     "material_includes", "requirements", "certificate_enabled", "certificate_template_id",
+    "certificate_pass_mark_percentage",
 )
 SECTION_DIFF_FIELDS = ("title", "order_index", "guest_instructors")
 ITEM_DIFF_FIELDS = ("title", "order_index", "is_preview", "estimated_minutes")

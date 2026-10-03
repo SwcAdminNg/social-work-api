@@ -415,14 +415,21 @@ class MarkingService:
 
     async def _apply_final_outcome(self, course, section, item, assessment, essay_settings, submission, score) -> None:
         """Same module/course reset mechanics as before, triggered by publication."""
+        from app.modules.learning.service import LearningService
+
         if assessment is None or not assessment.is_final_assessment:
+            # A regular essay was already marked complete on submission, but its
+            # released grade may be what settles the course result - re-run
+            # progress so a certificate held back pending this grade gets issued.
+            if submission.is_published:
+                await LearningService(self.session)._recalculate_progress(
+                    submission.user_id, course.id, touch_last_accessed=False
+                )
             return
         pass_mark = essay_settings.pass_mark_percentage if essay_settings else 70
         max_attempts = essay_settings.max_attempts if essay_settings else None
         passed = score >= pass_mark
         attempts_remaining = None if max_attempts is None else max(max_attempts - submission.graded_attempts, 0)
-        from app.modules.learning.service import LearningService
-
         await LearningService(self.session)._handle_final_assessment_outcome(
             submission.user_id, course.id, section.id, item.id, passed, attempts_remaining
         )

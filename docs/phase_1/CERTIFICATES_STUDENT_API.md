@@ -32,6 +32,11 @@ Base URL prefix for everything below: `/certificates`.
   cohort — even if you personally finished weeks ahead of it. `GET /certificates/mine/{course_id}`
   will keep 404ing until that date passes, then start working automatically with no action needed
   from you.
+- **You must pass the course**: finishing every item isn't enough. Your overall score — the average
+  of your best score on every assessment in the course — must reach the course's pass mark
+  (`certificate_pass_mark_percentage` on the course object, default `70`). Essays only count once
+  their grade is released; until then your certificate is pending and is issued automatically
+  once the grade comes out, if you passed.
 - **Profile picture required**: your account must have a profile picture before a certificate can
   be issued. If you completed a course before adding one, upload a profile picture and then request
   the certificate again; the system will issue it if all other rules are satisfied. The certificate
@@ -54,6 +59,12 @@ Base URL prefix for everything below: `/certificates`.
 ### 2.1 Get your certificate for one course
 
 **`GET /certificates/mine/{course_id}`**
+
+`400` if the course is complete but you didn't reach the course pass mark:
+`"Your overall score of 55% is below this course's pass mark of 70%, so no certificate can be issued"`.
+
+`400` if the course is complete but an essay grade hasn't been released yet:
+`"Your certificate will be available once all your assessments have been graded"`.
 
 `400` if the course is complete but your profile has no picture yet:
 `"Add a profile picture to your profile before this certificate can be issued"`.
@@ -156,7 +167,7 @@ user — it's intentionally open, the same way scanning a QR code on a physical 
 | Status | When |
 |---|---|
 | `401` | Missing/invalid bearer token on `GET /certificates/mine` or `GET /certificates/mine/{course_id}` (verify is exempt — it's public). |
-| `400` | `GET /certificates/mine/{course_id}` when the course is complete but the student has no profile picture yet. |
+| `400` | `GET /certificates/mine/{course_id}` when the course is complete but the student's overall score is below the pass mark, an essay grade is still unreleased, or the student has no profile picture yet. |
 | `404` | `GET /certificates/mine/{course_id}` for a course you haven't earned a certificate for. |
 
 `GET /certificates/verify/{code}` never 404s for an unknown code — see §3, it returns `valid: false`

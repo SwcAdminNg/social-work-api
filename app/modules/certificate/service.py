@@ -1,5 +1,6 @@
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
@@ -97,6 +98,25 @@ class CertificateTemplateService:
         return CertificateImageUploadResponseDTO(upload_url=upload_url, image_url=public_url)
 
 
+@dataclass
+class CourseResult:
+    """A student's overall result for a course: the average of their best score
+    on every assessment in it, against the course's certificate pass mark."""
+
+    pass_mark_percentage: int
+    # None while any assessment is still unscored (e.g. an essay awaiting a
+    # released grade) - the result isn't known yet, so it's neither pass nor fail.
+    score_percentage: float | None
+
+    @property
+    def is_pending(self) -> bool:
+        return self.score_percentage is None
+
+    @property
+    def passed(self) -> bool:
+        return self.score_percentage is not None and self.score_percentage >= self.pass_mark_percentage
+
+
 class CertificateService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -135,6 +155,9 @@ class CertificateService:
         if payload.certificate_enabled is not None:
             changes["certificate_enabled"] = payload.certificate_enabled
 
+        if payload.certificate_pass_mark_percentage is not None:
+            changes["certificate_pass_mark_percentage"] = payload.certificate_pass_mark_percentage
+
         await DraftService(self.session).stage_course_changes(course, changes, current_user)
         await self.course_repo.update(course)
         await self.session.commit()
@@ -166,14 +189,34 @@ class CertificateService:
             return False
         return datetime.now(timezone.utc) < course.access_end_date
 
+    async def evaluate_course_result(self, user_id: uuid.UUID, course: Course) -> CourseResult:
+        """Averages the student's best score on every live assessment in the
+        course. A course with no assessments has nothing to fail, so it scores
+        100. Unattempted assessments can't occur on a completed course, but an
+        essay whose grade hasn't been released yet leaves the result pending."""
+        from app.modules.learning.repository import LearningRepository
+
+        pass_mark = course.certificate_pass_mark_percentage
+        if pass_mark is None:
+            pass_mark = 70
+        scores = await LearningRepository(self.session).get_best_assessment_scores(user_id, course.id)
+        if not scores:
+            return CourseResult(pass_mark_percentage=pass_mark, score_percentage=100.0)
+        if any(score is None for score in scores.values()):
+            return CourseResult(pass_mark_percentage=pass_mark, score_percentage=None)
+        average = round(sum(scores.values()) / len(scores), 2)
+        return CourseResult(pass_mark_percentage=pass_mark, score_percentage=average)
+
     async def ensure_issued(self, user: User, course: Course) -> Certificate | None:
         """Idempotently issues a certificate the moment a course is completed.
         Called from `LearningService._recalculate_progress`, and again by
         `process_scheduled_course_certificates` (the daily cron sweep) once a
         SCHEDULED course's deadline actually passes. Returns None (no-op) when
         certificates are disabled for the course, the course's scheduled window
-        hasn't closed yet (see `_is_awaiting_scheduled_deadline`), or no template
-        is configured/available - completion itself is unaffected either way."""
+        hasn't closed yet (see `_is_awaiting_scheduled_deadline`), the student's
+        overall score is below the course pass mark or still pending a grade (see
+        `evaluate_course_result`), or no template is configured/available -
+        completion itself is unaffected either way."""
         if not course.certificate_enabled:
             return None
         if self._is_awaiting_scheduled_deadline(course):
@@ -184,6 +227,11 @@ class CertificateService:
             return existing
 
         if not user.profile_picture_url:
+            return None
+
+        # Finishing every item isn't enough - a student who failed the course
+        # (overall score below its pass mark) doesn't get a certificate.
+        if not (await self.evaluate_course_result(user.id, course)).passed:
             return None
 
         template = await self._resolve_template(course)
@@ -274,7 +322,19 @@ class CertificateService:
             from app.modules.learning.repository import LearningRepository
 
             progress = await LearningRepository(self.session).get_user_course_progress(user.id, course_id)
-            if progress is not None and progress.is_completed:
+            if progress is not None and progress.is_completed and course.certificate_enabled:
+                result = await self.evaluate_course_result(user.id, course)
+                if result.is_pending:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        "Your certificate will be available once all your assessments have been graded",
+                    )
+                if not result.passed:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        f"Your overall score of {result.score_percentage:g}% is below this course's pass mark "
+                        f"of {result.pass_mark_percentage}%, so no certificate can be issued",
+                    )
                 if not user.profile_picture_url:
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,

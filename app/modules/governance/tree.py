@@ -46,6 +46,7 @@ ACADEMIC_COURSE_FIELDS = (
     "requirements",
     "certificate_enabled",
     "certificate_template_id",
+    "certificate_pass_mark_percentage",
 )
 
 VIDEO_FIELDS = ("bunny_video_guid", "status", "playback_url", "thumbnail_url", "duration_seconds")
