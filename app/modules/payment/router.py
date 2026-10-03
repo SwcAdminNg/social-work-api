@@ -303,7 +303,13 @@ async def get_tax_report(
     result = await PaymentService(db).get_tax_report(filters, pagination)
 
     data = [
-        TaxRecordDTO.model_validate(transaction, from_attributes=True) for transaction in result["transactions"]
+        TaxRecordDTO.model_validate(transaction, from_attributes=True).model_copy(
+            update={
+                "user_name": f"{user.first_name} {user.last_name}".strip() if user else None,
+                "user_email": user.email if user else None,
+            }
+        )
+        for transaction, user in result["transactions"]
     ]
     total = result["total"]
     total_pages = math.ceil(total / pagination.page_size) if total else 0

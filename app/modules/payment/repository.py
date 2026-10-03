@@ -184,36 +184,46 @@ class PaymentRepository:
 
     async def get_tax_report(
         self, filters, pagination
-    ) -> tuple[Sequence[Transaction], int, float]:
+    ) -> tuple[Sequence[tuple[Transaction, "User | None"]], int, float]:
         """Successful transactions that carry VAT, newest first. Returns
-        (page of transactions, total matching count, sum of tax_amount across
-        ALL matching transactions - not just the current page - so admins can
-        see the full amount owed to the government even while paging)."""
+        (page of (transaction, user) rows, total matching count, sum of
+        tax_amount across ALL matching transactions - not just the current
+        page - so admins can see the full amount owed to the government even
+        while paging). The user is None if the account no longer exists."""
         from datetime import datetime, time, timedelta
 
-        from sqlalchemy import func
+        from app.modules.user.entity import User
 
-        from app.modules.payment.entity import TransactionStatusEnum
-
-        stmt = select(Transaction).where(
+        conditions = [
             Transaction.status == TransactionStatusEnum.SUCCESS,
             Transaction.tax_amount > 0,
-        )
+        ]
         if filters.start_date is not None:
-            stmt = stmt.where(Transaction.created_at >= datetime.combine(filters.start_date, time.min))
+            conditions.append(Transaction.created_at >= datetime.combine(filters.start_date, time.min))
         if filters.end_date is not None:
-            stmt = stmt.where(
+            conditions.append(
                 Transaction.created_at < datetime.combine(filters.end_date, time.min) + timedelta(days=1)
             )
 
-        count_stmt = select(func.count()).select_from(stmt.subquery())
+        matching = select(Transaction.id, Transaction.tax_amount).where(*conditions).subquery()
+
+        count_stmt = select(func.count()).select_from(matching)
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        sum_stmt = select(func.coalesce(func.sum(Transaction.tax_amount), 0)).select_from(stmt.subquery())
+        # Sum the subquery's own column; referencing Transaction.tax_amount here
+        # would add a second FROM and cross-join every transaction.
+        sum_stmt = select(func.coalesce(func.sum(matching.c.tax_amount), 0))
         total_tax_amount = (await self.session.execute(sum_stmt)).scalar_one()
 
-        stmt = stmt.order_by(Transaction.created_at.desc()).offset(pagination.offset).limit(pagination.limit)
-        items = (await self.session.execute(stmt)).scalars().all()
+        stmt = (
+            select(Transaction, User)
+            .outerjoin(User, Transaction.user_id == User.id)
+            .where(*conditions)
+            .order_by(Transaction.created_at.desc())
+            .offset(pagination.offset)
+            .limit(pagination.limit)
+        )
+        items = (await self.session.execute(stmt)).all()
 
         return items, total, float(total_tax_amount)
 

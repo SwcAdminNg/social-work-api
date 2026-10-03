@@ -121,6 +121,8 @@ class TaxFilterParams:
 class TaxRecordDTO(BaseModel):
     reference: str
     user_id: uuid.UUID
+    user_name: str | None = Field(None, description="Purchaser's full name; null if the account no longer exists")
+    user_email: str | None = None
     transaction_type: TransactionTypeEnum
     subtotal_amount: float | None
     discount_amount: float
