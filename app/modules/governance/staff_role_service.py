@@ -1,23 +1,41 @@
+import enum
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Sequence
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.pagination import PaginationParams
+from app.modules.course.entity import Course
 from app.modules.course.repository import CourseRepository
 from app.modules.governance.audit_service import AuditEntityTypeEnum, AuditService
-from app.modules.governance.dto import StaffRoleGrantDTO
+from app.modules.governance.dto import (
+    StaffMemberDTO,
+    StaffMemberRolesDTO,
+    StaffRoleAssignmentReadDTO,
+    StaffRoleCourseRefDTO,
+    StaffRoleGrantDTO,
+    StaffRoleGrantViewDTO,
+)
 from app.modules.governance.entity import StaffRoleAssignment
 from app.modules.governance.permission_service import PermissionService
-from app.modules.governance.permissions import PermissionEnum
+from app.modules.governance.permissions import PermissionEnum, StaffRoleEnum
+from app.modules.governance.presenter import UserDirectory
 from app.modules.notification.entity import NotificationTypeEnum
 from app.modules.notification.service import NotificationService
 from app.modules.user.entity import User
 from app.modules.user.repository import UserRepository
 
 logger = logging.getLogger(__name__)
+
+
+class StaffRoleStatusEnum(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+    ALL = "ALL"
 
 
 class StaffRoleService:
@@ -105,6 +123,127 @@ class StaffRoleService:
         if user is not None:
             await self._notify(user, f"Your {_label(assignment.role.value)} role was removed", assignment.course_id)
         return assignment
+
+    # -- read models for the admin UI ------------------------------------------------
+
+    async def present(self, rows: Sequence[StaffRoleAssignment]) -> list[StaffRoleGrantViewDTO]:
+        """Attach user and course names to grants, batch-loading both (no N+1)."""
+        users = UserDirectory(self.session)
+        await users.load([r.user_id for r in rows] + [r.granted_by for r in rows])
+        course_ids = {r.course_id for r in rows if r.course_id is not None}
+        courses: dict[uuid.UUID, str] = {}
+        if course_ids:
+            result = await self.session.execute(select(Course.id, Course.title).where(Course.id.in_(course_ids)))
+            courses = {row.id: row.title for row in result}
+        return [
+            StaffRoleGrantViewDTO(
+                **StaffRoleAssignmentReadDTO.model_validate(r).model_dump(),
+                user=users.get(r.user_id),
+                course=StaffRoleCourseRefDTO(id=r.course_id, title=courses[r.course_id])
+                if r.course_id in courses
+                else None,
+                granted_by_user=users.get(r.granted_by),
+            )
+            for r in rows
+        ]
+
+    async def list_members(
+        self,
+        pagination: PaginationParams,
+        search: str | None = None,
+        role: StaffRoleEnum | None = None,
+        course_id: uuid.UUID | None = None,
+        status: StaffRoleStatusEnum = StaffRoleStatusEnum.ACTIVE,
+    ) -> tuple[list[StaffMemberRolesDTO], int]:
+        """Grants grouped by person, so each staff member appears once with all of
+        their roles. Filters narrow both which people match and which grants show;
+        pagination is over people, not grants."""
+        grant_filters = [StaffRoleAssignment.deleted_at.is_(None)]
+        if status == StaffRoleStatusEnum.ACTIVE:
+            grant_filters.append(StaffRoleAssignment.revoked_at.is_(None))
+        elif status == StaffRoleStatusEnum.REVOKED:
+            grant_filters.append(StaffRoleAssignment.revoked_at.is_not(None))
+        if role is not None:
+            grant_filters.append(StaffRoleAssignment.role == role)
+        if course_id is not None:
+            grant_filters.append(StaffRoleAssignment.course_id == course_id)
+
+        holders = select(StaffRoleAssignment.user_id).where(*grant_filters).distinct()
+        people = select(User).where(User.id.in_(holders), User.deleted_at.is_(None))
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            people = people.where(
+                or_(
+                    User.first_name.ilike(term),
+                    User.last_name.ilike(term),
+                    (User.first_name + " " + User.last_name).ilike(term),
+                    User.email.ilike(term),
+                    User.username.ilike(term),
+                )
+            )
+
+        total = (await self.session.execute(select(func.count()).select_from(people.subquery()))).scalar_one()
+        page_users = (
+            (
+                await self.session.execute(
+                    people.order_by(User.first_name, User.last_name, User.id)
+                    .offset(pagination.offset)
+                    .limit(pagination.limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not page_users:
+            return [], total
+
+        grants = (
+            (
+                await self.session.execute(
+                    select(StaffRoleAssignment).where(
+                        *grant_filters, StaffRoleAssignment.user_id.in_([u.id for u in page_users])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        views = await self.present(grants)
+        by_user: dict[uuid.UUID, list[StaffRoleGrantViewDTO]] = {}
+        for view in views:
+            by_user.setdefault(view.user_id, []).append(view)
+
+        now = datetime.now(timezone.utc)
+        members: list[StaffMemberRolesDTO] = []
+        for user in page_users:
+            roles = by_user.get(user.id, [])
+            # Active first, then platform-wide before course grants, then by course title.
+            roles.sort(
+                key=lambda g: (
+                    g.revoked_at is not None,
+                    g.course_id is not None,
+                    (g.course.title.lower() if g.course else ""),
+                    g.role.value,
+                )
+            )
+            active = [g for g in roles if g.revoked_at is None and (g.expires_at is None or g.expires_at > now)]
+            members.append(
+                StaffMemberRolesDTO(
+                    user=StaffMemberDTO(
+                        id=user.id,
+                        name=f"{user.first_name} {user.last_name}".strip(),
+                        email=user.email,
+                        username=user.username,
+                        user_type=user.user_type.value,
+                        profile_picture_url=user.profile_picture_url,
+                    ),
+                    roles=roles,
+                    active_role_count=len(active),
+                    platform_role_count=sum(1 for g in active if g.course_id is None),
+                    course_count=len({g.course_id for g in active if g.course_id is not None}),
+                )
+            )
+        return members, total
 
     async def _notify(self, user: User, title: str, course_id: uuid.UUID | None) -> None:
         scope = "for one course" if course_id else "across the platform"

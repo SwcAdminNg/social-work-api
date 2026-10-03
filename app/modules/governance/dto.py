@@ -132,6 +132,41 @@ class UserSummaryDTO(BaseDTO):
     email: str | None = None
 
 
+# -- staff roles (display) ---------------------------------------------------------
+
+
+class StaffRoleCourseRefDTO(BaseDTO):
+    id: uuid.UUID
+    title: str
+
+
+class StaffRoleGrantViewDTO(StaffRoleAssignmentReadDTO):
+    """A grant with the names the admin UI shows instead of raw ids."""
+
+    user: UserSummaryDTO | None = None
+    course: StaffRoleCourseRefDTO | None = Field(default=None, description="Null for a platform-wide grant")
+    granted_by_user: UserSummaryDTO | None = None
+
+
+class StaffMemberDTO(BaseDTO):
+    id: uuid.UUID
+    name: str
+    email: str
+    username: str
+    user_type: str
+    profile_picture_url: str | None = None
+
+
+class StaffMemberRolesDTO(BaseDTO):
+    """One person and every grant they hold, platform-wide or per course."""
+
+    user: StaffMemberDTO
+    roles: list[StaffRoleGrantViewDTO]
+    active_role_count: int
+    platform_role_count: int = Field(description="Active platform-wide grants")
+    course_count: int = Field(description="Distinct courses the person holds an active role on")
+
+
 class RevisionSubmitDTO(BaseDTO):
     change_summary: str = Field(min_length=5, max_length=5000, description="What changed, for reviewers")
     reason: str | None = Field(default=None, max_length=5000, description="Why the change is needed")
