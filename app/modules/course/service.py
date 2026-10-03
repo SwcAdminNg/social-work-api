@@ -376,6 +376,16 @@ class CourseService:
             return await self._set_published_governed(id, is_published, current_user)
 
         course = await self.get_for_manage(id, current_user)
+        # Editing rights alone (e.g. a Content Developer) don't allow publishing:
+        # only the owning instructor or a holder of PUBLISH_CONTENT (admins).
+        if course.instructor_id != current_user.id:
+            from app.modules.governance.permission_service import PermissionService
+            from app.modules.governance.permissions import PermissionEnum
+
+            await PermissionService(self.session).ensure(
+                current_user, PermissionEnum.PUBLISH_CONTENT, course,
+                "Only the course owner or a publisher can publish this course",
+            )
         if is_published:
             item_count_stmt = (
                 select(func.count())

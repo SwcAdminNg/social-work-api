@@ -410,6 +410,9 @@ async def test_governance_off_keeps_legacy_publishing(client, state, monkeypatch
     section = ok(await client.post(f"/courses/{cid}/sections", json={"title": "M1"}, headers=h), 201)
     ok(await client.post(f"/courses/{cid}/sections/{section['id']}/items",
                          json={"title": "L1", "item_type": "LINKS", "url": "https://example.org"}, headers=h), 201)
+    # Editing rights on the course aren't enough to publish it.
+    await grant(client, state["admin_h"], state["academic"], "CONTENT_DEVELOPER", cid)
+    fail(await client.patch(f"/courses/{cid}/publish?is_published=true", headers=state["academic_h"]), 403)
     published = ok(await client.patch(f"/courses/{cid}/publish?is_published=true", headers=h))
     assert published["is_published"] is True and published["current_version_label"] == "1.0"
     # Edits apply live, as before.
