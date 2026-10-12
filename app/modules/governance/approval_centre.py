@@ -12,6 +12,7 @@ import enum
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +37,7 @@ from app.modules.governance.workflow import (
     check_can_decide,
     current_stage,
 )
-from app.modules.user.entity import User
+from app.modules.user.entity import User, UserTypeEnum
 
 RECENT_DAYS = 30
 REVIEW_ACTIONS = ["APPROVE", "APPROVE_WITH_MINOR_CHANGES", "RETURN_FOR_REVISION", "REJECT", "ESCALATE"]
@@ -50,6 +51,13 @@ class ApprovalViewEnum(str, enum.Enum):
     RECENTLY_APPROVED = "recently_approved"
     RECENTLY_REJECTED = "recently_rejected"
     MY_DRAFTS = "my_drafts"
+    # Platform-wide monitoring (ADMIN only): everything in flight / every decision, whoever it concerns.
+    ALL_OPEN = "all_open"
+    ALL_DECIDED = "all_decided"
+
+
+MONITOR_VIEWS = frozenset({ApprovalViewEnum.ALL_OPEN, ApprovalViewEnum.ALL_DECIDED})
+MONITOR_RECENT_DAYS = 90
 
 
 class ApprovalKindEnum(str, enum.Enum):
@@ -117,7 +125,9 @@ class ApprovalCentreService:
         self, view: ApprovalViewEnum, actor: User, course_id: uuid.UUID | None = None
     ) -> list[ApprovalCentreRowDTO]:
         now = datetime.now(timezone.utc)
-        if view in (ApprovalViewEnum.RECENTLY_APPROVED, ApprovalViewEnum.RECENTLY_REJECTED):
+        if view in (
+            ApprovalViewEnum.RECENTLY_APPROVED, ApprovalViewEnum.RECENTLY_REJECTED, ApprovalViewEnum.ALL_DECIDED
+        ):
             return await self._recent_rows(view, actor, course_id, now)
 
         revisions = await self._open_revisions(course_id)
@@ -158,6 +168,8 @@ class ApprovalCentreService:
             elif view == ApprovalViewEnum.RETURNED_TO_ME:
                 include = revision.status == ContentStatusEnum.RETURNED_FOR_REVISION and await is_contributor()
                 actions = ["EDIT", "SUBMIT"] if include else []
+            elif view == ApprovalViewEnum.ALL_OPEN:
+                include = True
             elif view == ApprovalViewEnum.MY_DRAFTS:
                 include = revision.status == ContentStatusEnum.DRAFT and await is_contributor()
                 actions = ["EDIT", "SUBMIT", "DISCARD"] if include else []
@@ -207,21 +219,24 @@ class ApprovalCentreService:
     async def _recent_rows(
         self, view: ApprovalViewEnum, actor: User, course_id: uuid.UUID | None, now: datetime
     ) -> list[ApprovalCentreRowDTO]:
-        decisions = (
-            [ReviewDecisionEnum.APPROVED, ReviewDecisionEnum.APPROVED_WITH_MINOR_CHANGES, ReviewDecisionEnum.FORCE_APPROVED]
-            if view == ApprovalViewEnum.RECENTLY_APPROVED
-            else [ReviewDecisionEnum.REJECTED, ReviewDecisionEnum.RETURNED_FOR_REVISION]
-        )
+        monitoring = view == ApprovalViewEnum.ALL_DECIDED
+        if monitoring:
+            decisions = list(ReviewDecisionEnum)
+        elif view == ApprovalViewEnum.RECENTLY_APPROVED:
+            decisions = [
+                ReviewDecisionEnum.APPROVED, ReviewDecisionEnum.APPROVED_WITH_MINOR_CHANGES, ReviewDecisionEnum.FORCE_APPROVED
+            ]
+        else:
+            decisions = [ReviewDecisionEnum.REJECTED, ReviewDecisionEnum.RETURNED_FOR_REVISION]
+        window = timedelta(days=MONITOR_RECENT_DAYS if monitoring else RECENT_DAYS)
         stmt = (
             select(ReviewDecision, CourseRevision)
             .join(CourseRevision, CourseRevision.id == ReviewDecision.revision_id)
-            .where(
-                ReviewDecision.decision.in_(decisions),
-                ReviewDecision.created_at >= now - timedelta(days=RECENT_DAYS),
-                or_(ReviewDecision.actor_id == actor.id, CourseRevision.author_id == actor.id),
-            )
+            .where(ReviewDecision.decision.in_(decisions), ReviewDecision.created_at >= now - window)
             .order_by(ReviewDecision.created_at.desc())
         )
+        if not monitoring:
+            stmt = stmt.where(or_(ReviewDecision.actor_id == actor.id, CourseRevision.author_id == actor.id))
         if course_id is not None:
             stmt = stmt.where(CourseRevision.course_id == course_id)
         pairs = (await self.session.execute(stmt)).all()
@@ -264,6 +279,8 @@ class ApprovalCentreService:
         kind: ApprovalKindEnum | None = None,
         course_id: uuid.UUID | None = None,
     ) -> tuple[list[ApprovalCentreRowDTO], int]:
+        if view in MONITOR_VIEWS and actor.user_type != UserTypeEnum.ADMIN:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only platform admins can monitor all approvals")
         rows: list[ApprovalCentreRowDTO] = []
         if kind in (None, ApprovalKindEnum.COURSE_REVISION):
             rows += await self.revision_rows(view, actor, course_id)
@@ -272,7 +289,9 @@ class ApprovalCentreService:
 
             rows += await MarkingService(self.session).approval_rows(view.value, actor, course_id)
 
-        if view in (ApprovalViewEnum.RECENTLY_APPROVED, ApprovalViewEnum.RECENTLY_REJECTED):
+        if view in (
+            ApprovalViewEnum.RECENTLY_APPROVED, ApprovalViewEnum.RECENTLY_REJECTED, ApprovalViewEnum.ALL_DECIDED
+        ):
             rows.sort(key=lambda r: r.updated_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         else:
             # Most urgent first: overdue, then soonest due, then oldest.
@@ -294,4 +313,5 @@ class ApprovalCentreService:
             returned_to_me=await count(ApprovalViewEnum.RETURNED_TO_ME),
             overdue=await count(ApprovalViewEnum.OVERDUE),
             ready_to_publish=await count(ApprovalViewEnum.READY_TO_PUBLISH),
+            all_open=await count(ApprovalViewEnum.ALL_OPEN) if actor.user_type == UserTypeEnum.ADMIN else None,
         )

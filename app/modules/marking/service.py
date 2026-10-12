@@ -503,13 +503,19 @@ class MarkingService:
             statuses = [S.APPROVED, S.PUBLISHED]
         elif view == "recently_rejected":
             statuses = None  # returned-to-marker events, by returned_at
+        elif view == "all_open":
+            statuses = [S.DRAFT_MARK, S.AWAITING_MODERATION, S.MODERATED, S.RETURNED_TO_MARKER, S.APPROVED]
+        elif view == "all_decided":
+            statuses = [S.APPROVED, S.PUBLISHED]
         else:
             return []
 
         stmt = select(EssayMark).where(EssayMark.deleted_at.is_(None))
         if statuses is not None:
             stmt = stmt.where(EssayMark.status.in_(statuses))
-        if view in ("recently_approved", "recently_rejected"):
+        if view == "all_decided":
+            stmt = stmt.where(EssayMark.approved_at >= now - timedelta(days=90))
+        elif view in ("recently_approved", "recently_rejected"):
             since = now - timedelta(days=30)
             column = EssayMark.approved_at if view == "recently_approved" else EssayMark.returned_at
             stmt = stmt.where(

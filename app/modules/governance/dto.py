@@ -429,3 +429,5 @@ class ApprovalCentreCountsDTO(BaseDTO):
     returned_to_me: int
     overdue: int
     ready_to_publish: int
+    # Platform admins only: every item in flight, whoever it concerns.
+    all_open: int | None = None
