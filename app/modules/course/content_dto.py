@@ -232,6 +232,13 @@ class CourseDocumentManageDTO(CourseDocumentPublicDTO):
     storage_key: str
 
 
+class RevisionDocumentUrlDTO(BaseDTO):
+    download_url: str
+    file_name: str
+    mime_type: str | None = None
+    file_size_bytes: int | None = None
+
+
 class DocumentUploadCredentialsDTO(BaseDTO):
     upload_url: str
     storage_key: str

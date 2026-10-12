@@ -69,6 +69,7 @@ def summary_dto(revision: CourseRevision, users: UserDirectory, course: Course |
         current_stage=revision.current_stage,
         round=revision.round,
         author=users.get(revision.author_id),
+        submitted_by=users.get(revision.submitted_by),
         effective_risk=revision.effective_risk,
         proposed_version_label=revision.proposed_version_label,
         change_summary=revision.change_summary,
@@ -83,7 +84,7 @@ async def summaries(
     session: AsyncSession, revisions: list[CourseRevision], courses: dict[uuid.UUID, Course] | None = None
 ) -> list[RevisionSummaryDTO]:
     users = UserDirectory(session)
-    await users.load(r.author_id for r in revisions)
+    await users.load([*(r.author_id for r in revisions), *(r.submitted_by for r in revisions)])
     return [summary_dto(r, users, (courses or {}).get(r.course_id)) for r in revisions]
 
 
@@ -105,6 +106,7 @@ async def detail_dto(
     await users.load(
         [
             revision.author_id,
+            revision.submitted_by,
             *contributors,
             *(s.assigned_reviewer_id for s in stages),
             *(s.decided_by for s in stages),

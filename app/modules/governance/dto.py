@@ -106,6 +106,15 @@ class MyPermissionsDTO(BaseDTO):
 # -- audit ---------------------------------------------------------------------------
 
 
+# -- revisions & review ------------------------------------------------------------
+
+
+class UserSummaryDTO(BaseDTO):
+    id: uuid.UUID
+    name: str
+    email: str | None = None
+
+
 class AuditLogReadDTO(BaseDTO):
     id: uuid.UUID
     occurred_at: datetime
@@ -121,15 +130,8 @@ class AuditLogReadDTO(BaseDTO):
     to_status: str | None = None
     comment: str | None = None
     metadata_json: dict | None = None
-
-
-# -- revisions & review ------------------------------------------------------------
-
-
-class UserSummaryDTO(BaseDTO):
-    id: uuid.UUID
-    name: str
-    email: str | None = None
+    actor: UserSummaryDTO | None = None
+    course_title: str | None = None
 
 
 # -- staff roles (display) ---------------------------------------------------------
@@ -245,6 +247,7 @@ class RevisionSummaryDTO(BaseDTO):
     current_stage: ReviewStageEnum | None = None
     round: int
     author: UserSummaryDTO | None = None
+    submitted_by: UserSummaryDTO | None = None
     effective_risk: RiskLevelEnum | None = None
     proposed_version_label: str | None = None
     change_summary: str | None = None

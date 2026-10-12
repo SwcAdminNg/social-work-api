@@ -152,6 +152,24 @@ class RevisionService:
         ids.add(revision.author_id)
         return ids
 
+    async def return_recipients(self, revision: CourseRevision) -> list[uuid.UUID]:
+        """Who a returned revision goes back to: the person who submitted this
+        round and whoever edited the working copy last. Falls back to the author
+        for revisions that predate `submitted_by`."""
+        recipients: list[uuid.UUID] = []
+        if revision.submitted_by is not None:
+            recipients.append(revision.submitted_by)
+        stmt = (
+            select(RevisionContributor.user_id)
+            .where(RevisionContributor.revision_id == revision.id)
+            .order_by(RevisionContributor.last_edit_at.desc())
+            .limit(1)
+        )
+        last_editor = (await self.session.execute(stmt)).scalar_one_or_none()
+        if last_editor is not None and last_editor not in recipients:
+            recipients.append(last_editor)
+        return recipients or [revision.author_id]
+
     async def decision_context(self, revision: CourseRevision) -> DecisionContext:
         approvals: dict[uuid.UUID, set[ReviewStageEnum]] = {}
         for stage in await self.all_stages(revision):
@@ -459,6 +477,10 @@ class RevisionService:
         revision.change_summary = payload.change_summary
         revision.reason = payload.reason
         revision.submitted_at = datetime.now(timezone.utc)
+        revision.submitted_by = actor.id
+        # The submitter owns this round: count them as a contributor so a return
+        # reaches them even if they never edited the working copy themselves.
+        await self.drafts.record_contributor(revision, actor)
         revision.ready_at = None
         revision.risk_override_by = None
         revision.risk_override_reason = None
@@ -650,7 +672,7 @@ class RevisionService:
             revision.ready_at = None
             await self._sync_assessments(revision, course, AssessmentDesignStatusEnum.DRAFT)
             self.notifier.queue(
-                await self.contributor_ids(revision), NotificationTypeEnum.REVISION_RETURNED,
+                await self.return_recipients(revision), NotificationTypeEnum.REVISION_RETURNED,
                 f"Returned for revision: {course.title}", comment, _link(revision),
                 revision_id=revision.id, course_id=course.id, stage=stage.stage.value,
             )

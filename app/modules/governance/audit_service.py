@@ -71,6 +71,7 @@ class AuditService:
         actor_id: uuid.UUID | None = None,
         entity_type: AuditEntityTypeEnum | None = None,
         entity_id: uuid.UUID | None = None,
+        action: str | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
     ) -> tuple[Sequence[GovernanceAuditLog], int]:
@@ -85,6 +86,8 @@ class AuditService:
             stmt = stmt.where(GovernanceAuditLog.entity_type == entity_type.value)
         if entity_id is not None:
             stmt = stmt.where(GovernanceAuditLog.entity_id == entity_id)
+        if action:
+            stmt = stmt.where(GovernanceAuditLog.action == action)
         if date_from is not None:
             stmt = stmt.where(GovernanceAuditLog.occurred_at >= date_from)
         if date_to is not None:

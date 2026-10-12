@@ -125,6 +125,7 @@ class ApprovalCentreService:
         users = UserDirectory(self.session)
         await users.load(
             [r.author_id for r in revisions]
+            + [r.submitted_by for r in revisions]
             + [s.assigned_reviewer_id for stages in stages_by_revision.values() for s in stages]
         )
 
@@ -189,7 +190,7 @@ class ApprovalCentreService:
                     item_type=item_type,
                     course_id=course.id,
                     course_title=course.title,
-                    submitted_by=users.get(revision.author_id),
+                    submitted_by=users.get(revision.submitted_by or revision.author_id),
                     current_stage=revision.current_stage.value if revision.current_stage else None,
                     status=revision.status.value,
                     reviewer=users.get(current_row.assigned_reviewer_id) if current_row else None,
@@ -226,7 +227,9 @@ class ApprovalCentreService:
         pairs = (await self.session.execute(stmt)).all()
         await self._load_courses(r.course_id for _, r in pairs)
         users = UserDirectory(self.session)
-        await users.load([r.author_id for _, r in pairs] + [d.actor_id for d, _ in pairs])
+        await users.load(
+            [r.author_id for _, r in pairs] + [r.submitted_by for _, r in pairs] + [d.actor_id for d, _ in pairs]
+        )
         rows = []
         for decision, revision in pairs:
             course = self._courses.get(revision.course_id)
@@ -241,7 +244,7 @@ class ApprovalCentreService:
                     item_type=item_type,
                     course_id=course.id,
                     course_title=course.title,
-                    submitted_by=users.get(revision.author_id),
+                    submitted_by=users.get(revision.submitted_by or revision.author_id),
                     current_stage=decision.stage.value if decision.stage else None,
                     status=revision.status.value,
                     reviewer=users.get(decision.actor_id),

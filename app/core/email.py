@@ -132,6 +132,23 @@ class EmailService:
         """
         await self._send(to_email, subject, _wrap_email(body, preheader="Set up your admin account."))
 
+    async def send_instructor_application_received_email(self, to_email: str, first_name: str) -> None:
+        subject = "We've received your instructor application"
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">Application received</h2>
+          <p>Hi {first_name},</p>
+          <p>Thank you for applying to become an instructor at {settings.company_name}.
+          We've received your application and our team will review it shortly.</p>
+          <p>We'll get back to you by email as soon as a decision has been made. You don't need
+          to do anything else in the meantime.</p>
+          <p style="color: #6b7280; font-size: 13px;">
+            Questions? Reach out to {settings.company_support_email}.
+          </p>
+        """
+        await self._send(
+            to_email, subject, _wrap_email(body, preheader="We've received your instructor application.")
+        )
+
     async def send_instructor_application_approved_email(self, to_email: str, first_name: str, setup_link: str) -> None:
         subject = "Your instructor application has been approved!"
         days = settings.instructor_setup_token_expire_minutes // 60 // 24

@@ -12,6 +12,7 @@ from app.core.daily import get_daily_client
 from app.core.storage import get_r2_client
 from app.modules.course.content_dto import (
     AssessmentAIProviderEnum,
+    RevisionDocumentUrlDTO,
     CourseAssessmentManageDTO,
     CourseAssessmentPublicDTO,
     CourseAssessmentUpdateDTO,
@@ -665,6 +666,25 @@ class CourseContentService:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "This document is not available for download")
 
         return self.r2.generate_download_url(document.storage_key)
+
+    async def get_review_document(self, course_id: uuid.UUID, item_id: uuid.UUID) -> RevisionDocumentUrlDTO:
+        """Document URL for a reviewer. The caller has already been authorised to
+        view the revision, so this skips the learner-facing rules (course
+        published, document marked downloadable) - a reviewer must be able to open
+        what they are asked to approve."""
+        item = await self.repo.get_item(item_id)
+        section = await self.repo.get_section(item.section_id) if item else None
+        if item is None or section is None or section.course_id != course_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        document = await self.repo.get_document_by_item(item.id)
+        if document is None or not document.is_uploaded:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not available")
+        return RevisionDocumentUrlDTO(
+            download_url=self.r2.generate_download_url(document.storage_key),
+            file_name=document.file_name,
+            mime_type=document.mime_type,
+            file_size_bytes=document.file_size_bytes,
+        )
 
     # -- video -------------------------------------------------------------------
 

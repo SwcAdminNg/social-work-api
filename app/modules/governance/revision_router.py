@@ -10,7 +10,11 @@ from app.common.responses import ApiResponse
 from app.core.config import settings
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
-from app.modules.course.content_dto import CourseSectionManageReadDTO, CourseSectionReadDTO
+from app.modules.course.content_dto import (
+    CourseSectionManageReadDTO,
+    CourseSectionReadDTO,
+    RevisionDocumentUrlDTO,
+)
 from app.modules.course.content_service import CourseContentService
 from app.modules.governance.approval_centre import ApprovalCentreService, ApprovalKindEnum, ApprovalViewEnum
 from app.modules.governance.dependencies import require_permission
@@ -159,6 +163,26 @@ async def preview_revision(
     layer = revision.id if service.drafts.is_cloned(revision) else None
     tree = await CourseContentService(db).build_tree(course.id, manage=False, enrolled=True, revision_id=layer)
     return ApiResponse(message="Revision preview retrieved successfully", data=tree)
+
+
+@router.get(
+    "/revisions/{revision_id}/items/{item_id}/document",
+    response_model=ApiResponse[RevisionDocumentUrlDTO],
+    summary="A short-lived URL to open a document in the revision's working copy. Available to anyone "
+    "who can view the revision, whether or not the course is published or the document is downloadable.",
+)
+async def get_revision_document(
+    revision_id: uuid.UUID,
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[RevisionDocumentUrlDTO]:
+    service = RevisionService(db)
+    revision = await service.get_revision(revision_id)
+    course = await service.get_course(revision.course_id)
+    await service.ensure_can_view(current_user, course)
+    data = await CourseContentService(db).get_review_document(course.id, item_id)
+    return ApiResponse(message="Document URL generated successfully", data=data)
 
 
 @router.get(

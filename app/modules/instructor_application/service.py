@@ -79,6 +79,11 @@ class InstructorApplicationService:
         except Exception as e:
             logger.error(f"Failed to notify admins of new instructor application {application.id}: {e}")
 
+        try:
+            await email_service.send_instructor_application_received_email(application.email, application.first_name)
+        except Exception as e:
+            logger.error(f"Failed to send application-received email for application {application.id}: {e}")
+
         return InstructorApplicationUploadResponseDTO(
             application_id=application.id,
             upload_url=self.r2.generate_upload_url(storage_key, payload.cv_content_type),

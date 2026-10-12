@@ -175,6 +175,8 @@ class CourseRevision(BaseEntity):
     diff_snapshot: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Who sent the current round in for review - a returned revision goes back to them.
+    submitted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

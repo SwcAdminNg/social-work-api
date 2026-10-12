@@ -240,6 +240,7 @@ async def test_editing_a_live_course_uses_a_hidden_working_copy(client, state):
 
     detail = ok(await client.post(f"/governance/revisions/{rid}/submit", json={"change_summary": "2026 refresh"}, headers=h))
     assert detail["proposed_version_label"] == "2.0"
+    assert detail["submitted_by"] is not None  # who sent this round in - returns go back to them
     # Content is frozen while under review.
     fail(await client.patch(f"/courses/items/{state['link_id']}", json={"title": "x"}, headers=h), 409)
 
