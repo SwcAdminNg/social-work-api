@@ -234,6 +234,7 @@ class CourseDocumentManageDTO(CourseDocumentPublicDTO):
 
 class RevisionDocumentUrlDTO(BaseDTO):
     download_url: str
+    view_url: str
     file_name: str
     mime_type: str | None = None
     file_size_bytes: int | None = None

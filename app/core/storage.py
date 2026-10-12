@@ -81,6 +81,16 @@ class R2Client:
             ExpiresIn=settings.presigned_url_expire_seconds,
         )
 
+    def generate_view_url(self, key: str, file_name: str | None = None, content_type: str | None = None) -> str:
+        """Like `generate_download_url`, but asks the storage to serve the object
+        inline so it can be embedded in an <iframe> / <img> for in-page viewing."""
+        params = {"Bucket": settings.r2_bucket_name, "Key": key, "ResponseContentDisposition": "inline"}
+        if content_type:
+            params["ResponseContentType"] = content_type
+        return self._client.generate_presigned_url(
+            "get_object", Params=params, ExpiresIn=settings.presigned_url_expire_seconds
+        )
+
     def delete_object(self, key: str) -> None:
         self._client.delete_object(Bucket=settings.r2_bucket_name, Key=key)
 

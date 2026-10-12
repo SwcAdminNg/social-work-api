@@ -681,6 +681,7 @@ class CourseContentService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not available")
         return RevisionDocumentUrlDTO(
             download_url=self.r2.generate_download_url(document.storage_key),
+            view_url=self.r2.generate_view_url(document.storage_key, document.file_name, document.mime_type),
             file_name=document.file_name,
             mime_type=document.mime_type,
             file_size_bytes=document.file_size_bytes,
