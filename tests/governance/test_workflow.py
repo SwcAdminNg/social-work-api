@@ -21,6 +21,7 @@ from app.modules.governance.workflow import (
     current_stage,
     derive_status,
     insert_stages,
+    previous_reviewed_stage,
 )
 
 St = ReviewStageEnum
@@ -207,3 +208,25 @@ def test_insert_stages_returns_missing_in_pipeline_order():
         [St.ACADEMIC_REVIEW, St.ASSESSMENT_MODERATION, St.QA_REVIEW, St.COURSE_LEAD_APPROVAL, St.FINAL_APPROVAL],
     )
     assert added == [St.ASSESSMENT_MODERATION, St.FINAL_APPROVAL]
+
+
+def test_return_goes_to_previous_stage_reviewer_when_there_is_one():
+    qa = uuid.uuid4()
+    views = [
+        StageView(St.ACADEMIC_REVIEW, SS.APPROVED, 1, decided_by=REVIEWER, id=uuid.uuid4()),
+        StageView(St.QA_REVIEW, SS.APPROVED, 2, decided_by=qa, id=uuid.uuid4()),
+        StageView(St.COURSE_LEAD_APPROVAL, SS.IN_REVIEW, 3, id=uuid.uuid4()),
+    ]
+    previous = previous_reviewed_stage(views, views[2])
+    assert previous is not None and previous.stage == St.QA_REVIEW and previous.decided_by == qa
+    # the first reviewed stage has nobody before it -> straight to the author
+    assert previous_reviewed_stage(views, views[0]) is None
+
+
+def test_previous_stage_ignores_superseded_and_unsigned_stages():
+    views = [
+        StageView(St.ACADEMIC_REVIEW, SS.SUPERSEDED, 1, decided_by=REVIEWER, id=uuid.uuid4()),
+        StageView(St.QA_REVIEW, SS.SKIPPED, 2, id=uuid.uuid4()),
+        StageView(St.COURSE_LEAD_APPROVAL, SS.PENDING, 3, id=uuid.uuid4()),
+    ]
+    assert previous_reviewed_stage(views, views[2]) is None

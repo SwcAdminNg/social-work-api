@@ -67,6 +67,7 @@ from app.modules.governance.workflow import (
     check_can_force_approve,
     current_stage,
     derive_status,
+    previous_reviewed_stage,
 )
 from app.modules.notification.entity import NotificationTypeEnum
 from app.modules.user.entity import User
@@ -639,6 +640,7 @@ class RevisionService:
 
         from_status = revision.status
         now = datetime.now(timezone.utc)
+        returned_to: dict = {}
         conditions = [
             {"text": c, "stage": stage.stage.value, "by": str(actor.id), "at": now.isoformat()} for c in payload.conditions
         ]
@@ -664,6 +666,36 @@ class RevisionService:
                 _link(revision), revision_id=revision.id, course_id=course.id,
             )
             await self._queue_next_stage_notification(revision, course, stages)
+
+        elif decision == ReviewDecisionEnum.RETURNED_FOR_REVISION and (
+            payload.return_to != "AUTHOR"
+            and (previous := previous_reviewed_stage(stage_views(stages), stage_views([stage])[0])) is not None
+        ):
+            # Back to the reviewer of the stage before this one: reopen their stage
+            # (same round) and put this one back to waiting. They can approve again
+            # or return it on to the author themselves.
+            prev_row = next(s for s in stages if s.id == previous.id)
+            reviewer_id = prev_row.decided_by
+            stage.status = ReviewStageStatusEnum.PENDING
+            stage.decided_by = None
+            stage.decided_at = None
+            prev_row.status = ReviewStageStatusEnum.IN_REVIEW
+            prev_row.assigned_reviewer_id = reviewer_id
+            prev_row.decided_by = None
+            prev_row.decided_at = None
+            prev_row.conditions = []
+            prev_row.due_at = self._due_at()
+            self._refresh_status(revision, stages)
+            revision.ready_at = None
+            for assessment in await self._assessments_in_scope(revision, course, self._snapshot_changes(revision)):
+                assessment.design_status = assessment_status_for(stage_views(stages))
+            returned_to = {"returned_to_stage": prev_row.stage.value, "returned_to_user": str(reviewer_id)}
+            self.notifier.queue(
+                [reviewer_id], NotificationTypeEnum.REVIEW_REQUESTED,
+                f"Sent back to you: {course.title}",
+                f"{_stage_label(stage.stage)} returned this to {_stage_label(prev_row.stage)}: {comment}",
+                _link(revision), revision_id=revision.id, course_id=course.id, stage=prev_row.stage.value,
+            )
 
         elif decision == ReviewDecisionEnum.RETURNED_FOR_REVISION:
             self._close_round(stages, stage, ReviewStageStatusEnum.RETURNED, actor, now)
@@ -717,7 +749,7 @@ class RevisionService:
         self._decision(revision, stage, decision, actor, from_status, comment, conditions)
         self._record(
             revision, actor, f"DECISION_{decision.value}", from_status, perms, comment,
-            stage=stage.stage.value, round=revision.round, conditions=payload.conditions,
+            stage=stage.stage.value, round=revision.round, conditions=payload.conditions, **returned_to,
         )
         await self._commit(revision)
         return revision

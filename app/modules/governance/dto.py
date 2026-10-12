@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
@@ -190,6 +191,11 @@ class ReviewDecisionCreateDTO(BaseDTO):
     )
     escalate_to: RiskLevelEnum | None = Field(default=None, description="With ESCALATED: the new risk level")
     flags: list[RiskFlagEnum] = Field(default_factory=list, description="With ESCALATED: flags to add")
+    return_to: Literal["PREVIOUS_REVIEWER", "AUTHOR"] | None = Field(
+        default=None,
+        description="With RETURNED_FOR_REVISION: send it back to the reviewer of the previous stage (default when "
+        "there is one) or straight to the author",
+    )
 
 
 class AssignReviewerDTO(BaseDTO):
@@ -275,6 +281,10 @@ class RevisionDetailDTO(RevisionSummaryDTO):
     contributors: list[UserSummaryDTO] = []
     stages: list[ReviewStageReadDTO] = []
     decisions: list[ReviewDecisionReadDTO] = []
+    # Where a "return" from the current stage would go first: the reviewer who
+    # signed off the stage before it (None -> straight to the author).
+    previous_stage: ReviewStageEnum | None = None
+    previous_reviewer: UserSummaryDTO | None = None
     # Conditions from "approve with minor changes" still to be confirmed.
     open_conditions: list[dict] = []
     available_actions: list[str] = []

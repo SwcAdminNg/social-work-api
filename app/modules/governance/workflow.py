@@ -99,6 +99,19 @@ def current_stage(stages: list[StageView]) -> StageView | None:
     return None
 
 
+def previous_reviewed_stage(stages: list[StageView], current: StageView) -> StageView | None:
+    """The nearest earlier stage of the round that a reviewer signed off, i.e. who
+    a return can go back to. None when `current` is the first reviewed stage, in
+    which case a return goes to the author."""
+    earlier = [
+        s for s in _active(stages)
+        if s.sequence < current.sequence
+        and s.status in (ReviewStageStatusEnum.APPROVED, ReviewStageStatusEnum.APPROVED_WITH_CONDITIONS)
+        and s.decided_by is not None
+    ]
+    return max(earlier, key=lambda s: s.sequence) if earlier else None
+
+
 def _active(stages: list[StageView]) -> list[StageView]:
     return [s for s in stages if s.status != ReviewStageStatusEnum.SUPERSEDED]
 

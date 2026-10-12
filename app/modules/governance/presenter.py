@@ -34,6 +34,7 @@ from app.modules.governance.workflow import (
     GovernanceRuleError,
     check_can_decide,
     current_stage,
+    previous_reviewed_stage,
 )
 from app.modules.user.entity import User
 
@@ -161,6 +162,13 @@ async def detail_dto(
             if not later_done:
                 open_conditions += stage.conditions or []
 
+    previous_stage = previous_reviewer = None
+    open_stage = current_stage(stage_views(round_stages)) if revision.status not in EDITABLE_STATUSES | CLOSED_STATUSES else None
+    if open_stage is not None:
+        prev = previous_reviewed_stage(stage_views(round_stages), open_stage)
+        if prev is not None:
+            previous_stage = prev.stage
+            previous_reviewer = users.get(prev.decided_by)
     actions, blocked = await available_actions(service, revision, course, viewer, round_stages, contributors)
     base = summary_dto(revision, users, course)
     return RevisionDetailDTO(
@@ -182,6 +190,8 @@ async def detail_dto(
         contributors=[users.get(c) for c in contributors if users.get(c) is not None],
         stages=stage_dtos,
         decisions=decision_dtos,
+        previous_stage=previous_stage,
+        previous_reviewer=previous_reviewer,
         open_conditions=open_conditions,
         available_actions=actions,
         blocked_reason=blocked,
