@@ -566,6 +566,7 @@ class DraftService:
                 live.order_index = draft.order_index
                 live.is_preview = draft.is_preview
                 live.estimated_minutes = draft.estimated_minutes
+                live.item_description = draft.item_description
                 live.section_id = target_section
                 if live.deleted_at is not None:
                     live.mark_restored(actor.id)
@@ -875,6 +876,7 @@ class DraftService:
                     order_index=snap["order_index"],
                     is_preview=snap["is_preview"],
                     estimated_minutes=snap["estimated_minutes"],
+                    item_description=snap.get("item_description"),
                     revision_id=revision.id,
                     draft_of_id=await self._existing_id(CourseItem, snap["key"]),
                 )
@@ -885,6 +887,7 @@ class DraftService:
             draft.order_index = snap["order_index"]
             draft.is_preview = snap["is_preview"]
             draft.estimated_minutes = snap["estimated_minutes"]
+            draft.item_description = snap.get("item_description")
             await self._apply_snapshot_children(draft, snap)
         await s.flush()
 

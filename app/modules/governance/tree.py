@@ -257,6 +257,7 @@ async def build_normalized_tree(
                     "order_index": item.order_index,
                     "is_preview": item.is_preview,
                     "estimated_minutes": item.estimated_minutes,
+                    "item_description": item.item_description,
                     "video": _pick(videos[item.id], VIDEO_FIELDS) if item.id in videos else None,
                     "document": _pick(documents[item.id], DOCUMENT_FIELDS) if item.id in documents else None,
                     "link": _pick(links[item.id], LINK_FIELDS) if item.id in links else None,

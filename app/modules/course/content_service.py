@@ -331,6 +331,7 @@ class CourseContentService:
             order_index=payload.order_index,
             is_preview=payload.is_preview,
             estimated_minutes=payload.estimated_minutes,
+            item_description=(payload.item_description or "").strip() or None,
         )
         self.session.add(item)
         await self.session.flush()
@@ -510,6 +511,8 @@ class CourseContentService:
             "scheduled_start_at", "duration_minutes", "guest_name", "guest_title",
         }
         for field, value in payload.model_dump(exclude_unset=True, exclude=_sub_entity_fields).items():
+            if field == "item_description":
+                value = (value or "").strip() or None
             setattr(item, field, value)
 
         if "downloadable" in payload.model_fields_set:
@@ -1597,6 +1600,7 @@ class CourseContentService:
             order_index=item.order_index,
             is_preview=item.is_preview,
             estimated_minutes=item.estimated_minutes,
+            item_description=item.item_description,
             video=video_dto,
             document=document_dto,
             link=link_dto,

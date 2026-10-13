@@ -82,6 +82,11 @@ def test_title_typo_is_low_risk_quick_approval():
     ]
 
 
+def test_lesson_description_edit_is_detected_as_an_item_change():
+    changes = changed(lambda t: t["sections"][0]["items"][0].update(item_description="New intro text"))
+    assert [(c.entity, c.op, c.fields) for c in changes] == [("item", MODIFIED, ["item_description"])]
+
+
 def test_new_lesson_is_medium_risk_full_path_without_final():
     changes = changed(lambda t: t["sections"][1]["items"].append(item("i3", "New case study")))
     risk = classify(changes, RevisionKindEnum.CHANGE)

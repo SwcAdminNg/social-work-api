@@ -406,7 +406,7 @@ class LearningService:
 
         dto = LearningItemContentDTO(
             id=item.id, title=item.title, item_type=item.item_type, is_completed=is_completed,
-            estimated_minutes=item.estimated_minutes,
+            estimated_minutes=item.estimated_minutes, item_description=item.item_description,
         )
 
         if item.item_type == CourseItemTypeEnum.VIDEO:

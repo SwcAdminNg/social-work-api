@@ -157,6 +157,11 @@ class CourseItem(BaseEntity):
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_preview: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Learner-facing lesson text shown above the item's activity (video, quiz, ...).
+    # Plain text: blank line = new paragraph, "- " = bullet, "## " = sub-heading,
+    # "**bold**" = emphasis. Deliberately not named `description` - the create/update
+    # payloads already use that for a LINKS item's own link description.
+    item_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Draft layer - same meaning as on CourseSection.
     revision_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("course_revisions.id"), nullable=True, index=True

@@ -759,6 +759,7 @@ async def create_item(
         order_index=item.order_index,
         is_preview=item.is_preview,
         estimated_minutes=item.estimated_minutes,
+        item_description=item.item_description,
         video_upload=video_credentials,
         document_upload=document_credentials,
     )

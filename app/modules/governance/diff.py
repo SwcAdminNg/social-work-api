@@ -17,7 +17,7 @@ COURSE_DIFF_FIELDS = (
     "certificate_pass_mark_percentage",
 )
 SECTION_DIFF_FIELDS = ("title", "order_index", "guest_instructors")
-ITEM_DIFF_FIELDS = ("title", "order_index", "is_preview", "estimated_minutes")
+ITEM_DIFF_FIELDS = ("title", "order_index", "is_preview", "estimated_minutes", "item_description")
 VIDEO_DIFF_FIELDS = ("bunny_video_guid",)
 DOCUMENT_DIFF_FIELDS = ("storage_key", "file_name", "downloadable")
 LINK_DIFF_FIELDS = ("url", "label", "description")

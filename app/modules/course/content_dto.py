@@ -115,6 +115,8 @@ class CourseItemCreateDTO(CreateDTO):
     is_preview: bool = False
     # Optional estimate of how long a learner takes to get through this item.
     estimated_minutes: int | None = Field(default=None, ge=0)
+    # Optional lesson text shown to learners above the item's activity. Any item type.
+    item_description: str | None = Field(default=None, max_length=10000)
     # Required only when item_type == DOCUMENT, used to build the R2 storage key.
     file_name: str | None = Field(default=None, max_length=255)
     # Only meaningful when item_type == DOCUMENT. Off by default so a newly
@@ -166,6 +168,8 @@ class CourseItemUpdateDTO(UpdateDTO):
     order_index: int | None = None
     is_preview: bool | None = None
     estimated_minutes: int | None = Field(default=None, ge=0)
+    # Send an empty string or null to clear it.
+    item_description: str | None = Field(default=None, max_length=10000)
     # Only settable when the item is a DOCUMENT.
     downloadable: bool | None = None
     # Only settable when the item is LINKS.
@@ -529,6 +533,7 @@ class CourseItemReadDTO(AuditDTO):
     order_index: int
     is_preview: bool
     estimated_minutes: int | None = None
+    item_description: str | None = None
     video: CourseVideoPublicDTO | None = None
     document: CourseDocumentPublicDTO | None = None
     assessment: CourseAssessmentPublicDTO | None = None
@@ -543,6 +548,7 @@ class CourseItemManageReadDTO(AuditDTO):
     order_index: int
     is_preview: bool
     estimated_minutes: int | None = None
+    item_description: str | None = None
     video: CourseVideoManageDTO | None = None
     document: CourseDocumentManageDTO | None = None
     assessment: CourseAssessmentManageDTO | None = None

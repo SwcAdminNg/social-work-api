@@ -179,6 +179,8 @@ class LearningItemContentDTO(BaseDTO):
     item_type: CourseItemTypeEnum
     is_completed: bool
     estimated_minutes: int | None = None
+    # Instructor-written lesson text shown above the activity (see CourseItem.item_description).
+    item_description: str | None = None
 
     # Optional fields depending on item_type
     video_url: str | None = None
