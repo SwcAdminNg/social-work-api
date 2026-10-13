@@ -62,6 +62,7 @@ from app.modules.course.dto import (
     SetFeaturedCoursesDTO,
     CourseCatalogCreateDTO,
     CourseCatalogReadDTO,
+    CourseCatalogUpdateDTO,
     PublicCourseCatalogReadDTO,
 )
 from app.modules.course.service import CourseService, CourseCatalogService
@@ -239,6 +240,37 @@ async def create_course_catalog(
         message="Course catalog created successfully",
         data=CourseCatalogReadDTO.model_validate(catalog)
     )
+
+@router.patch(
+    "/catalogs/{catalog_id}",
+    response_model=ApiResponse[CourseCatalogReadDTO],
+    summary="Edit a course catalog's name, description, icon or mapped categories (admin only)",
+)
+async def update_course_catalog(
+    catalog_id: uuid.UUID,
+    payload: CourseCatalogUpdateDTO,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CourseCatalogReadDTO]:
+    catalog = await CourseCatalogService(db).update(catalog_id, payload)
+    return ApiResponse(
+        message="Course catalog updated successfully", data=CourseCatalogReadDTO.model_validate(catalog)
+    )
+
+
+@router.delete(
+    "/catalogs/{catalog_id}",
+    response_model=ApiResponse[None],
+    summary="Delete a course catalog (admin only). Courses are not affected - a catalog only groups categories.",
+)
+async def delete_course_catalog(
+    catalog_id: uuid.UUID,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    await CourseCatalogService(db).delete(catalog_id, current_admin.id)
+    return ApiResponse(message="Course catalog deleted successfully")
+
 
 @router.get(
     "/catalogs",

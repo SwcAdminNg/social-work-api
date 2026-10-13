@@ -24,6 +24,7 @@ from app.modules.course.dto import (
     CourseUpdateDTO,
     CourseCatalogCreateDTO,
     CourseCatalogUpdateDTO,
+    CourseCatalogUpdateDTO,
     PublicCourseCatalogReadDTO,
 )
 from app.modules.community.entity import Community, CommunityTypeEnum
@@ -614,19 +615,70 @@ class CourseCatalogService:
         self.session = session
         self.repository = CourseCatalogRepository(session)
 
+    async def _assert_name_available(self, name: str, exclude_id: uuid.UUID | None = None) -> None:
+        stmt = select(CourseCatalog.id).where(
+            func.lower(CourseCatalog.name) == name.strip().lower(), CourseCatalog.deleted_at.is_(None)
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(CourseCatalog.id != exclude_id)
+        if (await self.session.execute(stmt)).first() is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, f'A catalog named "{name.strip()}" already exists')
+
     async def create(self, payload: CourseCatalogCreateDTO) -> CourseCatalog:
-        slug = await ensure_unique_slug(self.session, CourseCatalog, slugify(payload.name))
+        name = payload.name.strip()
+        await self._assert_name_available(name)
+        slug = await ensure_unique_slug(self.session, CourseCatalog, slugify(name))
         catalog = CourseCatalog(
-            name=payload.name, 
-            slug=slug, 
+            name=name,
+            slug=slug,
             categories=payload.categories,
-            icon_name=payload.icon_name,
-            description=payload.description
+            icon_name=(payload.icon_name or "").strip() or None,
+            description=(payload.description or "").strip() or None,
         )
         await self.repository.create(catalog)
         await self.session.commit()
         await delete_cache("course_catalogs:public")
         return catalog
+
+    async def _get_or_404(self, catalog_id: uuid.UUID) -> CourseCatalog:
+        catalog = await self.repository.get_by_id(catalog_id)
+        if catalog is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Catalog not found")
+        return catalog
+
+    async def update(self, catalog_id: uuid.UUID, payload: CourseCatalogUpdateDTO) -> CourseCatalog:
+        """Partial update. The slug is deliberately left alone on rename: the student site
+        links to catalogs by slug, so changing it would break bookmarks and shared links."""
+        catalog = await self._get_or_404(catalog_id)
+        changes = payload.model_dump(exclude_unset=True)
+
+        if "name" in changes:
+            name = (changes["name"] or "").strip()
+            if not name:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "A catalog needs a name")
+            await self._assert_name_available(name, exclude_id=catalog.id)
+            catalog.name = name
+        if "categories" in changes:
+            if not changes["categories"]:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Select at least one category")
+            catalog.categories = list(dict.fromkeys(changes["categories"]))
+        if "icon_name" in changes:
+            catalog.icon_name = (changes["icon_name"] or "").strip() or None
+        if "description" in changes:
+            catalog.description = (changes["description"] or "").strip() or None
+
+        await self.repository.update(catalog)
+        await self.session.commit()
+        await delete_cache("course_catalogs:public")
+        return catalog
+
+    async def delete(self, catalog_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> None:
+        """Soft-delete. A catalog only *groups* categories, so no course is touched:
+        they stay published and reachable by category."""
+        catalog = await self._get_or_404(catalog_id)
+        await self.repository.soft_delete(catalog, actor_id)
+        await self.session.commit()
+        await delete_cache("course_catalogs:public")
 
     async def list_catalogs_public(self) -> list[PublicCourseCatalogReadDTO]:
         cache_key = "course_catalogs:public"
@@ -634,7 +686,9 @@ class CourseCatalogService:
         if cached_catalogs:
             return [PublicCourseCatalogReadDTO(**catalog) for catalog in cached_catalogs]
 
-        stmt_catalogs = select(CourseCatalog)
+        stmt_catalogs = (
+            select(CourseCatalog).where(CourseCatalog.deleted_at.is_(None)).order_by(CourseCatalog.name)
+        )
         catalogs = (await self.session.execute(stmt_catalogs)).scalars().all()
         
         stmt = (
