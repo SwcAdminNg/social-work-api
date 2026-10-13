@@ -38,7 +38,7 @@ from app.modules.marking.entity import (
 from app.modules.notification.entity import NotificationTypeEnum
 from app.modules.user.activity_entity import ActivityTypeEnum
 from app.modules.user.activity_service import ActivityService
-from app.modules.user.entity import User
+from app.modules.user.entity import User, UserTypeEnum
 
 S = LearnerResultStatusEnum
 MARKING_PERMISSIONS = frozenset(
@@ -458,7 +458,8 @@ class MarkingService:
     async def get_dto(self, mark: EssayMark, actor: User) -> EssayMarkReadDTO:
         course = await self.session.get(Course, mark.course_id)
         perms = await self._perms(actor, course)
-        if not perms & MARKING_PERMISSIONS:
+        # Platform admins monitor everything (read-only: acting still needs the role's permission).
+        if not perms & MARKING_PERMISSIONS and actor.user_type != UserTypeEnum.ADMIN:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You can't view this course's marks")
         return (await self.to_dtos([mark], actor, perms))[0]
 

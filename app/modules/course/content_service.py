@@ -1217,7 +1217,8 @@ class CourseContentService:
         if course is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
         perms = await PermissionService(self.session).permissions(user, course)
-        if not perms & MARKING_PERMISSIONS:
+        # Platform admins may read marks everywhere; every action re-checks its own permission.
+        if not perms & MARKING_PERMISSIONS and user.user_type != UserTypeEnum.ADMIN:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You don't mark, moderate or approve results on this course")
         assessment = await self.repo.get_assessment_by_item(item.id)
         if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:

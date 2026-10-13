@@ -14,25 +14,26 @@ import uuid
 
 import pytest_asyncio
 
-if os.environ.get("STAGING_E2E_CONFIRM") != "1":
-    raise RuntimeError("Set STAGING_E2E_CONFIRM=1 to run the staging end-to-end tests")
-
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-for _line in open(os.path.join(_ROOT, "env.text.prod"), encoding="utf-8"):
-    _line = _line.strip()
-    if not _line or _line.startswith("#") or "=" not in _line:
-        continue
-    _k, _v = _line.split("=", 1)
-    os.environ[_k.strip()] = _v.strip().strip('"').strip("'")
-os.environ["DATABASE_URL"] = ""
-# No real emails, payments, webhooks, queues or video calls from a test run.
-for _key in (
-    "RESEND_API_KEY", "QSTASH_TOKEN", "QSTASH_CURRENT_SIGNING_KEY", "QSTASH_NEXT_SIGNING_KEY",
-    "PAYSTACK_SECRET_KEY", "PAYSTACK_PUBLIC_KEY", "BUNNY_STREAM_API_KEY", "DAILY_API_KEY",
-):
-    os.environ[_key] = "disabled-for-e2e"
-os.environ["REDIS_URL"] = ""
+CONFIRMED = os.environ.get("STAGING_E2E_CONFIRM") == "1"
+if not CONFIRMED:
+    # A plain `pytest tests` run must never touch staging: skip this folder entirely.
+    collect_ignore_glob = ["*"]
+else:
+    _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for _line in open(os.path.join(_ROOT, "env.text.prod"), encoding="utf-8"):
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        os.environ[_k.strip()] = _v.strip().strip('"').strip("'")
+    os.environ["DATABASE_URL"] = ""
+    # No real emails, payments, webhooks, queues or video calls from a test run.
+    for _key in (
+        "RESEND_API_KEY", "QSTASH_TOKEN", "QSTASH_CURRENT_SIGNING_KEY", "QSTASH_NEXT_SIGNING_KEY",
+        "PAYSTACK_SECRET_KEY", "PAYSTACK_PUBLIC_KEY", "BUNNY_STREAM_API_KEY", "DAILY_API_KEY",
+    ):
+        os.environ[_key] = "disabled-for-e2e"
+    os.environ["REDIS_URL"] = ""
 
 RUN = uuid.uuid4().hex[:6]
 
