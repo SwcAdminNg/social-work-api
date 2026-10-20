@@ -328,6 +328,9 @@ async def test_finalize_works_inside_a_governance_draft(client, state, fake_s3, 
     fake_s3.put_object(Bucket="x", Key=created["scorm_upload"]["storage_key"], Body=make_package_zip("ch2"), ContentType="application/zip")
     finalized = ok(await client.post(f"/courses/items/{created['id']}/scorm/finalize", json={}, headers=admin_h))
     assert finalized["id"] == created["id"] and finalized["scorm"]["status"] == "READY"
+    preview = ok(await client.get(f"/courses/items/{created['id']}/scorm/preview", headers=admin_h))
+    token = preview["launch_url"].split("/scorm/")[1].split("/")[0]
+    assert (await client.get(f"/scorm/{token}/index.html")).status_code == 200
     draft = ok(await client.get(f"/courses/manage/{cid}?layer=draft", headers=admin_h))
     titles = {i["title"]: i for s in draft["sections"] for i in s["items"]}
     assert titles["Chapter 2 (draft)"]["scorm"]["status"] == "READY"

@@ -813,8 +813,11 @@ class CourseContentService:
         `get_review_document`."""
         from app.modules.course import scorm as scorm_lib
 
-        item = await self.repo.get_item(item_id)
-        section = await self.repo.get_section(item.section_id) if item else None
+        # Staff preview what they are editing, which may be a draft working-copy
+        # row hidden from ordinary queries.
+        with include_drafts(self.session):
+            item = await self.repo.get_item(item_id)
+            section = await self.repo.get_section(item.section_id) if item else None
         course = await self.course_repo.get_by_id(section.course_id) if section else None
         if item is None or section is None or course is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
