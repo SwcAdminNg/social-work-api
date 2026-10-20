@@ -308,3 +308,26 @@ async def test_replacing_the_package_and_completion_rule(client, state, fake_s3)
         tree = await build_normalized_tree(session, course)
     node = tree["sections"][0]["items"][0]
     assert node["item_type"] == "SCORM" and node["scorm"]["launch_path"] == "index.html"
+
+
+async def test_finalize_works_inside_a_governance_draft(client, state, fake_s3, monkeypatch):
+    """With governance on, edits to a published course land in a hidden draft
+    working copy; finalize must still find the (draft) item it just unpacked."""
+    monkeypatch.setattr(settings, "content_governance_enabled", True)
+    cid, admin_h = state["course_id"], state["admin_h"]
+    manage = ok(await client.get(f"/courses/manage/{cid}", headers=admin_h))
+    section_id = manage["sections"][0]["id"]
+    created = ok(
+        await client.post(
+            f"/courses/{cid}/sections/{section_id}/items",
+            json={"title": "Chapter 2 (draft)", "item_type": "SCORM", "file_name": "ch2.zip", "order_index": 5},
+            headers=admin_h,
+        ),
+        201,
+    )
+    fake_s3.put_object(Bucket="x", Key=created["scorm_upload"]["storage_key"], Body=make_package_zip("ch2"), ContentType="application/zip")
+    finalized = ok(await client.post(f"/courses/items/{created['id']}/scorm/finalize", json={}, headers=admin_h))
+    assert finalized["id"] == created["id"] and finalized["scorm"]["status"] == "READY"
+    draft = ok(await client.get(f"/courses/manage/{cid}?layer=draft", headers=admin_h))
+    titles = {i["title"]: i for s in draft["sections"] for i in s["items"]}
+    assert titles["Chapter 2 (draft)"]["scorm"]["status"] == "READY"

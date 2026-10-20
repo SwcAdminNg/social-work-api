@@ -731,7 +731,7 @@ class CourseContentService:
     @_draft_aware
     async def finalize_scorm(
         self, item_id: uuid.UUID, payload: ScormFinalizeDTO, current_user: User
-    ) -> CourseScormPackage:
+    ) -> tuple[CourseItem, CourseScormPackage]:
         """Called once the zip has been PUT to R2: validates it, unpacks every
         file into a fresh extracted prefix and marks the package READY (or
         FAILED with a message the uploader can act on)."""
@@ -775,7 +775,9 @@ class CourseContentService:
             course.content_updated_at = datetime.now(timezone.utc)
         await self.session.flush()
         await self.session.commit()
-        return package
+        # The item may be a draft working-copy row (hidden outside the draft
+        # scope), so hand it back rather than making the caller re-fetch it.
+        return item, package
 
     @_draft_aware
     async def refresh_scorm_upload(

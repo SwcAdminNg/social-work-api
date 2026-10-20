@@ -903,8 +903,7 @@ async def finalize_scorm(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[CourseItemManageReadDTO]:
     service = CourseContentService(db)
-    package = await service.finalize_scorm(item_id, payload, current_user)
-    item = await service.repo.get_item(package.course_item_id)
+    item, package = await service.finalize_scorm(item_id, payload, current_user)
     data = CourseItemManageReadDTO(
         id=item.id,
         created_at=item.created_at,
