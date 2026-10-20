@@ -14,6 +14,7 @@ from app.modules.instructor_application.admin_router import router as instructor
 from app.modules.contact_us.router import router as contact_us_router
 from app.modules.course.router import router as course_router
 from app.modules.course.review_router import router as review_router
+from app.modules.course.scorm_router import router as scorm_router
 from app.modules.course.webhook_router import router as course_webhook_router
 from app.modules.course.daily_webhook_router import router as daily_webhook_router
 from app.modules.certificate.router import router as certificate_router
@@ -106,6 +107,7 @@ app.include_router(payment_router)
 app.include_router(cart_router)
 app.include_router(coupon_router)
 app.include_router(learning_router)
+app.include_router(scorm_router)
 app.include_router(resource_router)
 app.include_router(community_router)
 app.include_router(notification_router)

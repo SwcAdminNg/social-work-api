@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.base_entity import BaseEntity
@@ -57,6 +57,50 @@ class CourseDocument(BaseEntity):
     # Off by default - students can view/stream the document but not save a copy
     # until the instructor/admin explicitly allows it.
     downloadable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+
+
+class CourseScormPackage(BaseEntity):
+    """An uploaded interactive package (SCORM 1.2 / 2004 or plain zipped HTML)
+    attached to a SCORM course item. The zip is uploaded straight to R2 by the
+    client (same two-step flow as `CourseDocument`), then `finalize` unpacks it
+    into `extracted_prefix` so the launch file and every relative asset can be
+    served to the learner's iframe through the launch-token route."""
+
+    __tablename__ = "course_scorm_packages"
+
+    course_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), unique=True, nullable=False, index=True
+    )
+    # The uploaded zip as handed to us.
+    storage_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PENDING = zip not confirmed yet, PROCESSING = unpacking, READY = playable,
+    # FAILED = see error_message. Reuses VideoStatusEnum like live recordings do.
+    status: Mapped[VideoStatusEnum] = mapped_column(
+        Enum(VideoStatusEnum, name="video_status_enum", native_enum=True),
+        nullable=False,
+        default=VideoStatusEnum.PENDING,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # R2 key prefix the unpacked files live under; bumps on every re-upload so
+    # a published course version can keep pointing at the old files.
+    extracted_prefix: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Path (inside the package) of the file to open in the iframe, from the
+    # manifest's first launchable resource, else index.html.
+    launch_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # "1.2", "2004" or None when the zip has no imsmanifest.xml (plain HTML).
+    scorm_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    manifest_identifier: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manifest_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When true the item is only completed once the package itself reports
+    # completed/passed; when false, simply opening it completes the item (for
+    # packages that never report status, e.g. plain HTML).
+    completion_from_package: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default="true"
+    )
 
 
 class CourseLink(BaseEntity):

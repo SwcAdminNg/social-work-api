@@ -39,6 +39,9 @@ class CourseItemTypeEnum(str, enum.Enum):
     VIDEO = "VIDEO"
     LINKS = "LINKS"
     LIVE_SESSION = "LIVE_SESSION"
+    # An uploaded interactive HTML package (SCORM 1.2 / 2004, or any zipped
+    # web content with an index.html) played inside the learning page.
+    SCORM = "SCORM"
 
 
 class CourseAccessModeEnum(str, enum.Enum):

@@ -30,6 +30,7 @@ FIELD_RISK: dict[str, dict[str, RiskLevelEnum]] = {
     },
     "video": {"bunny_video_guid": MEDIUM},  # a new video
     "document": {"storage_key": MEDIUM, "file_name": MEDIUM},  # a new reading
+    "scorm": {"extracted_prefix": MEDIUM, "file_name": MEDIUM, "launch_path": MEDIUM},  # a new package
     "assessment": {"is_final_assessment": HIGH, "due_date": MEDIUM},
     "assessment_settings": {
         "pass_mark_percentage": HIGH,
@@ -52,6 +53,7 @@ STRUCTURAL_RISK: dict[str, RiskLevelEnum] = {
     "item": MEDIUM,  # ASSESSMENT items are HIGH, handled below
     "video": MEDIUM,
     "document": MEDIUM,
+    "scorm": MEDIUM,
     "link": LOW,
     "assessment_settings": HIGH,
     "group_section": HIGH,

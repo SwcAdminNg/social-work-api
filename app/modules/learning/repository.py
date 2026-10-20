@@ -18,6 +18,7 @@ from app.modules.learning.entity import (
     QuizGroupAttemptStatusEnum,
     UserCourseProgress,
     UserItemProgress,
+    UserScormProgress,
 )
 from app.modules.user.entity import User
 
@@ -67,6 +68,20 @@ class LearningRepository:
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()
+
+    async def get_scorm_progress(self, user_id: uuid.UUID, item_id: uuid.UUID) -> UserScormProgress | None:
+        stmt = select(UserScormProgress).where(
+            UserScormProgress.user_id == user_id, UserScormProgress.item_id == item_id
+        )
+        return (await self.session.execute(stmt)).scalars().first()
+
+    async def get_or_create_scorm_progress(self, user_id: uuid.UUID, item_id: uuid.UUID) -> UserScormProgress:
+        progress = await self.get_scorm_progress(user_id, item_id)
+        if progress is None:
+            progress = UserScormProgress(user_id=user_id, item_id=item_id, cmi_data={})
+            self.session.add(progress)
+            await self.session.flush()
+        return progress
 
     async def mark_item_completed(self, user_id: uuid.UUID, item_id: uuid.UUID) -> UserItemProgress:
         progress = await self.get_user_item_progress(user_id, item_id)

@@ -1,6 +1,6 @@
 import functools
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.core.bunny import get_bunny_client
+from app.core.config import settings
 from app.core.daily import get_daily_client
 from app.core.storage import get_r2_client
 from app.modules.course.content_dto import (
@@ -36,6 +37,8 @@ from app.modules.course.content_dto import (
     CourseQuizOptionPublicDTO,
     CourseQuizQuestionManageDTO,
     CourseQuizQuestionPublicDTO,
+    CourseScormPackageManageDTO,
+    CourseScormPackagePublicDTO,
     CourseSectionCreateDTO,
     CourseSectionManageReadDTO,
     CourseSectionReadDTO,
@@ -56,6 +59,9 @@ from app.modules.course.content_dto import (
     QuizOptionUpdateDTO,
     QuizQuestionCreateDTO,
     QuizQuestionUpdateDTO,
+    ScormFinalizeDTO,
+    ScormLaunchDTO,
+    ScormUploadCredentialsDTO,
     VideoUploadCredentialsDTO,
 )
 from app.common.avatar import build_initials_avatar_url
@@ -72,6 +78,7 @@ from app.modules.course.content_entity import (
     CourseQuizOption,
     CourseQuizQuestion,
     CourseQuizSettings,
+    CourseScormPackage,
     CourseVideo,
     MultiAnswerModeEnum,
     VideoStatusEnum,
@@ -318,7 +325,12 @@ class CourseContentService:
         section_id: uuid.UUID,
         payload: CourseItemCreateDTO,
         current_user: User,
-    ) -> tuple[CourseItem, VideoUploadCredentialsDTO | None, DocumentUploadCredentialsDTO | None]:
+    ) -> tuple[
+        CourseItem,
+        VideoUploadCredentialsDTO | None,
+        DocumentUploadCredentialsDTO | None,
+        ScormUploadCredentialsDTO | None,
+    ]:
         course, section = await self._authorize_section(course_id, section_id, current_user)
         if not self._writing_draft:
             course.content_updated_at = datetime.now(timezone.utc)
@@ -338,6 +350,7 @@ class CourseContentService:
 
         video_credentials: VideoUploadCredentialsDTO | None = None
         document_credentials: DocumentUploadCredentialsDTO | None = None
+        scorm_credentials: ScormUploadCredentialsDTO | None = None
 
         if payload.item_type == CourseItemTypeEnum.VIDEO:
             guid = await self.bunny.create_video(payload.title)
@@ -357,6 +370,23 @@ class CourseContentService:
             )
             document_credentials = DocumentUploadCredentialsDTO(
                 upload_url=self.r2.generate_upload_url(storage_key), storage_key=storage_key
+            )
+        elif payload.item_type == CourseItemTypeEnum.SCORM:
+            if not payload.file_name:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "file_name is required for SCORM items")
+            if not payload.file_name.lower().endswith(".zip"):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "A SCORM / interactive package must be a .zip file")
+            storage_key = self.r2.build_scorm_zip_key(course.id, payload.file_name)
+            self.session.add(
+                CourseScormPackage(
+                    course_item_id=item.id,
+                    storage_key=storage_key,
+                    file_name=payload.file_name,
+                    completion_from_package=payload.scorm_completion_from_package,
+                )
+            )
+            scorm_credentials = ScormUploadCredentialsDTO(
+                upload_url=self.r2.generate_upload_url(storage_key, "application/zip"), storage_key=storage_key
             )
         elif payload.item_type == CourseItemTypeEnum.LINKS:
             if not payload.url:
@@ -470,7 +500,7 @@ class CourseContentService:
             await LearningService(self.session).recalculate_progress_for_enrolled_users(course.id)
 
         await self.session.commit()
-        return item, video_credentials, document_credentials
+        return item, video_credentials, document_credentials, scorm_credentials
 
     @staticmethod
     def _resolve_settings_max_attempts(settings_payload, is_final_assessment: bool) -> int | None:
@@ -507,7 +537,7 @@ class CourseContentService:
     ) -> CourseItem:
         course, _, item = await self._authorize_item(item_id, current_user)
         _sub_entity_fields = {
-            "downloadable", "url", "label", "description",
+            "downloadable", "scorm_completion_from_package", "url", "label", "description",
             "scheduled_start_at", "duration_minutes", "guest_name", "guest_title",
         }
         for field, value in payload.model_dump(exclude_unset=True, exclude=_sub_entity_fields).items():
@@ -520,6 +550,12 @@ class CourseContentService:
             if document is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not a document")
             document.downloadable = payload.downloadable
+
+        if "scorm_completion_from_package" in payload.model_fields_set:
+            package = await self.repo.get_scorm_package_by_item(item.id)
+            if package is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "This item is not an interactive package")
+            package.completion_from_package = bool(payload.scorm_completion_from_package)
 
         live_session_fields = {
             field: getattr(payload, field)
@@ -688,6 +724,113 @@ class CourseContentService:
             file_name=document.file_name,
             mime_type=document.mime_type,
             file_size_bytes=document.file_size_bytes,
+        )
+
+    # -- scorm / interactive package ---------------------------------------------
+
+    @_draft_aware
+    async def finalize_scorm(
+        self, item_id: uuid.UUID, payload: ScormFinalizeDTO, current_user: User
+    ) -> CourseScormPackage:
+        """Called once the zip has been PUT to R2: validates it, unpacks every
+        file into a fresh extracted prefix and marks the package READY (or
+        FAILED with a message the uploader can act on)."""
+        import asyncio
+
+        from app.modules.course import scorm as scorm_lib
+
+        course, _, item = await self._authorize_item(item_id, current_user)
+        package = await self.repo.get_scorm_package_by_item(item.id)
+        if package is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Package not found for this item")
+        if payload.file_size_bytes is not None:
+            package.file_size_bytes = payload.file_size_bytes
+        package.status = VideoStatusEnum.PROCESSING
+        package.error_message = None
+        await self.session.flush()
+
+        extracted_prefix = self.r2.build_scorm_extracted_prefix(course.id)
+        try:
+            result = await asyncio.to_thread(scorm_lib.ingest_package, self.r2, package.storage_key, extracted_prefix)
+        except scorm_lib.ScormPackageError as exc:
+            package.status = VideoStatusEnum.FAILED
+            package.error_message = str(exc)
+            await self.session.commit()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+        except Exception:
+            package.status = VideoStatusEnum.FAILED
+            package.error_message = "The package could not be unpacked. Check the zip and try again."
+            await self.session.commit()
+            raise
+
+        package.extracted_prefix = result.extracted_prefix
+        package.launch_path = result.launch_path
+        package.scorm_version = result.manifest.scorm_version
+        package.manifest_identifier = result.manifest.identifier
+        package.manifest_title = result.manifest.title
+        package.file_count = result.file_count
+        package.total_size_bytes = result.total_size_bytes
+        package.status = VideoStatusEnum.READY
+        if not self._writing_draft:
+            course.content_updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        await self.session.commit()
+        return package
+
+    @_draft_aware
+    async def refresh_scorm_upload(
+        self, item_id: uuid.UUID, file_name: str, current_user: User
+    ) -> ScormUploadCredentialsDTO:
+        """Issues credentials to upload a replacement zip for an existing item.
+        The old unpacked files are left in place (a published version may still
+        reference them); finalize swaps `extracted_prefix` to the new copy."""
+        course, _, item = await self._authorize_item(item_id, current_user)
+        package = await self.repo.get_scorm_package_by_item(item.id)
+        if package is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Package not found for this item")
+        if not file_name.lower().endswith(".zip"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "A SCORM / interactive package must be a .zip file")
+        storage_key = self.r2.build_scorm_zip_key(course.id, file_name)
+        package.storage_key = storage_key
+        package.file_name = file_name
+        package.file_size_bytes = None
+        package.status = VideoStatusEnum.PENDING
+        package.error_message = None
+        await self.session.commit()
+        return ScormUploadCredentialsDTO(
+            upload_url=self.r2.generate_upload_url(storage_key, "application/zip"), storage_key=storage_key
+        )
+
+    async def get_scorm_preview_launch(
+        self, item_id: uuid.UUID, current_user: User, course_id: uuid.UUID | None = None
+    ) -> ScormLaunchDTO:
+        """A launch URL for staff to open the package as a learner would; the
+        runtime runs in browse mode and saves nothing. With `course_id` the
+        caller has already authorised a reviewer for that course (revision
+        review), so the owner/admin check is skipped - same split as
+        `get_review_document`."""
+        from app.modules.course import scorm as scorm_lib
+
+        item = await self.repo.get_item(item_id)
+        section = await self.repo.get_section(item.section_id) if item else None
+        course = await self.course_repo.get_by_id(section.course_id) if section else None
+        if item is None or section is None or course is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        if course_id is None:
+            await self._ensure_can_manage(course, current_user)
+        elif course.id != course_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        package = await self.repo.get_scorm_package_by_item(item.id)
+        if package is None or package.status != VideoStatusEnum.READY or not package.launch_path:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Package not available")
+        token = scorm_lib.create_launch_token(
+            user_id=current_user.id, item_id=item.id, package_id=package.id, course_id=course.id, mode="preview"
+        )
+        return ScormLaunchDTO(
+            launch_url=scorm_lib.build_launch_url(token, package.launch_path),
+            launch_path=package.launch_path,
+            scorm_version=package.scorm_version,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.scorm_launch_token_expire_minutes),
         )
 
     # -- video -------------------------------------------------------------------
@@ -1301,6 +1444,30 @@ class CourseContentService:
             actor=current_user,
         )
 
+    @staticmethod
+    def map_scorm_package(package: CourseScormPackage, manage: bool):
+        if manage:
+            return CourseScormPackageManageDTO(
+                status=package.status,
+                scorm_version=package.scorm_version,
+                manifest_title=package.manifest_title,
+                completion_from_package=package.completion_from_package,
+                file_name=package.file_name,
+                file_size_bytes=package.file_size_bytes,
+                storage_key=package.storage_key,
+                launch_path=package.launch_path,
+                manifest_identifier=package.manifest_identifier,
+                file_count=package.file_count,
+                total_size_bytes=package.total_size_bytes,
+                error_message=package.error_message,
+            )
+        return CourseScormPackagePublicDTO(
+            status=package.status,
+            scorm_version=package.scorm_version,
+            manifest_title=package.manifest_title,
+            completion_from_package=package.completion_from_package,
+        )
+
     # -- tree assembly for course detail endpoints ------------------------------
 
     async def build_tree(
@@ -1324,6 +1491,7 @@ class CourseContentService:
         videos = {v.course_item_id: v for v in await self.repo.list_videos_for_items(item_ids)}
         documents = {d.course_item_id: d for d in await self.repo.list_documents_for_items(item_ids)}
         links = {l.course_item_id: l for l in await self.repo.list_links_for_items(item_ids)}
+        scorm_packages = {p.course_item_id: p for p in await self.repo.list_scorm_packages_for_items(item_ids)}
         assessments = {a.course_item_id: a for a in await self.repo.list_assessments_for_items(item_ids)}
         live_session_rows = await self.repo.list_live_sessions_for_items(
             item_ids + [i.draft_of_id for i in items if i.draft_of_id is not None]
@@ -1391,6 +1559,7 @@ class CourseContentService:
                     links.get(item.id),
                     assessments.get(item.id),
                     live_sessions.get(item.id),
+                    scorm_packages.get(item.id),
                     quiz_settings_by_assessment,
                     essay_settings_by_assessment,
                     quiz_group_settings_by_assessment,
@@ -1457,6 +1626,7 @@ class CourseContentService:
         link: CourseLink | None,
         assessment: CourseAssessment | None,
         live_session: CourseLiveSession | None,
+        scorm_package: CourseScormPackage | None,
         quiz_settings_by_assessment: dict,
         essay_settings_by_assessment: dict,
         quiz_group_settings_by_assessment: dict,
@@ -1473,6 +1643,7 @@ class CourseContentService:
             link = None
             assessment = None
             live_session = None
+            scorm_package = None
 
         video_dto = None
         if video is not None:
@@ -1503,6 +1674,8 @@ class CourseContentService:
         link_dto = None
         if link is not None:
             link_dto = CourseLinkDTO(url=link.url, label=link.label, description=link.description)
+
+        scorm_dto = self.map_scorm_package(scorm_package, manage) if scorm_package is not None else None
 
         live_session_dto = None
         if live_session is not None:
@@ -1607,4 +1780,5 @@ class CourseContentService:
             link=link_dto,
             assessment=assessment_dto,
             live_session=live_session_dto,
+            scorm=scorm_dto,
         )

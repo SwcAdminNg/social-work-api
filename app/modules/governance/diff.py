@@ -21,6 +21,7 @@ ITEM_DIFF_FIELDS = ("title", "order_index", "is_preview", "estimated_minutes", "
 VIDEO_DIFF_FIELDS = ("bunny_video_guid",)
 DOCUMENT_DIFF_FIELDS = ("storage_key", "file_name", "downloadable")
 LINK_DIFF_FIELDS = ("url", "label", "description")
+SCORM_DIFF_FIELDS = ("extracted_prefix", "file_name", "launch_path", "completion_from_package")
 ASSESSMENT_DIFF_FIELDS = ("due_date", "is_final_assessment")
 GROUP_SECTION_DIFF_FIELDS = ("title", "order_index", "questions_to_ask")
 QUESTION_DIFF_FIELDS = ("text", "order_index", "allow_multiple_answers", "multi_answer_mode", "section_key")
@@ -183,6 +184,7 @@ def diff_trees(before: dict | None, after: dict) -> list[Change]:
             changes, "document", key, label, prev_item.get("document"), item.get("document"), DOCUMENT_DIFF_FIELDS
         )
         _diff_scalar_block(changes, "link", key, label, prev_item.get("link"), item.get("link"), LINK_DIFF_FIELDS)
+        _diff_scalar_block(changes, "scorm", key, label, prev_item.get("scorm"), item.get("scorm"), SCORM_DIFF_FIELDS)
         _diff_assessment(changes, key, label, prev_item.get("assessment"), item.get("assessment"))
 
     for key, (section, item) in before_items.items():

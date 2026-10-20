@@ -24,6 +24,12 @@ class R2Client:
     def build_document_key(self, course_id: uuid.UUID, file_name: str) -> str:
         return f"courses/{course_id}/documents/{uuid.uuid4()}-{file_name}"
 
+    def build_scorm_zip_key(self, course_id: uuid.UUID, file_name: str) -> str:
+        return f"courses/{course_id}/scorm/uploads/{uuid.uuid4()}-{file_name}"
+
+    def build_scorm_extracted_prefix(self, course_id: uuid.UUID) -> str:
+        return f"courses/{course_id}/scorm/packages/{uuid.uuid4()}"
+
     def build_thumbnail_key(self, course_id: uuid.UUID, file_name: str) -> str:
         return f"courses/{course_id}/thumbnails/{uuid.uuid4()}-{file_name}"
 

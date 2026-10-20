@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     r2_public_url: str = ""
     presigned_url_expire_seconds: int = 600
 
+    # SCORM / interactive packages (course items of type SCORM). The zip is
+    # unpacked into R2 at finalize time and served to the learner's iframe via a
+    # signed launch token (see app/modules/course/scorm.py).
+    scorm_max_package_bytes: int = 500 * 1024 * 1024
+    scorm_max_files: int = 5000
+    scorm_launch_token_expire_minutes: int = 12 * 60
+
     # Bunny.net Stream (course videos)
     bunny_stream_library_id: str = ""
     bunny_stream_api_key: str = ""

@@ -27,6 +27,7 @@ from app.modules.course.content_entity import (
     CourseQuizOption,
     CourseQuizQuestion,
     CourseQuizSettings,
+    CourseScormPackage,
     CourseVideo,
 )
 from app.modules.course.entity import Course, CourseItem, CourseSection
@@ -52,6 +53,11 @@ ACADEMIC_COURSE_FIELDS = (
 VIDEO_FIELDS = ("bunny_video_guid", "status", "playback_url", "thumbnail_url", "duration_seconds")
 DOCUMENT_FIELDS = ("storage_key", "file_name", "mime_type", "file_size_bytes", "is_uploaded", "downloadable")
 LINK_FIELDS = ("url", "label", "description")
+SCORM_FIELDS = (
+    "storage_key", "file_name", "file_size_bytes", "status", "error_message", "extracted_prefix", "launch_path",
+    "scorm_version", "manifest_identifier", "manifest_title", "file_count", "total_size_bytes",
+    "completion_from_package",
+)
 QUIZ_SETTINGS_FIELDS = ("max_attempts", "pass_mark_percentage", "show_result_to_student")
 ESSAY_SETTINGS_FIELDS = (
     "question", "description", "submission_mode", "pass_mark_percentage", "max_attempts", "requires_moderation",
@@ -137,6 +143,7 @@ async def build_normalized_tree(
     videos = await by_item(CourseVideo)
     documents = await by_item(CourseDocument)
     links = await by_item(CourseLink)
+    scorm_packages = await by_item(CourseScormPackage)
     assessments = await by_item(CourseAssessment)
 
     # A draft item reads its live session through draft_of_id - live sessions are
@@ -261,6 +268,7 @@ async def build_normalized_tree(
                     "video": _pick(videos[item.id], VIDEO_FIELDS) if item.id in videos else None,
                     "document": _pick(documents[item.id], DOCUMENT_FIELDS) if item.id in documents else None,
                     "link": _pick(links[item.id], LINK_FIELDS) if item.id in links else None,
+                    "scorm": _pick(scorm_packages[item.id], SCORM_FIELDS) if item.id in scorm_packages else None,
                     "live_session": (
                         {
                             "id": str(live_session.id),

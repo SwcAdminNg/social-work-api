@@ -18,6 +18,10 @@ from app.modules.course.content_entity import (
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.dto import (
+    ScormCommitDTO,
+    ScormCommitResultDTO,
+    ScormContentDTO,
+    ScormProgressDTO,
     AssessmentStatsDTO,
     CourseCurriculumDTO,
     EnrolledCourseDTO,
@@ -48,6 +52,7 @@ from app.modules.learning.entity import (
     QuizGroupAttempt,
     QuizGroupAttemptStatusEnum,
     UserItemProgress,
+    UserScormProgress,
 )
 from app.modules.certificate.service import CertificateService
 from app.modules.notification.service import NotificationService
@@ -420,6 +425,8 @@ class LearningService:
             if doc:
                 dto.document_url = self.r2.generate_download_url(doc.storage_key)
                 dto.downloadable = doc.downloadable
+        elif item.item_type == CourseItemTypeEnum.SCORM:
+            dto.scorm = await self._build_scorm_content(user_id, course_id, item)
         elif item.item_type == CourseItemTypeEnum.LINKS:
             link = await self.content_repo.get_link_by_item(item_id)
             if link:
@@ -465,6 +472,160 @@ class LearningService:
                     )
 
         return dto
+
+    # -- scorm / interactive packages -------------------------------------------
+
+    @staticmethod
+    def _scorm_progress_dto(progress: UserScormProgress | None) -> ScormProgressDTO | None:
+        if progress is None:
+            return None
+        return ScormProgressDTO(
+            lesson_status=progress.lesson_status,
+            success_status=progress.success_status,
+            lesson_location=progress.lesson_location,
+            score_raw=float(progress.score_raw) if progress.score_raw is not None else None,
+            score_max=float(progress.score_max) if progress.score_max is not None else None,
+            total_time_seconds=progress.total_time_seconds,
+            launch_count=progress.launch_count,
+            last_committed_at=progress.last_committed_at,
+        )
+
+    async def _build_scorm_content(self, user_id: uuid.UUID, course_id: uuid.UUID, item) -> ScormContentDTO | None:
+        from app.modules.course import scorm as scorm_lib
+
+        package = await self.content_repo.get_scorm_package_by_item(item.id)
+        if package is None:
+            return None
+        dto = ScormContentDTO(
+            status=package.status,
+            scorm_version=package.scorm_version,
+            manifest_title=package.manifest_title,
+            completion_from_package=package.completion_from_package,
+        )
+        if package.status != VideoStatusEnum.READY or not package.launch_path:
+            return dto
+        token = scorm_lib.create_launch_token(
+            user_id=user_id, item_id=item.id, package_id=package.id, course_id=course_id, mode="learn"
+        )
+        dto.launch_url = scorm_lib.build_launch_url(token, package.launch_path)
+        dto.launch_expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.scorm_launch_token_expire_minutes
+        )
+        dto.progress = self._scorm_progress_dto(await self.repo.get_scorm_progress(user_id, item.id))
+        return dto
+
+    async def build_scorm_runtime_seed(
+        self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, mode: str, commit_url: str
+    ) -> dict:
+        """What the injected runtime shim starts from: the learner's identity,
+        their saved CMI values and the URL to commit back to. Also counts the
+        launch. Preview mode gets an empty, non-saving runtime."""
+        from app.modules.course import scorm as scorm_lib
+
+        user = await UserRepository(self.session).get_by_id(user_id)
+        learner_name = f"{user.last_name}, {user.first_name}".strip(", ") if user else ""
+        seed: dict = {
+            "mode": mode,
+            "learnerId": str(user_id),
+            "learnerName": learner_name,
+            "commitUrl": commit_url if mode == "learn" else None,
+            "data": {},
+            "totalTime": scorm_lib.format_total_time_12(0),
+            "totalTimeIso": scorm_lib.format_total_time_2004(0),
+        }
+        if mode != "learn":
+            return seed
+
+        progress = await self.repo.get_or_create_scorm_progress(user_id, item_id)
+        progress.launch_count = (progress.launch_count or 0) + 1
+        await self.session.commit()
+
+        data = dict(progress.cmi_data or {})
+        # Session-only keys never come back on a fresh launch.
+        for key in ("cmi.core.session_time", "cmi.session_time", "cmi.core.exit", "cmi.exit"):
+            data.pop(key, None)
+        seed["data"] = data
+        seed["totalTime"] = scorm_lib.format_total_time_12(progress.total_time_seconds)
+        seed["totalTimeIso"] = scorm_lib.format_total_time_2004(progress.total_time_seconds)
+        return seed
+
+    async def commit_scorm(
+        self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, payload: ScormCommitDTO
+    ) -> ScormCommitResultDTO:
+        """Persists what the package reported through the LMS API. The item is
+        marked completed once the package says completed/passed (or, for
+        packages flagged `completion_from_package=False`, on the first commit)."""
+        access = await self.repo.get_user_course_access(user_id, course_id)
+        if not access:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
+        item = await self.content_repo.get_item(item_id)
+        if not item or item.item_type != CourseItemTypeEnum.SCORM:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an interactive package")
+        package = await self.content_repo.get_scorm_package_by_item(item_id)
+        if package is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Package not found")
+
+        # Keep the stored map bounded: only cmi.* keys, each value capped.
+        data = {
+            str(k)[:200]: str(v)[:64000]
+            for k, v in payload.data.items()
+            if str(k).startswith("cmi.") and not str(k).endswith(("_children", "_count", "_version"))
+        }
+        if len(data) > 2000:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Too many runtime values")
+
+        progress = await self.repo.get_or_create_scorm_progress(user_id, item_id)
+        merged = dict(progress.cmi_data or {})
+        merged.update(data)
+        progress.cmi_data = merged
+
+        progress.lesson_status = (
+            (merged.get("cmi.core.lesson_status") or merged.get("cmi.completion_status") or "").lower() or None
+        )
+        progress.success_status = (merged.get("cmi.success_status") or "").lower() or None
+        progress.lesson_location = merged.get("cmi.core.lesson_location") or merged.get("cmi.location") or None
+        progress.suspend_data = merged.get("cmi.suspend_data") or None
+        progress.score_raw = self._as_number(merged.get("cmi.core.score.raw") or merged.get("cmi.score.raw"))
+        progress.score_min = self._as_number(merged.get("cmi.core.score.min") or merged.get("cmi.score.min"))
+        progress.score_max = self._as_number(merged.get("cmi.core.score.max") or merged.get("cmi.score.max"))
+
+        if progress.active_session_id != payload.session_id:
+            progress.active_session_id = payload.session_id
+            progress.active_session_base_seconds = progress.total_time_seconds or 0
+        progress.total_time_seconds = (progress.active_session_base_seconds or 0) + payload.session_seconds
+        progress.last_committed_at = datetime.now(timezone.utc)
+
+        reported_complete = progress.lesson_status in ("completed", "passed") or progress.success_status == "passed"
+        should_complete = reported_complete or not package.completion_from_package
+
+        item_progress = await self.repo.get_user_item_progress(user_id, item_id)
+        already = bool(item_progress and item_progress.is_completed)
+        if should_complete and not already:
+            try:
+                await self._ensure_section_unlocked(user_id, course_id, item.section_id)
+            except HTTPException:
+                should_complete = False
+        if should_complete and not already:
+            await self.repo.mark_item_completed(user_id, item_id)
+            await self._recalculate_progress(user_id, course_id)
+            already = True
+
+        await self.session.commit()
+        return ScormCommitResultDTO(
+            is_completed=already,
+            lesson_status=progress.lesson_status,
+            success_status=progress.success_status,
+            total_time_seconds=progress.total_time_seconds,
+        )
+
+    @staticmethod
+    def _as_number(value) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     async def _fill_quiz_content(self, dto: LearningItemContentDTO, user_id: uuid.UUID, item_id: uuid.UUID, assessment) -> None:
         settings = await self.content_repo.get_quiz_settings(assessment.id)

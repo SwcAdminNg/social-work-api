@@ -38,6 +38,41 @@ class UserItemProgress(BaseEntity):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class UserScormProgress(BaseEntity):
+    """A learner's SCORM runtime data for one item - what the package wrote
+    through the LMS API (lesson status, bookmark, suspend data, score) so it
+    can resume where it left off. One row per (user, item); the full key/value
+    map goes in `cmi_data`, the hot fields are mirrored into columns."""
+
+    __tablename__ = "user_scorm_progress"
+    __table_args__ = (UniqueConstraint("user_id", "item_id", name="uq_user_scorm_progress"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id"), nullable=False, index=True
+    )
+    # SCORM 1.2 lesson_status / 2004 completion_status, lower-case.
+    lesson_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # SCORM 2004 success_status (passed/failed/unknown); None for 1.2 packages.
+    success_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    lesson_location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suspend_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    score_raw: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    score_min: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    score_max: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    total_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Session-time bookkeeping: the package reports elapsed time for the
+    # *current* session on every commit, so we remember which session the last
+    # commit came from and the total before it started (see LearningService).
+    active_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    active_session_base_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    launch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    cmi_data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    last_committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class QuizAttempt(BaseEntity):
     __tablename__ = "quiz_attempts"
 

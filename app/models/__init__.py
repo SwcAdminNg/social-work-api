@@ -14,6 +14,7 @@ from app.modules.course.content_entity import (  # noqa: F401
     CourseQuizOption,
     CourseQuizQuestion,
     CourseQuizSettings,
+    CourseScormPackage,
     CourseVideo,
     LiveSessionExternalInvite,
 )
@@ -33,6 +34,7 @@ from app.modules.learning.entity import (  # noqa: F401
     QuizGroupAttempt,
     UserCourseProgress,
     UserItemProgress,
+    UserScormProgress,
 )
 from app.modules.certificate.entity import Certificate, CertificateTemplate  # noqa: F401
 from app.modules.group.entity import Group, GroupMembership  # noqa: F401

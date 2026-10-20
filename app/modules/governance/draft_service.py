@@ -28,6 +28,7 @@ from app.modules.course.content_entity import (
     AssessmentTypeEnum,
     CourseAssessment,
     CourseDocument,
+    CourseScormPackage,
     CourseEssaySettings,
     CourseLink,
     CourseLiveSession,
@@ -58,7 +59,7 @@ _AUDIT_COLUMNS = frozenset(
     {"id", "created_at", "updated_at", "deleted_at", "restored_at", "created_by", "updated_by", "deleted_by", "restored_by"}
 )
 _SETTINGS_MODELS = (CourseQuizSettings, CourseEssaySettings, CourseQuizGroupSettings)
-_ITEM_CHILD_MODELS = (CourseVideo, CourseDocument, CourseLink)
+_ITEM_CHILD_MODELS = (CourseVideo, CourseDocument, CourseLink, CourseScormPackage)
 
 
 def _columns(model) -> list[str]:
@@ -893,7 +894,9 @@ class DraftService:
 
     async def _apply_snapshot_children(self, draft: CourseItem, snap: dict) -> None:
         s = self.session
-        child_specs = ((CourseVideo, "video"), (CourseDocument, "document"), (CourseLink, "link"))
+        child_specs = (
+            (CourseVideo, "video"), (CourseDocument, "document"), (CourseLink, "link"), (CourseScormPackage, "scorm"),
+        )
         for model, key in child_specs:
             data = snap.get(key)
             row = (await s.execute(select(model).where(model.course_item_id == draft.id))).scalar_one_or_none()

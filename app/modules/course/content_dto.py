@@ -122,6 +122,9 @@ class CourseItemCreateDTO(CreateDTO):
     # Only meaningful when item_type == DOCUMENT. Off by default so a newly
     # uploaded document is view/stream-only until the instructor opts it in.
     downloadable: bool = False
+    # SCORM only (file_name above is the zip's name). When false, simply opening
+    # the package completes the item - for content that never reports status.
+    scorm_completion_from_package: bool = True
     # Required only when item_type == LINKS.
     url: str | None = Field(default=None, max_length=2000)
     label: str | None = Field(default=None, max_length=255)
@@ -172,6 +175,8 @@ class CourseItemUpdateDTO(UpdateDTO):
     item_description: str | None = Field(default=None, max_length=10000)
     # Only settable when the item is a DOCUMENT.
     downloadable: bool | None = None
+    # Only settable when the item is SCORM.
+    scorm_completion_from_package: bool | None = None
     # Only settable when the item is LINKS.
     url: str | None = Field(default=None, max_length=2000)
     label: str | None = Field(default=None, max_length=255)
@@ -252,6 +257,47 @@ class DocumentUploadCredentialsDTO(BaseDTO):
 class DocumentFinalizeDTO(BaseDTO):
     mime_type: str | None = None
     file_size_bytes: int | None = Field(default=None, ge=0)
+
+
+# ---------------------------------------------------------------------------
+# SCORM / interactive package
+# ---------------------------------------------------------------------------
+
+
+class CourseScormPackagePublicDTO(BaseDTO):
+    status: VideoStatusEnum
+    scorm_version: str | None = None
+    manifest_title: str | None = None
+    completion_from_package: bool = True
+
+
+class CourseScormPackageManageDTO(CourseScormPackagePublicDTO):
+    file_name: str
+    file_size_bytes: int | None = None
+    storage_key: str
+    launch_path: str | None = None
+    manifest_identifier: str | None = None
+    file_count: int | None = None
+    total_size_bytes: int | None = None
+    error_message: str | None = None
+
+
+class ScormUploadCredentialsDTO(BaseDTO):
+    upload_url: str
+    storage_key: str
+
+
+class ScormFinalizeDTO(BaseDTO):
+    file_size_bytes: int | None = Field(default=None, ge=0)
+
+
+class ScormLaunchDTO(BaseDTO):
+    """A staff preview launch: nothing the package reports is saved."""
+
+    launch_url: str
+    launch_path: str
+    scorm_version: str | None = None
+    expires_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +585,7 @@ class CourseItemReadDTO(AuditDTO):
     assessment: CourseAssessmentPublicDTO | None = None
     link: CourseLinkDTO | None = None
     live_session: CourseLiveSessionDTO | None = None
+    scorm: CourseScormPackagePublicDTO | None = None
 
 
 class CourseItemManageReadDTO(AuditDTO):
@@ -554,6 +601,7 @@ class CourseItemManageReadDTO(AuditDTO):
     assessment: CourseAssessmentManageDTO | None = None
     link: CourseLinkDTO | None = None
     live_session: CourseLiveSessionDTO | None = None
+    scorm: CourseScormPackageManageDTO | None = None
 
 
 class CourseSectionReadDTO(AuditDTO):

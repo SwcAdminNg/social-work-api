@@ -236,6 +236,48 @@ class LearningItemContentDTO(BaseDTO):
     # Assessment - quiz group (nested quizzes)
     quiz_group: QuizGroupContentDTO | None = None
 
+    # -- scorm / interactive package ---
+    scorm: "ScormContentDTO | None" = None
+
+
+class ScormProgressDTO(BaseDTO):
+    lesson_status: str | None = None
+    success_status: str | None = None
+    lesson_location: str | None = None
+    score_raw: float | None = None
+    score_max: float | None = None
+    total_time_seconds: int = 0
+    launch_count: int = 0
+    last_committed_at: datetime | None = None
+
+
+class ScormContentDTO(BaseDTO):
+    """Everything the learning page needs to play an interactive package. The
+    launch URL already carries a signed token scoped to this learner + item, so
+    the iframe needs no cookies or headers; the runtime inside the package
+    saves progress straight back to the API through the same token."""
+
+    status: VideoStatusEnum
+    scorm_version: str | None = None
+    manifest_title: str | None = None
+    completion_from_package: bool = True
+    launch_url: str | None = None
+    launch_expires_at: datetime | None = None
+    progress: ScormProgressDTO | None = None
+
+
+class ScormCommitDTO(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
+    session_seconds: int = Field(default=0, ge=0, le=60 * 60 * 24)
+    data: dict[str, str] = Field(default_factory=dict)
+
+
+class ScormCommitResultDTO(BaseDTO):
+    is_completed: bool
+    lesson_status: str | None = None
+    success_status: str | None = None
+    total_time_seconds: int = 0
+
 
 class QuizSubmitDTO(BaseModel):
     answers: dict[uuid.UUID, list[uuid.UUID]]  # Question ID -> List of chosen Option IDs
@@ -345,3 +387,6 @@ class UserLiveSessionDTO(BaseDTO):
     # mean N external calls to daily.co. Fetch the single-item endpoint (which
     # mints a fresh signed link) once the student picks a specific session to watch.
     recording_status: VideoStatusEnum | None = None
+
+
+LearningItemContentDTO.model_rebuild()

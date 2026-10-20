@@ -14,6 +14,7 @@ from app.modules.course.content_dto import (
     CourseSectionManageReadDTO,
     CourseSectionReadDTO,
     RevisionDocumentUrlDTO,
+    ScormLaunchDTO,
 )
 from app.modules.course.content_service import CourseContentService
 from app.modules.governance.approval_centre import ApprovalCentreService, ApprovalKindEnum, ApprovalViewEnum
@@ -183,6 +184,26 @@ async def get_revision_document(
     await service.ensure_can_view(current_user, course)
     data = await CourseContentService(db).get_review_document(course.id, item_id)
     return ApiResponse(message="Document URL generated successfully", data=data)
+
+
+@router.get(
+    "/revisions/{revision_id}/items/{item_id}/scorm",
+    response_model=ApiResponse[ScormLaunchDTO],
+    summary="A short-lived browse-mode launch URL for an interactive package in the revision's working "
+    "copy. Available to anyone who can view the revision; nothing is saved.",
+)
+async def get_revision_scorm_launch(
+    revision_id: uuid.UUID,
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ScormLaunchDTO]:
+    service = RevisionService(db)
+    revision = await service.get_revision(revision_id)
+    course = await service.get_course(revision.course_id)
+    await service.ensure_can_view(current_user, course)
+    data = await CourseContentService(db).get_scorm_preview_launch(item_id, current_user, course_id=course.id)
+    return ApiResponse(message="Preview launch URL generated", data=data)
 
 
 @router.get(

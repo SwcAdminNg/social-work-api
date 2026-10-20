@@ -38,6 +38,9 @@ from app.modules.course.content_dto import (
     QuizAIGenerateRequestDTO,
     QuizAIGenerateResponseDTO,
     QuizAIAutocompleteResponseDTO,
+    ScormFinalizeDTO,
+    ScormLaunchDTO,
+    ScormUploadCredentialsDTO,
     QuizGroupSectionCreateDTO,
     QuizGroupSectionUpdateDTO,
     QuizOptionCreateDTO,
@@ -762,15 +765,16 @@ async def delete_section(
 class ItemCreateResponseDTO(CourseItemManageReadDTO):
     video_upload: VideoUploadCredentialsDTO | None = None
     document_upload: DocumentUploadCredentialsDTO | None = None
+    scorm_upload: ScormUploadCredentialsDTO | None = None
 
 
 @router.post(
     "/{course_id}/sections/{section_id}/items",
     response_model=ApiResponse[ItemCreateResponseDTO],
     status_code=status.HTTP_201_CREATED,
-    summary="Add a curriculum item (quiz/document/video/link) to a section. For VIDEO/DOCUMENT "
-    "types the response includes the upload credentials the frontend uses to upload "
-    "directly to Bunny Stream / Cloudflare R2.",
+    summary="Add a curriculum item (quiz/document/video/link/SCORM package) to a section. For "
+    "VIDEO/DOCUMENT/SCORM types the response includes the upload credentials the frontend uses "
+    "to upload directly to Bunny Stream / Cloudflare R2.",
 )
 async def create_item(
     course_id: uuid.UUID,
@@ -779,7 +783,7 @@ async def create_item(
     current_user: User = Depends(get_current_content_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ItemCreateResponseDTO]:
-    item, video_credentials, document_credentials = await CourseContentService(db).create_item(
+    item, video_credentials, document_credentials, scorm_credentials = await CourseContentService(db).create_item(
         course_id, section_id, payload, current_user
     )
     data = ItemCreateResponseDTO(
@@ -794,6 +798,7 @@ async def create_item(
         item_description=item.item_description,
         video_upload=video_credentials,
         document_upload=document_credentials,
+        scorm_upload=scorm_credentials,
     )
     return ApiResponse(message="Item created successfully", data=data)
 
@@ -878,6 +883,72 @@ async def get_document_download_url(
 ) -> ApiResponse[dict]:
     url = await CourseContentService(db).get_document_download_url(slug, item_id, current_user)
     return ApiResponse(message="Download URL generated successfully", data={"download_url": url})
+
+
+# ---------------------------------------------------------------------------
+# SCORM / interactive package content
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/items/{item_id}/scorm/finalize",
+    response_model=ApiResponse[CourseItemManageReadDTO],
+    summary="Confirm a SCORM / interactive package zip reached R2, then validate and unpack it "
+    "so it can be played (admin or owning instructor). Returns the refreshed item.",
+)
+async def finalize_scorm(
+    item_id: uuid.UUID,
+    payload: ScormFinalizeDTO,
+    current_user: User = Depends(get_current_content_staff),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[CourseItemManageReadDTO]:
+    service = CourseContentService(db)
+    package = await service.finalize_scorm(item_id, payload, current_user)
+    item = await service.repo.get_item(package.course_item_id)
+    data = CourseItemManageReadDTO(
+        id=item.id,
+        created_at=item.created_at,
+        section_id=item.section_id,
+        title=item.title,
+        item_type=item.item_type,
+        order_index=item.order_index,
+        is_preview=item.is_preview,
+        estimated_minutes=item.estimated_minutes,
+        item_description=item.item_description,
+        scorm=service.map_scorm_package(package, manage=True),
+    )
+    return ApiResponse(message="Package uploaded and ready", data=data)
+
+
+@router.post(
+    "/items/{item_id}/scorm/refresh-upload",
+    response_model=ApiResponse[ScormUploadCredentialsDTO],
+    summary="Issue upload credentials for a replacement package zip on an existing SCORM item "
+    "(admin or owning instructor). Call /scorm/finalize again once the PUT completes.",
+)
+async def refresh_scorm_upload(
+    item_id: uuid.UUID,
+    file_name: str = Query(min_length=1, max_length=255),
+    current_user: User = Depends(get_current_content_staff),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ScormUploadCredentialsDTO]:
+    credentials = await CourseContentService(db).refresh_scorm_upload(item_id, file_name, current_user)
+    return ApiResponse(message="Upload credentials issued", data=credentials)
+
+
+@router.get(
+    "/items/{item_id}/scorm/preview",
+    response_model=ApiResponse[ScormLaunchDTO],
+    summary="Get a short-lived launch URL to preview a SCORM / interactive package as a learner "
+    "would, in browse mode - nothing is saved (admin or owning instructor)",
+)
+async def preview_scorm(
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_content_staff),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ScormLaunchDTO]:
+    data = await CourseContentService(db).get_scorm_preview_launch(item_id, current_user)
+    return ApiResponse(message="Preview launch URL generated", data=data)
 
 
 # ---------------------------------------------------------------------------

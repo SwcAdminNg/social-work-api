@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.course.content_entity import (
     CourseAssessment,
     CourseDocument,
+    CourseScormPackage,
     CourseEssaySettings,
     CourseLink,
     CourseLiveSession,
@@ -89,6 +90,21 @@ class CourseContentRepository:
         if not item_ids:
             return []
         stmt = select(CourseDocument).where(CourseDocument.course_item_id.in_(item_ids))
+        return (await self.session.execute(stmt)).scalars().all()
+
+    # -- scorm package -----------------------------------------------------------
+
+    async def get_scorm_package_by_item(self, item_id: uuid.UUID) -> CourseScormPackage | None:
+        stmt = select(CourseScormPackage).where(CourseScormPackage.course_item_id == item_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_scorm_package(self, package_id: uuid.UUID) -> CourseScormPackage | None:
+        return await self.session.get(CourseScormPackage, package_id)
+
+    async def list_scorm_packages_for_items(self, item_ids: Sequence[uuid.UUID]) -> Sequence[CourseScormPackage]:
+        if not item_ids:
+            return []
+        stmt = select(CourseScormPackage).where(CourseScormPackage.course_item_id.in_(item_ids))
         return (await self.session.execute(stmt)).scalars().all()
 
     # -- link ------------------------------------------------------------------
