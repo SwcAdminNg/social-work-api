@@ -386,7 +386,7 @@ class CourseContentService:
                 )
             )
             scorm_credentials = ScormUploadCredentialsDTO(
-                upload_url=self.r2.generate_upload_url(storage_key, "application/zip"), storage_key=storage_key
+                upload_url=self.r2.generate_upload_url(storage_key), storage_key=storage_key
             )
         elif payload.item_type == CourseItemTypeEnum.LINKS:
             if not payload.url:
@@ -798,7 +798,7 @@ class CourseContentService:
         package.error_message = None
         await self.session.commit()
         return ScormUploadCredentialsDTO(
-            upload_url=self.r2.generate_upload_url(storage_key, "application/zip"), storage_key=storage_key
+            upload_url=self.r2.generate_upload_url(storage_key), storage_key=storage_key
         )
 
     async def get_scorm_preview_launch(
