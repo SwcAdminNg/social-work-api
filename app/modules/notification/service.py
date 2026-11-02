@@ -372,12 +372,15 @@ class NotificationService:
             {"reference": reference, "amount": amount, "user_id": str(user.id)},
         )
 
-    async def notify_admins_new_contact_message(self, name: str, message_id: uuid.UUID) -> None:
+    async def notify_admins_new_contact_message(
+        self, name: str, message_id: uuid.UUID, source_page: str | None = None
+    ) -> None:
+        where = f" from {source_page}" if source_page else ""
         await self._notify_admins(
             NotificationTypeEnum.NEW_CONTACT_MESSAGE,
-            "New contact message", f"{name} sent a message via the contact form.",
+            "New contact message", f"{name} sent a message via the contact form{where}.",
             "/dashboard/contact-messages",
-            {"message_id": str(message_id)},
+            {"message_id": str(message_id), "source_page": source_page},
         )
 
     async def notify_admins_new_support_ticket(self, ticket_id: uuid.UUID, subject: str) -> None:

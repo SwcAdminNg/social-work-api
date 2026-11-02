@@ -20,7 +20,9 @@ class ContactUsService:
         message = ContactUsMessage(**payload.model_dump())
         await self.repository.create(message)
         await self.session.commit()
-        await NotificationService(self.session).notify_admins_new_contact_message(message.full_name, message.id)
+        await NotificationService(self.session).notify_admins_new_contact_message(
+            message.full_name, message.id, message.source_page
+        )
         return message
 
     async def list(

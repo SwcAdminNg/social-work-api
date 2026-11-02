@@ -18,7 +18,7 @@ class ContactUsMessage(BaseEntity):
 
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    phone_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     platform: Mapped[PlatformEnum] = mapped_column(
@@ -28,3 +28,6 @@ class ContactUsMessage(BaseEntity):
         Enum(ContactUsCategoryEnum, name="contact_us_category_enum", native_enum=True), nullable=True
     )
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Path of the page whose form sent the message, e.g. "/contact" or
+    # "/policy-and-advocacy", so admins can see where enquiries come from.
+    source_page: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
