@@ -3,6 +3,7 @@
 
 from app.modules.auth.entity import PasswordResetToken, RefreshToken  # noqa: F401
 from app.modules.contact_us.entity import ContactUsMessage  # noqa: F401
+from app.modules.passkey.entity import PasskeyCredential  # noqa: F401
 from app.modules.course.content_entity import (  # noqa: F401
     CourseAssessment,
     CourseDocument,

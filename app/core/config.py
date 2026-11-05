@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     company_phone: str = "+234 803 447 1063"
     company_support_email: str = "support@socialworknigeria.org"
     company_info_email: str = "info@socialworknigeria.com"
+    # Passkeys (WebAuthn). Comma-separated page origins allowed to register and use
+    # passkeys, e.g. "https://www.socialworknigeria.org,https://instructor.example.org".
+    # Empty uses frontend_url, instructor_frontend_url and localhost:3000-3002;
+    # www and bare-domain variants are accepted automatically.
+    webauthn_allowed_origins: str = ""
+    webauthn_rp_name: str = "Social Work Consultancy Ltd"
+
     # Mailbox that receives an email for every contact-form enquiry, with the
     # visitor's address as Reply-To. Empty (the default) sends no email; set it
     # once SWCL confirms who monitors the inbox. Enquiries are always stored
