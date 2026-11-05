@@ -4,11 +4,24 @@ from datetime import date
 from fastapi import Query
 from pydantic import EmailStr, Field, computed_field, field_validator
 
-from app.common.base_dto import AuditDTO, CreateDTO
+from app.common.base_dto import AuditDTO, BaseDTO, CreateDTO
 from app.modules.user.entity import PlatformEnum
 from app.modules.contact_us.entity import CONTACT_CATEGORY_LABELS, ContactUsCategoryEnum
 
 MESSAGE_MAX_LENGTH = 5000
+DETAILS_MAX_ITEMS = 20
+
+
+class ContactDetailDTO(BaseDTO):
+    """One labelled answer from a richer form, e.g. {"label": "Country", "value": "Nigeria"}."""
+
+    label: str = Field(min_length=1, max_length=60)
+    value: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("label", "value", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 _PHONE_CHARS = re.compile(r"^\+?[\d\s().-]+$")
 
 
@@ -25,6 +38,7 @@ class ContactUsCreateDTO(CreateDTO):
     subject: str | None = Field(default=None, max_length=255)
     # Path of the page the form was submitted from, e.g. "/contact".
     source_page: str | None = Field(default=None, max_length=255)
+    details: list[ContactDetailDTO] | None = Field(default=None, max_length=DETAILS_MAX_ITEMS)
     # Spam trap: the public forms include a hidden "website" field that people
     # never see. Anything in it marks the submission as automated. Never stored.
     website: str | None = Field(default=None, max_length=500, exclude=True)
@@ -51,6 +65,18 @@ class ContactUsCreateDTO(CreateDTO):
             raise ValueError("Enter a valid phone number, including the country code, or leave it blank.")
         return value
 
+    @field_validator("details", mode="before")
+    @classmethod
+    def _drop_blank_details(cls, value: object) -> object:
+        # Optional questions left blank arrive as empty values; leave them out.
+        if isinstance(value, list):
+            kept = [
+                item for item in value
+                if not (isinstance(item, dict) and not str(item.get("value") or "").strip())
+            ]
+            return kept or None
+        return value
+
     @property
     def is_spam(self) -> bool:
         return bool(self.website and self.website.strip())
@@ -66,6 +92,7 @@ class ContactUsReadDTO(AuditDTO):
     category: ContactUsCategoryEnum | None = None
     subject: str | None = None
     source_page: str | None = None
+    details: list[ContactDetailDTO] | None = None
     # Short reference such as "SWCL-1A2B3C4D", shown to the visitor on success.
     reference: str
 

@@ -56,6 +56,7 @@ async def send_enquiry_notification(message: ContactUsReadDTO) -> None:
             phone_number=message.phone_number,
             source_page=message.source_page,
             message=message.message,
+            details=[(d.label, d.value) for d in message.details or []],
         )
     except Exception:  # noqa: BLE001 - never let a mail failure surface to the visitor
         logger.exception("Failed to email contact enquiry %s", message.reference)

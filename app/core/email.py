@@ -267,6 +267,7 @@ class EmailService:
         phone_number: str | None,
         source_page: str | None,
         message: str,
+        details: list[tuple[str, str]] | None = None,
     ) -> None:
         """Forwards a contact-form enquiry to the monitored mailbox. Replying goes
         straight to the visitor (Reply-To). Visitor text is HTML-escaped and never
@@ -280,6 +281,7 @@ class EmailService:
             ("Email", email),
             ("Phone", phone_number or "Not given"),
             ("Sent from", source_page or "Not recorded"),
+            *(details or []),
         ]
         table = "".join(
             f'<tr><td style="padding: 4px 12px 4px 0; color: #6b7280; white-space: nowrap;">{e(label)}</td>'

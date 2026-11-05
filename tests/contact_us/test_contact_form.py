@@ -191,3 +191,62 @@ def test_router_reads_first_forwarded_address():
         client = None
 
     assert contact_router._client_ip(Req()) == "203.0.113.9"
+
+
+# --- structured details (mentorship forms) ---------------------------------
+
+
+def test_details_are_kept_in_order_and_blank_answers_dropped():
+    dto = make(
+        category="mentor_application",
+        details=[
+            {"label": "Country", "value": " Nigeria "},
+            {"label": "Time zone", "value": "  "},
+            {"label": "Qualifications", "value": "BSc Social Work"},
+        ],
+    )
+    assert [(d.label, d.value) for d in dto.details] == [("Country", "Nigeria"), ("Qualifications", "BSc Social Work")]
+    assert dto.model_dump()["details"][0] == {"label": "Country", "value": "Nigeria"}
+
+
+def test_all_blank_details_become_none():
+    assert make(details=[{"label": "Availability", "value": ""}]).details is None
+
+
+def test_too_many_details_are_rejected():
+    with pytest.raises(ValidationError):
+        make(details=[{"label": f"Q{i}", "value": "x"} for i in range(21)])
+
+
+def test_overlong_detail_value_is_rejected():
+    with pytest.raises(ValidationError):
+        make(details=[{"label": "Experience", "value": "x" * 1001}])
+
+
+def test_mentor_application_round_trip(client):
+    payload = {
+        **FORM_PAYLOAD,
+        "category": "mentor_application",
+        "source_page": "/mentorship",
+        "details": [{"label": "Country", "value": "Ghana"}, {"label": "Time zone", "value": "GMT"}],
+    }
+    res = client.post("/contact-us", json=payload)
+    assert res.status_code == 201, res.text
+    data = res.json()["data"]
+    assert data["category_label"] == "Mentor Application"
+    assert data["details"] == [{"label": "Country", "value": "Ghana"}, {"label": "Time zone", "value": "GMT"}]
+
+
+def test_notification_email_includes_details(client, monkeypatch):
+    sent = {}
+
+    async def fake_send(self, to_email, subject, html_body, attachments=None, reply_to=None):
+        sent["html"] = html_body
+
+    from app.core.email import EmailService
+
+    monkeypatch.setattr(EmailService, "_send", fake_send)
+    monkeypatch.setattr(settings, "contact_notify_email", "inbox@example.org")
+    payload = {**FORM_PAYLOAD, "details": [{"label": "Preferred pathway", "value": "<b>Early career</b>"}]}
+    assert client.post("/contact-us", json=payload).status_code == 201
+    assert "Preferred pathway" in sent["html"] and "&lt;b&gt;Early career&lt;/b&gt;" in sent["html"]

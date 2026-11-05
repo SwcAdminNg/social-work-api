@@ -1,5 +1,6 @@
 import enum
 from sqlalchemy import Enum, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.base_entity import BaseEntity
@@ -14,6 +15,7 @@ class ContactUsCategoryEnum(str, enum.Enum):
     ACCOUNT_SUPPORT = "account_support"
     PARTNERSHIP = "partnership"
     OTHER = "other"
+    MENTOR_APPLICATION = "mentor_application"
 
 
 # Human-readable names, matching the enquiry types on the public contact form.
@@ -25,6 +27,7 @@ CONTACT_CATEGORY_LABELS: dict[ContactUsCategoryEnum, str] = {
     ContactUsCategoryEnum.ACCOUNT_SUPPORT: "Account or Learning Support",
     ContactUsCategoryEnum.PARTNERSHIP: "Partnership or Organisational Enquiry",
     ContactUsCategoryEnum.OTHER: "Other",
+    ContactUsCategoryEnum.MENTOR_APPLICATION: "Mentor Application",
 }
 
 
@@ -46,6 +49,10 @@ class ContactUsMessage(BaseEntity):
     # Path of the page whose form sent the message, e.g. "/contact" or
     # "/policy-and-advocacy", so admins can see where enquiries come from.
     source_page: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Extra answers from richer forms (e.g. the mentorship forms' country, stage
+    # and pathway), as an ordered list of {"label": ..., "value": ...} pairs so the
+    # admin can show them in the order the visitor saw them.
+    details: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     @property
     def reference(self) -> str:
