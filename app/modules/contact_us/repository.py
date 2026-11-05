@@ -1,7 +1,7 @@
 from datetime import datetime, time, timedelta
 from typing import Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.base_repository import BaseRepository
@@ -27,14 +27,20 @@ class ContactUsRepository(BaseRepository[ContactUsMessage]):
             if filters.source_page is not None:
                 stmt = stmt.where(ContactUsMessage.source_page == filters.source_page)
             if filters.search is not None:
-                term = f"%{filters.search}%"
-                stmt = stmt.where(
-                    or_(
-                        ContactUsMessage.full_name.ilike(term),
-                        ContactUsMessage.email.ilike(term),
-                        ContactUsMessage.phone_number.ilike(term),
+                search = filters.search.strip()
+                term = f"%{search}%"
+                conditions = [
+                    ContactUsMessage.full_name.ilike(term),
+                    ContactUsMessage.email.ilike(term),
+                    ContactUsMessage.phone_number.ilike(term),
+                ]
+                # A reference such as "SWCL-1A2B3C4D" is the start of the message id.
+                ref = search.upper().removeprefix("SWCL-").replace("-", "")
+                if 4 <= len(ref) <= 32 and all(c in "0123456789ABCDEF" for c in ref):
+                    conditions.append(
+                        func.replace(cast(ContactUsMessage.id, String), "-", "").ilike(f"{ref.lower()}%")
                     )
-                )
+                stmt = stmt.where(or_(*conditions))
             if filters.start_date is not None:
                 stmt = stmt.where(
                     ContactUsMessage.created_at >= datetime.combine(filters.start_date, time.min)

@@ -1,4 +1,5 @@
 import base64
+import html
 import logging
 
 import httpx
@@ -64,6 +65,7 @@ class EmailService:
         subject: str,
         html_body: str,
         attachments: list[dict] | None = None,
+        reply_to: str | None = None,
     ) -> None:
         payload = {
             "from": f"{settings.resend_from_name} <{settings.resend_from_email}>",
@@ -71,6 +73,8 @@ class EmailService:
             "subject": subject,
             "html": html_body,
         }
+        if reply_to:
+            payload["reply_to"] = [reply_to]
         if attachments:
             payload["attachments"] = attachments
 
@@ -251,6 +255,50 @@ class EmailService:
           <p style="word-break: break-all; color: #2563eb;">{dashboard_link}</p>
         """
         await self._send(to_email, subject, _wrap_email(body, preheader="A support ticket needs attention."))
+
+    async def send_contact_enquiry_email(
+        self,
+        to_email: str,
+        *,
+        reference: str,
+        category_label: str,
+        full_name: str,
+        email: str,
+        phone_number: str | None,
+        source_page: str | None,
+        message: str,
+    ) -> None:
+        """Forwards a contact-form enquiry to the monitored mailbox. Replying goes
+        straight to the visitor (Reply-To). Visitor text is HTML-escaped and never
+        placed in a header: the subject uses only the enquiry type and reference."""
+        e = html.escape
+        subject = f"New enquiry: {category_label} ({reference})"
+        rows = [
+            ("Reference", reference),
+            ("Enquiry type", category_label),
+            ("Name", full_name),
+            ("Email", email),
+            ("Phone", phone_number or "Not given"),
+            ("Sent from", source_page or "Not recorded"),
+        ]
+        table = "".join(
+            f'<tr><td style="padding: 4px 12px 4px 0; color: #6b7280; white-space: nowrap;">{e(label)}</td>'
+            f'<td style="padding: 4px 0; color: #111827;">{e(value)}</td></tr>'
+            for label, value in rows
+        )
+        body = f"""
+          <h2 style="color: #111827; margin-top: 0;">New contact enquiry</h2>
+          <table style="border-collapse: collapse; font-size: 14px; margin-bottom: 16px;">{table}</table>
+          <div style="padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
+                      white-space: pre-wrap; word-break: break-word;">{e(message)}</div>
+          <p style="color: #6b7280; font-size: 13px;">Reply to this email to answer {e(full_name)} directly.</p>
+        """
+        await self._send(
+            to_email,
+            subject,
+            _wrap_email(body, preheader=f"{category_label} enquiry {reference}"),
+            reply_to=email,
+        )
 
     async def send_registration_welcome_email(self, to_email: str, first_name: str, login_link: str) -> None:
         subject = f"Welcome to {settings.company_name}, {first_name}!"

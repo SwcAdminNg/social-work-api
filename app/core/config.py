@@ -52,10 +52,20 @@ class Settings(BaseSettings):
 
     # Company / HQ info (used in email footers and PDF receipts)
     company_name: str = "Social Work Nigeria"
-    company_address: str = "Okonkwo Estate, Zaramagada-Fwavei, RVWV+VJ6, Rayfield Rd, Jos 930103, Plateau, Nigeria"
-    company_phone: str = "+234 (0) 800 123 4567"
+    company_address: str = "Flat C3, Okonkwo Estate, Jos, Plateau State, Nigeria"
+    company_phone: str = "+234 803 447 1063"
     company_support_email: str = "support@socialworknigeria.org"
     company_info_email: str = "info@socialworknigeria.com"
+    # Mailbox that receives an email for every contact-form enquiry, with the
+    # visitor's address as Reply-To. Empty (the default) sends no email; set it
+    # once SWCL confirms who monitors the inbox. Enquiries are always stored
+    # and shown in the admin either way.
+    contact_notify_email: str = ""
+    # Contact form abuse limits, per client IP and per sender email.
+    contact_rate_limit_per_ip: int = 5
+    contact_rate_limit_per_email: int = 3
+    contact_rate_limit_window_seconds: int = 600
+
     company_logo_url: str = "https://www.socialworknigeria.org/_next/image?url=%2Fimages%2Flogo%2Fswc-dark-logo.png&w=640&q=75"
     # Local logo file (checked first, before falling back to company_logo_url) so
     # PDF receipts can embed a full-resolution copy instead of the resized image
