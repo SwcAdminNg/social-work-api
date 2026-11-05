@@ -182,6 +182,22 @@ class ResourceService:
         has_access = await CourseService(self.session).check_course_access(resource.course_id, user)
         return has_access, (None if has_access else "ENROLLMENT_REQUIRED")
 
+    async def attach_course_info(self, dtos) -> None:
+        """Fills course_title/course_slug on DTOs tied to a course, in one query."""
+        course_ids = {dto.course_id for dto in dtos if dto.course_id is not None}
+        if not course_ids:
+            return
+        rows = (
+            await self.session.execute(select(Course.id, Course.title, Course.slug).where(Course.id.in_(course_ids)))
+        ).all()
+        info = {row[0]: (row[1], row[2]) for row in rows}
+        for dto in dtos:
+            if dto.course_id in info:
+                dto.course_title, dto.course_slug = info[dto.course_id]
+
+    async def count_published_by_category(self):
+        return await self.repository.count_published_by_category()
+
     async def attach_access(self, dtos, user: User | None) -> None:
         """Mutates a list of ResourceReadDTO (or subclass) in place, filling
         `can_access`/`access_reason`. Batches the "do I own this course" check

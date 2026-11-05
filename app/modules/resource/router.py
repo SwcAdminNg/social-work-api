@@ -19,6 +19,7 @@ from app.modules.resource.content_dto import (
 )
 from app.modules.resource.content_service import ResourceContentService
 from app.modules.resource.dto import (
+    ResourceCategoryCountDTO,
     ResourceCreateDTO,
     ResourceFilterParams,
     ResourceManageFilterParams,
@@ -280,7 +281,21 @@ async def list_resources(
         items=[ResourceReadDTO.model_validate(item) for item in items], total_items=total, params=pagination
     )
     await service.attach_access(data.data, current_user)
+    await service.attach_course_info(data.data)
     return data
+
+
+@router.get(
+    "/category-counts",
+    response_model=ApiResponse[list[ResourceCategoryCountDTO]],
+    summary="Published resource counts per category (public)",
+)
+async def resource_category_counts(db: AsyncSession = Depends(get_db)) -> ApiResponse[list[ResourceCategoryCountDTO]]:
+    rows = await ResourceService(db).count_published_by_category()
+    return ApiResponse(
+        message="Resource category counts retrieved successfully",
+        data=[ResourceCategoryCountDTO(category=category, count=count) for category, count in rows],
+    )
 
 
 @router.get(
@@ -295,7 +310,7 @@ async def list_resources_for_course(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[ResourceReadDTO]:
     service = ResourceService(db)
-    filters = ResourceFilterParams(category=None, course_id=course_id, search=None)
+    filters = ResourceFilterParams(category=None, course_id=course_id, search=None, visibility=None)
     items, total = await service.list_published(pagination, filters)
     data = PaginatedResponse.create(
         items=[ResourceReadDTO.model_validate(item) for item in items], total_items=total, params=pagination

@@ -63,6 +63,10 @@ class ResourceReadDTO(AuditDTO):
         default=None,
         description="Set only when can_access is false - 'LOGIN_REQUIRED' or 'ENROLLMENT_REQUIRED'.",
     )
+    # Filled on the public library for course-tied resources so the site can say
+    # which course includes the resource and link to it.
+    course_title: str | None = None
+    course_slug: str | None = None
 
 
 class ResourceFilterParams:
@@ -71,10 +75,19 @@ class ResourceFilterParams:
         category: ResourceCategoryEnum | None = Query(None, description="Filter by category"),
         course_id: uuid.UUID | None = Query(None, description="Filter by tied course"),
         search: str | None = Query(None, description="Search by name or description"),
+        visibility: ResourceVisibilityEnum | None = Query(
+            None, description="Filter by access level: PUBLIC, LOGGED_IN or COURSE_ENROLLED"
+        ),
     ) -> None:
         self.category = category
         self.course_id = course_id
         self.search = search
+        self.visibility = visibility
+
+
+class ResourceCategoryCountDTO(BaseDTO):
+    category: ResourceCategoryEnum
+    count: int
 
 
 class ResourceManageFilterParams(ResourceFilterParams):
@@ -85,7 +98,7 @@ class ResourceManageFilterParams(ResourceFilterParams):
         search: str | None = Query(None, description="Search by name or description"),
         is_published: bool | None = Query(None, description="Filter by published state"),
     ) -> None:
-        super().__init__(category=category, course_id=course_id, search=search)
+        super().__init__(category=category, course_id=course_id, search=search, visibility=None)
         self.is_published = is_published
 
 

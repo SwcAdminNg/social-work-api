@@ -28,7 +28,20 @@ class ResourceRepository(BaseRepository[Resource]):
         if filters.search:
             term = f"%{filters.search}%"
             stmt = stmt.where(or_(Resource.name.ilike(term), Resource.description.ilike(term)))
+        if getattr(filters, "visibility", None) is not None:
+            stmt = stmt.where(Resource.visibility == filters.visibility)
         return stmt
+
+    async def count_published_by_category(self) -> list[tuple[str, int]]:
+        """Published resource counts per category, so the library only offers
+        categories that actually contain something."""
+        published = self._base_select().where(Resource.is_published.is_(True)).subquery()
+        stmt = (
+            select(published.c.category, func.count())
+            .group_by(published.c.category)
+            .order_by(func.count().desc())
+        )
+        return [(row[0], row[1]) for row in (await self.session.execute(stmt)).all()]
 
     async def list_published(
         self, pagination: PaginationParams, filters: ResourceFilterParams | None = None
