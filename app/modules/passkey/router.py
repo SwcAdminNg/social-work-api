@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.api_route import NoNullAPIRoute
@@ -12,6 +12,8 @@ from app.modules.auth.dto import AuthSessionDTO
 from app.modules.passkey.dto import (
     AdminPasskeyFilterParams,
     AdminPasskeyReadDTO,
+    PasskeyCheckRequestDTO,
+    PasskeyCheckResponseDTO,
     PasskeyLoginOptionsRequestDTO,
     PasskeyLoginVerifyRequestDTO,
     PasskeyOptionsResponseDTO,
@@ -21,11 +23,19 @@ from app.modules.passkey.dto import (
     PasskeyRegistrationVerifyRequestDTO,
     PasskeyRenameRequestDTO,
 )
+from app.core.config import settings
+from app.modules.contact_us.rate_limit import SlidingWindowLimiter
 from app.modules.passkey.service import PasskeyService
 from app.modules.user.entity import User
 
 router = APIRouter(prefix="/auth/passkeys", tags=["Passkeys"], route_class=NoNullAPIRoute)
+check_limiter = SlidingWindowLimiter()
 admin_router = APIRouter(prefix="/admin/passkeys", tags=["Admin Passkeys"], route_class=NoNullAPIRoute)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded[:64] or (request.client.host if request.client else "unknown")
 
 
 def _user_agent(request: Request) -> str | None:
@@ -42,6 +52,22 @@ async def passkey_login_options(
 ) -> ApiResponse[PasskeyOptionsResponseDTO]:
     data = await PasskeyService(db).start_login(payload.origin, payload.identifier)
     return ApiResponse(message="Passkey sign-in started", data=PasskeyOptionsResponseDTO(**data))
+
+
+@router.post(
+    "/check",
+    response_model=ApiResponse[PasskeyCheckResponseDTO],
+    summary="Does this email or username have a passkey on this site? (rate limited)",
+)
+async def passkey_check(
+    payload: PasskeyCheckRequestDTO, request: Request, db: AsyncSession = Depends(get_db)
+) -> ApiResponse[PasskeyCheckResponseDTO]:
+    if not check_limiter.hit(
+        f"ip:{_client_ip(request)}", settings.passkey_check_limit_per_ip, settings.passkey_check_window_seconds
+    ):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Please wait a moment.")
+    available = await PasskeyService(db).has_passkey(payload.origin, payload.identifier)
+    return ApiResponse(message="OK", data=PasskeyCheckResponseDTO(available=available))
 
 
 @router.post("/login/verify", response_model=ApiResponse[AuthSessionDTO], summary="Finish a passkey sign-in")

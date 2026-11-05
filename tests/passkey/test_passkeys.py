@@ -338,3 +338,75 @@ async def test_rename_and_remove(user):
     assert renamed.name == "Phone"
     await service.delete(user, passkey.id)
     assert passkey in session.deleted
+
+
+# -- availability check (sign-in page) -------------------------------------------
+
+
+async def test_has_passkey_only_for_accounts_with_one_on_this_site(user, monkeypatch):
+    from app.modules.user.repository import UserRepository
+
+    other = SimpleNamespace(id=uuid.uuid4(), is_active=True, is_suspended=False)
+
+    async def by_identifier(self, identifier):
+        return {"ada": user, "bola": other}.get(identifier)
+
+    monkeypatch.setattr(UserRepository, "get_by_email_or_username", by_identifier)
+    session, service, *_ = await register(user)
+
+    class CountSession(FakeSession):
+        async def execute(self, stmt):
+            params = stmt.compile().params
+            uid = next(v for k, v in params.items() if k.startswith("user_id"))
+            rp = next(v for k, v in params.items() if k.startswith("rp_id"))
+            count = sum(1 for p in session.passkeys if p.user_id == uid and p.rp_id == rp)
+            return SimpleNamespace(scalar_one=lambda: count)
+
+    checker = PasskeyService(CountSession())
+    assert await checker.has_passkey(ORIGIN, "ada") is True
+    assert await checker.has_passkey(ORIGIN, "bola") is False  # account without passkeys
+    assert await checker.has_passkey(ORIGIN, "nobody") is False  # no such account
+    assert await checker.has_passkey(ORIGIN, "  ") is False
+    user.is_suspended = True
+    assert await checker.has_passkey(ORIGIN, "ada") is False
+
+
+async def test_has_passkey_rejects_unknown_sites(user):
+    with pytest.raises(HTTPException):
+        await PasskeyService(FakeSession()).has_passkey("https://evil.example.com", "ada")
+
+
+def test_admin_url_is_an_allowed_origin(monkeypatch):
+    monkeypatch.setattr(settings, "admin_frontend_url", "https://admin.socialworknigeria.org")
+    assert "https://admin.socialworknigeria.org" in allowed_origins()
+    assert relying_party_for("https://admin.socialworknigeria.org")[1] == "admin.socialworknigeria.org"
+
+
+def test_check_endpoint_is_rate_limited(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.core.database import get_db
+    from app.main import app
+    from app.modules.passkey import router as passkey_router
+
+    async def fake_db():
+        yield None
+
+    async def has(self, origin, identifier):
+        return identifier == "ada"
+
+    monkeypatch.setattr(PasskeyService, "has_passkey", has)
+    monkeypatch.setattr(settings, "passkey_check_limit_per_ip", 2)
+    passkey_router.check_limiter.reset()
+    app.dependency_overrides[get_db] = fake_db
+    try:
+        with TestClient(app) as client:
+            body = {"origin": ORIGIN, "identifier": "ada"}
+            headers = {"X-Forwarded-For": "203.0.113.50"}
+            first = client.post("/auth/passkeys/check", json=body, headers=headers)
+            assert first.status_code == 200 and first.json()["data"] == {"available": True}
+            assert client.post("/auth/passkeys/check", json={**body, "identifier": "x"}, headers=headers).json()["data"] == {"available": False}
+            assert client.post("/auth/passkeys/check", json=body, headers=headers).status_code == 429
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        passkey_router.check_limiter.reset()

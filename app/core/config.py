@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # student/admin frontend above) - used for links that must land an instructor
     # on their own app, e.g. the instructor account setup link.
     instructor_frontend_url: str = "https://social-work-instructor.vercel.app"
+    # Admin panel address, when it is deployed separately from frontend_url.
+    # Used to allow passkeys on the admin panel.
+    admin_frontend_url: str = ""
 
     # Resend (email)
     resend_api_key: str
@@ -62,6 +65,9 @@ class Settings(BaseSettings):
     # www and bare-domain variants are accepted automatically.
     webauthn_allowed_origins: str = ""
     webauthn_rp_name: str = "Social Work Consultancy Ltd"
+    # Limits for the sign-in page's "does this account have a passkey here?" check.
+    passkey_check_limit_per_ip: int = 20
+    passkey_check_window_seconds: int = 60
 
     # Mailbox that receives an email for every contact-form enquiry, with the
     # visitor's address as Reply-To. Empty (the default) sends no email; set it

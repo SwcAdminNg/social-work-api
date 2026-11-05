@@ -81,6 +81,7 @@ def allowed_origins() -> set[str]:
     sources = configured or [
         settings.frontend_url,
         settings.instructor_frontend_url,
+        settings.admin_frontend_url,
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:3002",
@@ -295,6 +296,27 @@ class PasskeyService:
         await self.session.commit()
 
     # -- sign-in (public) -------------------------------------------------------
+
+    async def has_passkey(self, origin: str, identifier: str) -> bool:
+        """Whether the account behind an email or username has a passkey for this
+        site, so the sign-in page only offers fingerprint sign-in when it can work."""
+        _, rp_id = relying_party_for(origin)
+        identifier = (identifier or "").strip()
+        if not identifier:
+            return False
+        user = await self.users.get_by_email_or_username(identifier)
+        if user is None or not user.is_active or user.is_suspended:
+            return False
+        stmt = (
+            select(func.count())
+            .select_from(PasskeyCredential)
+            .where(
+                PasskeyCredential.user_id == user.id,
+                PasskeyCredential.rp_id == rp_id,
+                PasskeyCredential.deleted_at.is_(None),
+            )
+        )
+        return (await self.session.execute(stmt)).scalar_one() > 0
 
     async def start_login(self, origin: str, identifier: str | None) -> dict:
         origin, rp_id = relying_party_for(origin)

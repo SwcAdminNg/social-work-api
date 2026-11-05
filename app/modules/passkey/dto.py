@@ -55,6 +55,14 @@ class PasskeyLoginOptionsRequestDTO(_OriginDTO):
     identifier: str | None = Field(default=None, max_length=255)
 
 
+class PasskeyCheckRequestDTO(_OriginDTO):
+    identifier: str = Field(min_length=1, max_length=255)
+
+
+class PasskeyCheckResponseDTO(BaseDTO):
+    available: bool
+
+
 class PasskeyLoginVerifyRequestDTO(_OriginDTO):
     challenge_token: str = Field(min_length=10)
     credential: dict[str, Any]
