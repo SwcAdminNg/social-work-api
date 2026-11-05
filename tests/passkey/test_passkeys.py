@@ -106,6 +106,7 @@ class FakeSession:
     def __init__(self):
         self.passkeys: list[PasskeyCredential] = []
         self.deleted: list[PasskeyCredential] = []
+        self.events: list[tuple[str, object]] = []
 
     async def execute(self, stmt):
         sql = str(stmt)
@@ -127,10 +128,10 @@ class FakeSession:
         self.passkeys.append(obj)
 
     async def commit(self):
-        pass
+        self.events.append(("commit", None))
 
     async def refresh(self, obj):
-        pass
+        self.events.append(("refresh", obj))
 
     async def delete(self, obj):
         self.deleted.append(obj)
@@ -277,6 +278,10 @@ async def test_sign_in_with_registered_passkey(user, login_stubs):
     assert result.tokens.extended is True
     assert passkey.sign_count == 1 and passkey.last_used_at is not None
     assert user.last_login_at is not None
+    # Regression: the user must be reloaded after the last commit before the
+    # response is built, or reading updated_at triggers a lazy load (500 in production).
+    last_commit = max(i for i, (kind, _) in enumerate(session.events) if kind == "commit")
+    assert any(kind == "refresh" and obj is user for kind, obj in session.events[last_commit + 1:])
 
 
 async def test_sign_in_with_identifier_limits_allowed_credentials(user, login_stubs, monkeypatch):

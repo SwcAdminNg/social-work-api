@@ -382,6 +382,9 @@ class PasskeyService:
             await NotificationService(self.session).notify_login(user)
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to create login notification for %s: %s", user.email, exc)
+        # Setting last_login_at makes the database regenerate users.updated_at; reload
+        # the row so building the response does not trigger a lazy (sync) load.
+        await self.session.refresh(user)
         return AuthSessionDTO(
             user=UserReadDTO.model_validate(user), tokens=tokens, access=await build_user_access(self.session, user)
         )
