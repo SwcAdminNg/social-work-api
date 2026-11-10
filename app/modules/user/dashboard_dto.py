@@ -43,6 +43,15 @@ class ContinueLearningItemDTO(BaseModel):
     thumbnail_url: str | None = None
     progress_percent: int
     last_accessed_at: datetime | None = None
+    # Where to resume: lesson counts plus the first item still to do, so the
+    # card can say "Lesson 4 of 12" and link straight to it. All optional - a
+    # course with no live items yet, or one fully worked through, has no next item.
+    total_items: int = 0
+    completed_items: int = 0
+    next_item_id: uuid.UUID | None = None
+    next_item_title: str | None = None
+    next_item_type: str | None = None
+    next_section_title: str | None = None
 
 
 class DashboardOverviewDTO(BaseModel):

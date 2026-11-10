@@ -121,8 +121,13 @@ class DashboardService:
         # Continue learning: most-recently-accessed enrolled courses, excluding
         # ones already completed (those belong in the certificates section
         # instead). Over-fetch a bit since completed courses get filtered out.
-        rows, _ = await LearningRepository(self.db).get_enrolled_courses_with_progress(
+        learning_repo = LearningRepository(self.db)
+        rows, _ = await learning_repo.get_enrolled_courses_with_progress(
             user_id, PaginationParams(page=1, page_size=limit * 3)
+        )
+        in_progress = [(course, progress) for course, progress in rows if not progress.is_completed][:limit]
+        resume_points = await learning_repo.get_course_resume_points(
+            user_id, [course.id for course, _ in in_progress]
         )
         continue_learning = [
             ContinueLearningItemDTO(
@@ -132,10 +137,10 @@ class DashboardService:
                 thumbnail_url=course.thumbnail_url,
                 progress_percent=progress.progress_percent,
                 last_accessed_at=progress.last_accessed_at,
+                **resume_points.get(course.id, {}),
             )
-            for course, progress in rows
-            if not progress.is_completed
-        ][:limit]
+            for course, progress in in_progress
+        ]
 
         upcoming_live_sessions, _ = await LearningService(self.db).list_user_live_sessions(
             user_id, PaginationParams(page=1, page_size=limit), start_date=datetime.now(timezone.utc)

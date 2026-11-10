@@ -461,6 +461,68 @@ class LearningRepository:
         result = await self.session.execute(stmt)
         return result.scalar() or 0
 
+    async def get_course_resume_points(
+        self, user_id: uuid.UUID, course_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, dict]:
+        """Where a learner stands in each of `course_ids`, in one query: how many
+        live items the course has, how many they have completed, and the first
+        item still to do (in section order, then item order) - the lesson a
+        "Resume" button should open. Items unlock in order, so that item is
+        always reachable. `next_*` keys are absent once everything is complete."""
+        if not course_ids:
+            return {}
+
+        completed_item_ids = (
+            select(UserItemProgress.item_id)
+            .where(
+                UserItemProgress.user_id == user_id,
+                UserItemProgress.is_completed.is_(True),
+            )
+            .scalar_subquery()
+        )
+        stmt = (
+            select(
+                CourseSection.course_id,
+                CourseItem.id,
+                CourseItem.title,
+                CourseItem.item_type,
+                CourseSection.title,
+                CourseItem.id.in_(completed_item_ids),
+            )
+            .join(CourseSection, CourseItem.section_id == CourseSection.id)
+            .where(
+                CourseSection.course_id.in_(course_ids),
+                CourseItem.deleted_at.is_(None),
+                CourseSection.deleted_at.is_(None),
+                # Live rows only - explicit so it also holds inside include_drafts.
+                CourseItem.revision_id.is_(None),
+                CourseSection.revision_id.is_(None),
+            )
+            .order_by(
+                CourseSection.course_id,
+                CourseSection.order_index,
+                CourseSection.created_at,
+                CourseItem.order_index,
+                CourseItem.created_at,
+            )
+        )
+
+        points: dict[uuid.UUID, dict] = {}
+        for course_id, item_id, item_title, item_type, section_title, is_completed in (
+            await self.session.execute(stmt)
+        ).all():
+            point = points.setdefault(course_id, {"total_items": 0, "completed_items": 0})
+            point["total_items"] += 1
+            if is_completed:
+                point["completed_items"] += 1
+            elif "next_item_id" not in point:
+                point["next_item_id"] = item_id
+                point["next_item_title"] = item_title
+                point["next_item_type"] = getattr(item_type, "value", item_type)
+                point["next_section_title"] = section_title
+
+        return points
+
     async def get_enrolled_courses_with_progress(self, user_id: uuid.UUID, pagination: "PaginationParams") -> tuple[list[tuple[Course, UserCourseProgress]], int]:
         stmt = (
             select(Course, UserCourseProgress)
