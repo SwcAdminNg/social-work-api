@@ -54,6 +54,17 @@ class ContinueLearningItemDTO(BaseModel):
     next_section_title: str | None = None
 
 
+class DashboardCountsDTO(BaseModel):
+    """The unread and open counts the dashboard header, sidebar and tab bar
+    show on every page. Cheap to fetch, so the shell can load it on first
+    mount instead of waiting for the homepage overview."""
+
+    unread_notifications_count: int
+    unread_community_messages_count: int
+    open_support_tickets_count: int
+    cart_item_count: int
+
+
 class DashboardOverviewDTO(BaseModel):
     """Everything the dashboard homepage needs above the fold, composed in one
     request so the frontend isn't firing off 8-10 parallel calls on page load.

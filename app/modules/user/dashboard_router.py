@@ -6,7 +6,7 @@ from app.common.pagination import PaginatedResponse, PaginationParams
 from app.common.responses import ApiResponse
 from app.core.database import get_db
 from app.modules.auth.dependencies import get_current_user
-from app.modules.user.dashboard_dto import ActivityLogDTO, DashboardOverviewDTO, UserStatsDTO
+from app.modules.user.dashboard_dto import ActivityLogDTO, DashboardCountsDTO, DashboardOverviewDTO, UserStatsDTO
 from app.modules.user.dashboard_service import DashboardService
 from app.modules.user.entity import User
 
@@ -27,6 +27,19 @@ async def get_dashboard_overview(
     service = DashboardService(db)
     overview = await service.get_overview(current_user, limit=limit)
     return ApiResponse(message="Dashboard overview retrieved successfully", data=overview)
+
+
+@router.get(
+    "/counts",
+    response_model=ApiResponse[DashboardCountsDTO],
+    summary="Get the unread and open counts shown in the dashboard header and sidebar",
+)
+async def get_dashboard_counts(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[DashboardCountsDTO]:
+    counts = await DashboardService(db).get_counts(current_user)
+    return ApiResponse(message="Dashboard counts retrieved successfully", data=counts)
 
 
 @router.get(

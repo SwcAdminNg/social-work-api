@@ -21,7 +21,13 @@ from app.modules.payment.schema import CurrentSubscriptionResponse, Subscription
 from app.modules.payment.service import PaymentService
 from app.modules.support.repository import SupportTicketRepository
 from app.modules.user.activity_entity import ActivityLog
-from app.modules.user.dashboard_dto import ActivityLogDTO, ContinueLearningItemDTO, DashboardOverviewDTO, UserStatsDTO
+from app.modules.user.dashboard_dto import (
+    ActivityLogDTO,
+    ContinueLearningItemDTO,
+    DashboardCountsDTO,
+    DashboardOverviewDTO,
+    UserStatsDTO,
+)
 from app.modules.user.entity import User
 
 
@@ -108,6 +114,15 @@ class DashboardService:
         items = (await self.db.execute(stmt)).scalars().all()
 
         return items, total
+
+    async def get_counts(self, user: User) -> DashboardCountsDTO:
+        unread_community = await CommunityService(self.db).get_unread_count(user)
+        return DashboardCountsDTO(
+            unread_notifications_count=await NotificationRepository(self.db).count_unread(user.id),
+            unread_community_messages_count=unread_community.total_unread,
+            open_support_tickets_count=await SupportTicketRepository(self.db).count_open_for_user(user.id),
+            cart_item_count=len(await CartRepository(self.db).list_for_user(user.id)),
+        )
 
     async def get_overview(self, user: User, limit: int = 5) -> DashboardOverviewDTO:
         """Composes every "above the fold" dashboard section in one call. Each
