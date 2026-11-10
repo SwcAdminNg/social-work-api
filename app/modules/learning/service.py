@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum
-from app.modules.course.entity import CourseItemTypeEnum
+from app.modules.course.entity import Course, CourseItemTypeEnum
 from app.core.config import settings
 from app.modules.course.content_entity import (
     AssessmentTypeEnum,
@@ -389,8 +389,17 @@ class LearningService:
                 )
             )
 
+        course_row = (
+            await self.session.execute(
+                select(Course.title, Course.average_rating, Course.total_reviews).where(Course.id == course_id)
+            )
+        ).first()
+
         return CourseCurriculumDTO(
             course_id=course_id,
+            course_title=course_row.title if course_row else None,
+            average_rating=float(course_row.average_rating or 0) if course_row else 0.0,
+            total_reviews=int(course_row.total_reviews or 0) if course_row else 0,
             progress_percent=progress.progress_percent,
             is_completed=progress.is_completed,
             sections=section_dtos

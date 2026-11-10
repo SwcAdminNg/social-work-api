@@ -47,6 +47,10 @@ class LearningSectionDTO(BaseDTO):
 
 class CourseCurriculumDTO(BaseDTO):
     course_id: uuid.UUID
+    # Shown in the course player's header and outline.
+    course_title: str | None = None
+    average_rating: float = 0.0
+    total_reviews: int = 0
     progress_percent: int
     is_completed: bool
     sections: list[LearningSectionDTO]
