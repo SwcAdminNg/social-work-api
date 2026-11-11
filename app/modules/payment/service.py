@@ -1,13 +1,16 @@
 import logging
+import re
 import uuid
 import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.email import email_service
+from app.modules.coupon.entity import Coupon
 from app.modules.coupon.service import CouponService
 from app.modules.course.access_entity import CourseAccessGrantedViaEnum, UserCourseAccess
 from app.modules.course.repository import CourseRepository
@@ -492,6 +495,86 @@ class PaymentService:
         pdf_bytes = await self._build_receipt_pdf(transaction, user, courses)
         return pdf_bytes, f"Receipt-{transaction.reference}.pdf"
 
+    async def get_my_transaction_detail(self, reference: str, current_user: User) -> dict:
+        """One of the current user's orders with its courses or plan, coupon and payment facts."""
+        transaction = await self.repo.get_transaction_by_reference(reference)
+        # Someone else's order answers like a missing one, so references can't be probed.
+        if not transaction or transaction.user_id != current_user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
+
+        plan = None
+        if transaction.transaction_type == TransactionTypeEnum.CART_PURCHASE:
+            lines = await self.repo.get_transaction_items(transaction.id)
+            courses = {c.id: c for c in await self.course_repo.get_many_by_ids([i.course_id for i in lines])}
+            pairs = [(courses.get(line.course_id), line.course_id, float(line.unit_price)) for line in lines]
+        elif transaction.transaction_type == TransactionTypeEnum.COURSE_PURCHASE and transaction.related_id:
+            course = await self.course_repo.get_by_id(transaction.related_id)
+            price = transaction.subtotal_amount if transaction.subtotal_amount is not None else transaction.amount
+            pairs = [(course, transaction.related_id, float(price))]
+        else:
+            pairs = []
+            if transaction.related_id:
+                plan = await self.session.get(SubscriptionPlan, transaction.related_id)
+
+        instructor_ids = {c.instructor_id for c, _, _ in pairs if c is not None and c.instructor_id}
+        instructors: dict = {}
+        if instructor_ids:
+            rows = (await self.session.execute(select(User).where(User.id.in_(instructor_ids)))).scalars().all()
+            instructors = {u.id: f"{u.first_name} {u.last_name}".strip() for u in rows}
+
+        items = [
+            {
+                "course_id": course_id,
+                "title": course.title if course else "Course no longer available",
+                "slug": course.slug if course else None,
+                "thumbnail_url": course.thumbnail_url if course else None,
+                "instructor_name": instructors.get(course.instructor_id) if course else None,
+                "unit_price": unit_price,
+            }
+            for course, course_id, unit_price in pairs
+        ]
+
+        coupon_code = None
+        if transaction.coupon_id:
+            coupon = await self.session.get(Coupon, transaction.coupon_id)
+            coupon_code = coupon.code if coupon else None
+
+        is_course = transaction.transaction_type in (
+            TransactionTypeEnum.COURSE_PURCHASE,
+            TransactionTypeEnum.CART_PURCHASE,
+        )
+        return {
+            "id": transaction.id,
+            "reference": transaction.reference,
+            "amount": float(transaction.amount),
+            "subtotal_amount": float(transaction.subtotal_amount) if transaction.subtotal_amount is not None else None,
+            "discount_amount": float(transaction.discount_amount or 0),
+            "tax_rate": float(transaction.tax_rate or 0),
+            "tax_amount": float(transaction.tax_amount or 0),
+            "gateway": transaction.gateway,
+            "status": transaction.status,
+            "transaction_type": transaction.transaction_type,
+            "created_at": transaction.created_at,
+            "updated_at": transaction.updated_at,
+            "coupon_code": coupon_code,
+            "items": items,
+            "plan": (
+                {
+                    "id": plan.id,
+                    "name": plan.name,
+                    "description": plan.description,
+                    "duration_days": plan.duration_days,
+                    "price": float(plan.price),
+                }
+                if plan
+                else None
+            ),
+            "payment": payment_summary(transaction.gateway_response),
+            "customer_name": f"{current_user.first_name} {current_user.last_name}".strip(),
+            "customer_email": current_user.email,
+            "receipt_available": is_course and transaction.status == TransactionStatusEnum.SUCCESS,
+        }
+
     async def _send_payment_receipt(self, transaction: Transaction, courses: list) -> None:
         try:
             user = await self.session.get(User, transaction.user_id)
@@ -781,3 +864,45 @@ class PaymentService:
             "failed_renewal": failed_count,
             "expired_no_card": expired_count
         }
+
+
+def payment_summary(gateway_response: dict | None) -> dict | None:
+    """Pick the display-safe parts of a gateway's response: how it was paid and when.
+
+    Authorization codes, signatures, customer codes and the like are left out on purpose.
+    """
+    if not isinstance(gateway_response, dict):
+        return None
+    auth = gateway_response.get("authorization")
+    if not isinstance(auth, dict):
+        auth = {}
+
+    def text(value) -> str | None:
+        value = str(value).strip() if value is not None else ""
+        return value or None
+
+    last4 = text(auth.get("last4"))
+    if last4 and not re.fullmatch(r"\d{4}", last4):
+        last4 = None
+
+    paid_at = None
+    raw_paid = gateway_response.get("paid_at") or gateway_response.get("paidAt") or gateway_response.get("transaction_date")
+    if raw_paid:
+        try:
+            paid_at = datetime.fromisoformat(str(raw_paid).replace("Z", "+00:00"))
+        except ValueError:
+            paid_at = None
+
+    summary = {
+        "channel": text(gateway_response.get("channel") or auth.get("channel")),
+        "card_type": text(auth.get("card_type")),
+        "brand": text(auth.get("brand")),
+        "last4": last4,
+        "exp_month": text(auth.get("exp_month")),
+        "exp_year": text(auth.get("exp_year")),
+        "bank": text(auth.get("bank")),
+        "currency": text(gateway_response.get("currency")),
+        "paid_at": paid_at,
+        "gateway_message": text(gateway_response.get("gateway_response")),
+    }
+    return summary if any(summary.values()) else None

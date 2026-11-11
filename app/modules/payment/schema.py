@@ -73,6 +73,66 @@ class TransactionReadDTO(BaseModel):
     user: UserReadDTO | None = None
 
 
+class OrderItemDTO(BaseModel):
+    """One course in an order, with the price it was bought at."""
+
+    course_id: uuid.UUID
+    title: str
+    slug: str | None = None
+    thumbnail_url: str | None = None
+    instructor_name: str | None = None
+    unit_price: float
+
+
+class OrderPlanDTO(BaseModel):
+    """The subscription plan an order paid for."""
+
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    duration_days: int
+    price: float
+
+
+class OrderPaymentDTO(BaseModel):
+    """Safe, display-only facts about how an order was paid (never tokens or codes)."""
+
+    channel: str | None = None
+    card_type: str | None = None
+    brand: str | None = None
+    last4: str | None = None
+    exp_month: str | None = None
+    exp_year: str | None = None
+    bank: str | None = None
+    currency: str | None = None
+    paid_at: datetime | None = None
+    gateway_message: str | None = None
+
+
+class TransactionDetailDTO(BaseModel):
+    """Everything the learner's order detail page shows for one purchase."""
+
+    id: uuid.UUID
+    reference: str
+    amount: float
+    subtotal_amount: float | None = None
+    discount_amount: float = 0
+    tax_rate: float = 0
+    tax_amount: float = 0
+    gateway: PaymentGatewayEnum
+    status: TransactionStatusEnum
+    transaction_type: TransactionTypeEnum
+    created_at: datetime
+    updated_at: datetime | None = None
+    coupon_code: str | None = None
+    items: list[OrderItemDTO] = Field(default_factory=list)
+    plan: OrderPlanDTO | None = None
+    payment: OrderPaymentDTO | None = None
+    customer_name: str | None = None
+    customer_email: str | None = None
+    receipt_available: bool = False
+
+
 class SubscriptionPlanCreateDTO(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None

@@ -22,6 +22,7 @@ from app.modules.payment.schema import (
     SubscriptionPlanUpdateDTO,
     VerifyPaymentResponse,
     TransactionReadDTO,
+    TransactionDetailDTO,
     CurrentSubscriptionResponse,
     ChangeSubscriptionPlanRequest,
     TaxFilterParams,
@@ -287,6 +288,20 @@ async def list_my_transactions(
         params=pagination,
     )
 
+
+
+@router.get(
+    "/transactions/me/{reference}",
+    response_model=ApiResponse[TransactionDetailDTO],
+    summary="Get one of the current user's orders in detail",
+)
+async def get_my_transaction(
+    reference: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[TransactionDetailDTO]:
+    data = await PaymentService(db).get_my_transaction_detail(reference, current_user)
+    return ApiResponse(message="Order retrieved", data=TransactionDetailDTO(**data))
 
 
 @router.get(
