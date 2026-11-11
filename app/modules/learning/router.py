@@ -25,6 +25,7 @@ from app.modules.learning.dto import (
     QuizGroupSaveProgressDTO,
     QuizGroupSubmitDTO,
     QuizResultDTO,
+    QuizSaveProgressDTO,
     QuizStartDTO,
     QuizSubmitDTO,
     UserAssessmentDTO,
@@ -127,6 +128,24 @@ async def start_quiz(
     service = LearningService(db)
     data = await service.start_quiz(current_user.id, course_id, item_id)
     return ApiResponse(message="Quiz ready", data=data)
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/quiz/progress",
+    response_model=ApiResponse[None],
+    summary="Save the answers of a started quiz so the student can leave and come back "
+    "to them later (start the quiz first)",
+)
+async def save_quiz_progress(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: QuizSaveProgressDTO,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    service = LearningService(db)
+    await service.save_quiz_progress(current_user.id, course_id, item_id, payload.answers)
+    return ApiResponse(message="Progress saved")
 
 
 @router.post(

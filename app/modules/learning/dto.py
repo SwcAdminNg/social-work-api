@@ -71,6 +71,12 @@ class QuizStartDTO(BaseDTO):
     aren't told a retry is reworded; staff see it on the attempt."""
 
     questions: list[QuizQuestionDTO]
+    # Answers saved so far on this attempt (empty when it's just been started).
+    saved_answers: dict[uuid.UUID, list[uuid.UUID]] = Field(default_factory=dict)
+
+
+class QuizSaveProgressDTO(BaseModel):
+    answers: dict[uuid.UUID, list[uuid.UUID]]  # Question ID -> chosen Option IDs
 
 
 class QuizAttemptDTO(BaseDTO):
@@ -234,6 +240,9 @@ class LearningItemContentDTO(BaseDTO):
     pass_mark_percentage: int | None = None
     show_result_to_student: bool | None = None
     previous_attempt: QuizAttemptDTO | None = None
+    # A standalone quiz the student has started but not submitted: its saved answers
+    # (`questions` above is that attempt's version). Null when nothing is in progress.
+    quiz_saved_answers: dict[uuid.UUID, list[uuid.UUID]] | None = None
 
     # Assessment - essay
     essay_question: str | None = None

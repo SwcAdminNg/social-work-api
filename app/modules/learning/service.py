@@ -661,6 +661,7 @@ class LearningService:
         pending = await self.repo.get_pending_quiz_version(user_id, item_id)
         if pending is not None:
             dto.questions = self._questions_from_presented(pending.presented_questions)
+            dto.quiz_saved_answers = self._answers_from_json(pending.answers)
 
         attempts_used = await self.repo.count_quiz_attempts(user_id, item_id)
         dto.max_attempts = max_attempts
@@ -782,7 +783,10 @@ class LearningService:
 
         pending = await self.repo.get_pending_quiz_version(user_id, item_id)
         if pending is not None:
-            return QuizStartDTO(questions=self._questions_from_presented(pending.presented_questions))
+            return QuizStartDTO(
+                questions=self._questions_from_presented(pending.presented_questions),
+                saved_answers=self._answers_from_json(pending.answers),
+            )
 
         questions = await self.content_repo.list_questions_for_quizzes([assessment.id])
         options = await self.content_repo.list_options_for_questions([q.id for q in questions])
@@ -797,6 +801,33 @@ class LearningService:
         await self.repo.save_pending_quiz_version(user_id, item_id, presented, paraphrased, model)
         await self.session.commit()
         return QuizStartDTO(questions=self._questions_from_presented(presented))
+
+    @staticmethod
+    def _answers_from_json(answers: dict | None) -> dict[uuid.UUID, list[uuid.UUID]]:
+        return {uuid.UUID(k): [uuid.UUID(v) for v in vs] for k, vs in (answers or {}).items()}
+
+    async def save_quiz_progress(
+        self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, answers: dict[uuid.UUID, list[uuid.UUID]]
+    ) -> None:
+        """Keep a standalone quiz's in-progress answers on the server, so the student
+        can leave and come back to them later, on any device."""
+        access = await self.repo.get_user_course_access(user_id, course_id)
+        if not access:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
+        pending = await self.repo.get_pending_quiz_version(user_id, item_id)
+        if pending is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Start the quiz before saving answers")
+
+        # Only keep answers to questions and options that are in this attempt.
+        allowed = {q["id"]: {o["id"] for o in q.get("options", [])} for q in pending.presented_questions}
+        cleaned = {}
+        for question_id, option_ids in answers.items():
+            options = allowed.get(str(question_id))
+            if options is None:
+                continue
+            cleaned[str(question_id)] = [str(o) for o in option_ids if str(o) in options]
+        await self.repo.save_pending_quiz_answers(pending, cleaned)
+        await self.session.commit()
 
     async def submit_quiz(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, answers: dict[uuid.UUID, list[uuid.UUID]]) -> QuizResultDTO:
         access = await self.repo.get_user_course_access(user_id, course_id)

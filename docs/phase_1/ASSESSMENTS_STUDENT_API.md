@@ -304,6 +304,9 @@ with their progress. Shape is `EnrolledCourseDTO` (a `CourseReadDTO` plus enroll
 - Students are not told a retry is reworded: no response carries a flag for it. Staff
   see it per attempt (`paraphrased` on the quiz attempts endpoint).
 - If the AI is unavailable the retry still starts, shuffled, in the original wording.
+- Save answers as the student goes with `POST .../quiz/progress` `{ "answers": {...} }`
+  (409 if the quiz hasn't been started). They come back in `saved_answers` from start
+  and in `quiz_saved_answers` on the item content until the quiz is submitted.
 
 Quiz groups do the same inside `quiz-group/start` (section 3b.1).
 

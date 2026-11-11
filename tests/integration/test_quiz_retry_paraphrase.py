@@ -124,10 +124,28 @@ async def test_retry_is_reworded_and_stable_until_submit(client, state, fake_dee
         q["id"]: [next(o["id"] for o in q["options"] if o["text"].startswith("Reworded: Right"))]
         for q in started["questions"]
     }
+
+    # Answers are kept on the server while the quiz is in progress.
+    first_q = started["questions"][0]["id"]
+    ok(await client.post(
+        f"/learning/courses/{cid}/items/{quiz_id}/quiz/progress",
+        json={"answers": {first_q: answers[first_q], "00000000-0000-0000-0000-000000000000": []}},
+        headers=lh,
+    ))
+    content = ok(await client.get(f"/learning/courses/{cid}/items/{quiz_id}", headers=lh))
+    assert content["quiz_saved_answers"] == {first_q: answers[first_q]}
+    resumed = ok(await client.post(f"/learning/courses/{cid}/items/{quiz_id}/quiz/start", headers=lh))
+    assert resumed["saved_answers"] == {first_q: answers[first_q]}
     result = ok(await client.post(
         f"/learning/courses/{cid}/items/{quiz_id}/quiz/submit", json={"answers": answers}, headers=lh
     ))
     assert result["passed"] is True and result["score"] == 100
+    content = ok(await client.get(f"/learning/courses/{cid}/items/{quiz_id}", headers=lh))
+    assert "quiz_saved_answers" not in content
+    no_attempt = await client.post(
+        f"/learning/courses/{cid}/items/{quiz_id}/quiz/progress", json={"answers": {}}, headers=lh
+    )
+    assert no_attempt.status_code == 409, no_attempt.text
 
 
 async def test_staff_see_each_attempt_as_the_learner_saw_it(client, state):

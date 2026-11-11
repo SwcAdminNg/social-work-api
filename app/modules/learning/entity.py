@@ -166,6 +166,9 @@ class PendingQuizVersion(BaseEntity):
     presented_questions: Mapped[list] = mapped_column(JSONB, nullable=False)
     paraphrased: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     paraphrase_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # {question_id_str: [option_id_str, ...]} saved as the student answers, so they
+    # can leave and pick up where they were on any device.
+    answers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class EssaySubmission(BaseEntity):

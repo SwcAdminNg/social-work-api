@@ -187,6 +187,10 @@ class LearningRepository:
         await self.session.flush()
         return pending
 
+    async def save_pending_quiz_answers(self, pending: PendingQuizVersion, answers: dict) -> None:
+        pending.answers = answers
+        await self.session.flush()
+
     async def delete_pending_quiz_version(self, pending: PendingQuizVersion) -> None:
         await self.session.delete(pending)
         await self.session.flush()
