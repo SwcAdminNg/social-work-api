@@ -135,6 +135,8 @@ class QuizGroupActiveAttemptDTO(BaseDTO):
     expires_at: datetime | None
     sections: list[QuizGroupSectionAttemptDTO]
     saved_answers: dict[uuid.UUID, list[uuid.UUID]]
+    # True when this attempt is a retry reworded by AI.
+    paraphrased: bool = False
 
 
 class QuizGroupSectionResultDTO(BaseDTO):

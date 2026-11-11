@@ -197,6 +197,7 @@ async def test_quiz_group_retry_is_reworded_and_reviewable(client, make_user, fa
     assert fake_deepseek == []
 
     retry = ok(await client.post(f"{base}/start", headers=lh))
+    assert retry["paraphrased"] is True
     texts = [q["text"] for s in retry["sections"] for q in s["questions"]]
     assert texts == ["Reworded: Ethics question", "Reworded: Practice question"]
     # A reload keeps the same reworded version.

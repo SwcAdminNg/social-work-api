@@ -1104,6 +1104,7 @@ class LearningService:
             expires_at=attempt.expires_at,
             sections=section_dtos,
             saved_answers=saved_answers,
+            paraphrased=bool(attempt.paraphrased),
         )
 
     def _build_group_result_dto(self, attempt: QuizGroupAttempt, show_result_to_student: bool) -> QuizGroupResultDTO:
