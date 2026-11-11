@@ -13,6 +13,7 @@ from app.modules.course.content_entity import AssessmentTypeEnum, CourseAssessme
 from app.modules.course.entity import Course, CourseItem, CourseSection
 from app.modules.learning.entity import (
     EssaySubmission,
+    PendingQuizVersion,
     QuizAttempt,
     QuizGroupAttempt,
     QuizGroupAttemptStatusEnum,
@@ -114,9 +115,26 @@ class LearningRepository:
             await self.session.flush()
 
     async def save_quiz_attempt(
-        self, user_id: uuid.UUID, item_id: uuid.UUID, score: float, passed: bool, answers: dict
+        self,
+        user_id: uuid.UUID,
+        item_id: uuid.UUID,
+        score: float,
+        passed: bool,
+        answers: dict,
+        presented_questions: list | None = None,
+        paraphrased: bool = False,
+        paraphrase_model: str | None = None,
     ) -> QuizAttempt:
-        attempt = QuizAttempt(user_id=user_id, item_id=item_id, score=score, passed=passed, answers=answers)
+        attempt = QuizAttempt(
+            user_id=user_id,
+            item_id=item_id,
+            score=score,
+            passed=passed,
+            answers=answers,
+            presented_questions=presented_questions,
+            paraphrased=paraphrased,
+            paraphrase_model=paraphrase_model,
+        )
         self.session.add(attempt)
         await self.session.flush()
         return attempt
@@ -137,6 +155,83 @@ class LearningRepository:
             QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id, QuizAttempt.deleted_at.is_(None)
         )
         return (await self.session.execute(stmt)).scalar() or 0
+
+    async def has_any_quiz_attempt(self, user_id: uuid.UUID, item_id: uuid.UUID) -> bool:
+        """Any attempt ever, including ones cleared by a module reset - a student who
+        has seen the quiz before is retrying it, reset or not."""
+        stmt = select(QuizAttempt.id).where(QuizAttempt.user_id == user_id, QuizAttempt.item_id == item_id).limit(1)
+        return (await self.session.execute(stmt)).first() is not None
+
+    async def get_pending_quiz_version(self, user_id: uuid.UUID, item_id: uuid.UUID) -> PendingQuizVersion | None:
+        stmt = select(PendingQuizVersion).where(
+            PendingQuizVersion.user_id == user_id, PendingQuizVersion.item_id == item_id
+        )
+        return (await self.session.execute(stmt)).scalars().first()
+
+    async def save_pending_quiz_version(
+        self,
+        user_id: uuid.UUID,
+        item_id: uuid.UUID,
+        presented_questions: list,
+        paraphrased: bool,
+        paraphrase_model: str | None,
+    ) -> PendingQuizVersion:
+        pending = PendingQuizVersion(
+            user_id=user_id,
+            item_id=item_id,
+            presented_questions=presented_questions,
+            paraphrased=paraphrased,
+            paraphrase_model=paraphrase_model,
+        )
+        self.session.add(pending)
+        await self.session.flush()
+        return pending
+
+    async def delete_pending_quiz_version(self, pending: PendingQuizVersion) -> None:
+        await self.session.delete(pending)
+        await self.session.flush()
+
+    async def list_quiz_attempts_for_item(
+        self, item_id: uuid.UUID, pagination: PaginationParams
+    ) -> tuple[list[tuple[QuizAttempt, User, int]], int]:
+        """Every attempt on a standalone quiz (reset ones too), newest first, with
+        the learner and which of their attempts it was (1 = first)."""
+        attempt_number = func.row_number().over(
+            partition_by=QuizAttempt.user_id, order_by=QuizAttempt.created_at
+        ).label("attempt_number")
+        numbered = (
+            select(QuizAttempt.id.label("attempt_id"), attempt_number)
+            .where(QuizAttempt.item_id == item_id)
+            .subquery()
+        )
+        stmt = (
+            select(QuizAttempt, User, numbered.c.attempt_number)
+            .join(numbered, numbered.c.attempt_id == QuizAttempt.id)
+            .join(User, User.id == QuizAttempt.user_id)
+        )
+        total = (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        stmt = stmt.order_by(QuizAttempt.created_at.desc()).limit(pagination.limit).offset(pagination.offset)
+        return [tuple(row) for row in (await self.session.execute(stmt)).all()], total
+
+    async def list_quiz_group_attempts_for_item(
+        self, item_id: uuid.UUID, pagination: PaginationParams
+    ) -> tuple[list[tuple[QuizGroupAttempt, User, int]], int]:
+        attempt_number = func.row_number().over(
+            partition_by=QuizGroupAttempt.user_id, order_by=QuizGroupAttempt.created_at
+        ).label("attempt_number")
+        numbered = (
+            select(QuizGroupAttempt.id.label("attempt_id"), attempt_number)
+            .where(QuizGroupAttempt.item_id == item_id)
+            .subquery()
+        )
+        stmt = (
+            select(QuizGroupAttempt, User, numbered.c.attempt_number)
+            .join(numbered, numbered.c.attempt_id == QuizGroupAttempt.id)
+            .join(User, User.id == QuizGroupAttempt.user_id)
+        )
+        total = (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        stmt = stmt.order_by(QuizGroupAttempt.created_at.desc()).limit(pagination.limit).offset(pagination.offset)
+        return [tuple(row) for row in (await self.session.execute(stmt)).all()], total
 
     async def soft_delete_quiz_attempts_for_item(self, user_id: uuid.UUID, item_id: uuid.UUID) -> None:
         """Used when a module/section is reset (its final assessment's retries were
@@ -174,6 +269,9 @@ class LearningRepository:
         started_at: datetime,
         expires_at: datetime | None,
         selected_questions: dict,
+        presented_questions: list | None = None,
+        paraphrased: bool = False,
+        paraphrase_model: str | None = None,
     ) -> QuizGroupAttempt:
         attempt = QuizGroupAttempt(
             user_id=user_id,
@@ -181,6 +279,9 @@ class LearningRepository:
             started_at=started_at,
             expires_at=expires_at,
             selected_questions=selected_questions,
+            presented_questions=presented_questions,
+            paraphrased=paraphrased,
+            paraphrase_model=paraphrase_model,
         )
         self.session.add(attempt)
         await self.session.flush()
@@ -209,6 +310,15 @@ class LearningRepository:
         attempt.submitted_at = datetime.now(timezone.utc)
         await self.session.flush()
         return attempt
+
+    async def has_any_quiz_group_attempt(self, user_id: uuid.UUID, item_id: uuid.UUID) -> bool:
+        """Any attempt ever, including ones cleared by a module reset."""
+        stmt = (
+            select(QuizGroupAttempt.id)
+            .where(QuizGroupAttempt.user_id == user_id, QuizGroupAttempt.item_id == item_id)
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).first() is not None
 
     async def count_quiz_group_attempts(self, user_id: uuid.UUID, item_id: uuid.UUID) -> int:
         stmt = select(func.count(QuizGroupAttempt.id)).where(

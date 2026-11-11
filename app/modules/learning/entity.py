@@ -85,6 +85,14 @@ class QuizAttempt(BaseEntity):
     score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     answers: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The quiz exactly as this student saw it: question/option wording (AI-
+    # paraphrased on retries), option order and the correct options at the time.
+    # [{"id", "section_id", "text", "original_text", "allow_multiple_answers",
+    #   "multi_answer_mode", "options": [{"id", "text", "original_text", "is_correct"}]}]
+    # Null on attempts made before this was recorded.
+    presented_questions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    paraphrased: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    paraphrase_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class QuizGroupAttemptStatusEnum(str, enum.Enum):
@@ -130,6 +138,34 @@ class QuizGroupAttempt(BaseEntity):
     passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # [{"section_id": ..., "title": ..., "earned_points": ..., "total_questions": ..., "score_percent": ...}, ...]
     section_scores: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # The quiz exactly as this student saw it: question/option wording (AI-
+    # paraphrased on retries), option order and the correct options at the time.
+    # [{"id", "section_id", "text", "original_text", "allow_multiple_answers",
+    #   "multi_answer_mode", "options": [{"id", "text", "original_text", "is_correct"}]}]
+    # Null on attempts made before this was recorded.
+    presented_questions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    paraphrased: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    paraphrase_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class PendingQuizVersion(BaseEntity):
+    """The version of a standalone quiz a student is about to take. A standalone
+    quiz attempt only gets a row on submit, so the wording drawn up when the
+    student presses Start (paraphrased on a retry) waits here; a page reload shows
+    the same wording, and submit moves it onto the QuizAttempt."""
+
+    __tablename__ = "pending_quiz_versions"
+    __table_args__ = (UniqueConstraint("user_id", "item_id", name="uq_pending_quiz_versions_user_item"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    presented_questions: Mapped[list] = mapped_column(JSONB, nullable=False)
+    paraphrased: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    paraphrase_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class EssaySubmission(BaseEntity):

@@ -31,6 +31,7 @@ from app.modules.user.entity import User  # noqa: F401
 from app.modules.user.activity_entity import ActivityLog  # noqa: F401
 from app.modules.learning.entity import (  # noqa: F401
     EssaySubmission,
+    PendingQuizVersion,
     QuizAttempt,
     QuizGroupAttempt,
     UserCourseProgress,

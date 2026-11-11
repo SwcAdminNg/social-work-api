@@ -290,6 +290,22 @@ with their progress. Shape is `EnrolledCourseDTO` (a `CourseReadDTO` plus enroll
 
 ## 3. Taking a quiz
 
+### 3.0 Start the attempt (reworded on retries)
+
+`POST /learning/courses/{course_id}/items/{item_id}/quiz/start` returns
+`{ "questions": [...same shape as the item's questions...], "paraphrased": bool }`.
+
+- The first attempt is the quiz as written.
+- Any retry (including after a module reset) is reworded by AI (DeepSeek) and every
+  question's options are reshuffled. Question and option ids never change, so answers
+  are submitted exactly as before and scoring is identical.
+- The version is kept until submit: calling start again, or reloading the item
+  (`quiz_paraphrased` on the item content), returns the same wording.
+- If the AI is unavailable the retry still starts, shuffled, in the original wording
+  (`paraphrased: false`).
+
+Quiz groups do the same inside `quiz-group/start` (section 3b.1).
+
 ### 3.1 Submit answers
 
 **`POST /learning/courses/{course_id}/items/{item_id}/quiz/submit`**

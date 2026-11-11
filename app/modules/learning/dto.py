@@ -64,6 +64,15 @@ class QuizQuestionDTO(BaseDTO):
     options: list[dict[str, Any]]  # id, text
 
 
+class QuizStartDTO(BaseDTO):
+    """The questions for the attempt the student is starting. On a retry they're
+    reworded by AI and the options reshuffled; ids stay the same, so answers are
+    submitted exactly as before."""
+
+    questions: list[QuizQuestionDTO]
+    paraphrased: bool
+
+
 class QuizAttemptDTO(BaseDTO):
     """A previous attempt. `score`/`passed`/`answers` are nulled out when the quiz's
     `show_result_to_student` setting is off - `result_visible` tells the client why."""
@@ -225,6 +234,8 @@ class LearningItemContentDTO(BaseDTO):
     pass_mark_percentage: int | None = None
     show_result_to_student: bool | None = None
     previous_attempt: QuizAttemptDTO | None = None
+    # True when `questions` is a retry version reworded by AI (see quiz/start).
+    quiz_paraphrased: bool | None = None
 
     # Assessment - essay
     essay_question: str | None = None
@@ -394,3 +405,49 @@ class UserLiveSessionDTO(BaseDTO):
 
 
 LearningItemContentDTO.model_rebuild()
+
+
+# -- staff review of quiz attempts -------------------------------------------------
+
+
+class QuizAttemptReviewOptionDTO(BaseDTO):
+    id: uuid.UUID
+    text: str
+    original_text: str
+    is_correct: bool
+    selected: bool
+
+
+class QuizAttemptReviewQuestionDTO(BaseDTO):
+    id: uuid.UUID
+    section_title: str | None = None
+    text: str
+    original_text: str
+    allow_multiple_answers: bool
+    options: list[QuizAttemptReviewOptionDTO]
+    # 0-1; partial credit for "any of" multi-answer questions.
+    earned: float
+
+
+class QuizAttemptReviewDTO(BaseDTO):
+    """One attempt as the learner saw it - reworded text on retries - with what they
+    chose and what was correct, for admins and the course's instructors."""
+
+    attempt_id: uuid.UUID
+    user_id: uuid.UUID
+    user_full_name: str
+    user_email: str
+    attempt_number: int
+    status: str  # SUBMITTED | IN_PROGRESS
+    started_at: datetime | None = None
+    submitted_at: datetime | None = None
+    score: float | None = None
+    passed: bool | None = None
+    auto_submitted: bool = False
+    # True once a module reset cleared this attempt from the learner's record.
+    is_reset: bool = False
+    paraphrased: bool
+    paraphrase_model: str | None = None
+    # False for attempts made before versions were stored: wording is today's.
+    version_recorded: bool
+    questions: list[QuizAttemptReviewQuestionDTO]

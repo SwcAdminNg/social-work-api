@@ -1350,6 +1350,12 @@ class CourseContentService:
         learners submit to live items. Requires a marking-hierarchy permission
         (MARK_ASSESSMENT, MODERATE_ASSESSMENT or APPROVE_RESULTS) for the course,
         rather than content-editing rights."""
+        course, section, item, _ = await self._authorize_result_item(item_id, user, {AssessmentTypeEnum.ESSAY})
+        return course, section, item
+
+    async def _authorize_result_item(self, item_id: uuid.UUID, user: User, assessment_types: set):
+        """Shared by essay marking and quiz attempt review: the live item, for staff
+        who mark, moderate or approve results on the course (or a platform admin)."""
         from app.modules.governance.permission_service import PermissionService
         from app.modules.marking.service import MARKING_PERMISSIONS
 
@@ -1369,9 +1375,107 @@ class CourseContentService:
         if not perms & MARKING_PERMISSIONS and user.user_type != UserTypeEnum.ADMIN:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You don't mark, moderate or approve results on this course")
         assessment = await self.repo.get_assessment_by_item(item.id)
-        if assessment is None or assessment.assessment_type != AssessmentTypeEnum.ESSAY:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Essay not found for this item")
-        return course, section, item
+        if assessment is None or assessment.assessment_type not in assessment_types:
+            label = "Essay" if assessment_types == {AssessmentTypeEnum.ESSAY} else "Quiz"
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found for this item")
+        return course, section, item, assessment
+
+    async def list_quiz_attempts(
+        self, item_id: uuid.UUID, pagination: PaginationParams, current_user: User
+    ):
+        """Every attempt on a quiz or quiz group, newest first, each shown as the
+        learner saw it (AI-reworded on retries) with their choices and the answers."""
+        from app.modules.learning.dto import (
+            QuizAttemptReviewDTO,
+            QuizAttemptReviewOptionDTO,
+            QuizAttemptReviewQuestionDTO,
+        )
+        from app.modules.learning.quiz_paraphrase import build_presented_questions
+
+        _, _, item, assessment = await self._authorize_result_item(
+            item_id, current_user, {AssessmentTypeEnum.QUIZ, AssessmentTypeEnum.QUIZ_GROUP}
+        )
+        is_group = assessment.assessment_type == AssessmentTypeEnum.QUIZ_GROUP
+        if is_group:
+            records, total = await self.learning_repo.list_quiz_group_attempts_for_item(item.id, pagination)
+        else:
+            records, total = await self.learning_repo.list_quiz_attempts_for_item(item.id, pagination)
+
+        section_titles: dict[str, str] = {}
+        if is_group:
+            section_titles = {
+                str(sec.id): sec.title for sec in await self.repo.list_sections_for_group(assessment.id)
+            }
+
+        # Attempts from before versions were stored fall back to today's wording.
+        fallback_by_id: dict[str, dict] = {}
+        if any(not attempt.presented_questions for attempt, _, _ in records):
+            questions = await self.repo.list_questions_for_quizzes([assessment.id])
+            options = await self.repo.list_options_for_questions([q.id for q in questions])
+            fallback_by_id = {q["id"]: q for q in build_presented_questions(questions, options)}
+
+        result = []
+        for attempt, user, attempt_number in records:
+            presented = attempt.presented_questions
+            if not presented:
+                if is_group:
+                    ids = [q_id for q_ids in (attempt.selected_questions or {}).values() for q_id in q_ids]
+                    presented = [fallback_by_id[q_id] for q_id in ids if q_id in fallback_by_id]
+                else:
+                    presented = list(fallback_by_id.values())
+
+            answers = attempt.answers or {}
+            question_dtos = []
+            for q in presented:
+                chosen = set(answers.get(q["id"], []))
+                correct = {o["id"] for o in q.get("options", []) if o.get("is_correct")}
+                if q.get("allow_multiple_answers") and q.get("multi_answer_mode") == "OR":
+                    earned = min(len(chosen & correct) / len(correct), 1.0) if correct else 0.0
+                else:
+                    earned = 1.0 if chosen == correct else 0.0
+                question_dtos.append(
+                    QuizAttemptReviewQuestionDTO(
+                        id=uuid.UUID(q["id"]),
+                        section_title=section_titles.get(q.get("section_id") or "") if is_group else None,
+                        text=q["text"],
+                        original_text=q.get("original_text") or q["text"],
+                        allow_multiple_answers=bool(q.get("allow_multiple_answers")),
+                        options=[
+                            QuizAttemptReviewOptionDTO(
+                                id=uuid.UUID(o["id"]),
+                                text=o["text"],
+                                original_text=o.get("original_text") or o["text"],
+                                is_correct=bool(o.get("is_correct")),
+                                selected=o["id"] in chosen,
+                            )
+                            for o in q.get("options", [])
+                        ],
+                        earned=earned,
+                    )
+                )
+
+            status_value = getattr(attempt, "status", None)
+            result.append(
+                QuizAttemptReviewDTO(
+                    attempt_id=attempt.id,
+                    user_id=user.id,
+                    user_full_name=f"{user.first_name} {user.last_name}".strip(),
+                    user_email=user.email,
+                    attempt_number=attempt_number,
+                    status=status_value.value if status_value is not None else "SUBMITTED",
+                    started_at=getattr(attempt, "started_at", None),
+                    submitted_at=getattr(attempt, "submitted_at", None) if is_group else attempt.created_at,
+                    score=float(attempt.score) if attempt.score is not None else None,
+                    passed=attempt.passed,
+                    auto_submitted=bool(getattr(attempt, "auto_submitted", False)),
+                    is_reset=attempt.deleted_at is not None,
+                    paraphrased=bool(attempt.paraphrased),
+                    paraphrase_model=attempt.paraphrase_model,
+                    version_recorded=bool(attempt.presented_questions),
+                    questions=question_dtos,
+                )
+            )
+        return result, total
 
     async def list_essay_submissions(
         self, item_id: uuid.UUID, pagination: PaginationParams, current_user: User

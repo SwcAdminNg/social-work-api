@@ -152,6 +152,10 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: int = 60
     assessment_ai_max_file_size_bytes: int = 10 * 1024 * 1024
     assessment_ai_max_input_chars: int = 40000
+    # Retries of a scored quiz are reworded by DeepSeek so they can't be passed from
+    # memory (see app/modules/learning/quiz_paraphrase.py). Empty model = deepseek_model.
+    quiz_retry_paraphrase_enabled: bool = True
+    quiz_paraphrase_model: str = ""
 
     # Learning content governance (see app/modules/governance). Off by default:
     # publishing then behaves exactly as before (owner/admin toggles is_published,

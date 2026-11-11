@@ -51,6 +51,7 @@ from app.modules.course.content_dto import (
     PublicCourseDetailDTO,
 )
 from app.modules.course.content_service import CourseContentService
+from app.modules.learning.dto import QuizAttemptReviewDTO
 from app.modules.course.live_session_service import LiveSessionService
 from app.modules.course.dto import (
     CourseCreateDTO,
@@ -1279,6 +1280,22 @@ async def list_essay_submissions(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[EssaySubmissionListItemDTO]:
     items, total = await CourseContentService(db).list_essay_submissions(item_id, pagination, current_user)
+    return PaginatedResponse.create(items=items, total_items=total, params=pagination)
+
+
+@router.get(
+    "/items/{item_id}/quiz/attempts",
+    response_model=PaginatedResponse[QuizAttemptReviewDTO],
+    summary="Learners' attempts at a quiz or quiz group, each as the learner saw it "
+    "(AI-reworded on retries) with their answers (admin or the course's markers)",
+)
+async def list_quiz_attempts(
+    item_id: uuid.UUID,
+    pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_content_staff),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[QuizAttemptReviewDTO]:
+    items, total = await CourseContentService(db).list_quiz_attempts(item_id, pagination, current_user)
     return PaginatedResponse.create(items=items, total_items=total, params=pagination)
 
 

@@ -990,3 +990,20 @@ PATCH /courses/items/{quiz_item_id}/assessment
 Students must now score ≥60% on this quiz, within 2 tries, before the next section unlocks for
 them. A third failed attempt isn't possible (`400` at `max_attempts`) - the reset already fired
 after the 2nd failure.
+
+
+## Reviewing quiz attempts (as the learner saw them)
+
+`GET /courses/items/{item_id}/quiz/attempts?page=1&page_size=20` — admins, and staff who
+mark, moderate or approve results on the course. Works for QUIZ and QUIZ_GROUP items.
+
+Each row (newest first) is one attempt with the learner (`user_full_name`, `user_email`),
+`attempt_number` (1 = first), `status`, `score`, `passed`, `auto_submitted`, `is_reset`
+(cleared by a module reset), `paraphrased` / `paraphrase_model` (retries are reworded by AI),
+`version_recorded` (false for attempts made before versions were stored — today's wording
+is shown) and `questions`: each with the wording shown (`text`), the authored wording
+(`original_text`), `section_title` (quiz groups), `earned` (0–1) and `options` in the order
+shown, each with `text`, `original_text`, `is_correct` and `selected`.
+
+Settings: `QUIZ_RETRY_PARAPHRASE_ENABLED` (default true), `QUIZ_PARAPHRASE_MODEL`
+(empty = `DEEPSEEK_MODEL`); needs `DEEPSEEK_API_KEY`.

@@ -18,6 +18,7 @@ from app.modules.course.content_entity import (
 from app.modules.course.content_repository import CourseContentRepository
 from app.modules.course.repository import CourseRepository
 from app.modules.learning.dto import (
+    QuizStartDTO,
     ScormCommitDTO,
     ScormCommitResultDTO,
     ScormContentDTO,
@@ -46,6 +47,7 @@ from app.modules.learning.dto import (
 from app.common.pagination import PaginationParams
 from app.core.storage import get_r2_client
 from app.modules.learning.repository import LearningRepository
+from app.modules.learning.quiz_paraphrase import build_presented_questions, reword_for_retry
 from app.modules.payment.entity import UserSubscription
 from app.modules.learning.entity import (
     EssaySubmission,
@@ -656,6 +658,11 @@ class LearningService:
                 )
             )
 
+        pending = await self.repo.get_pending_quiz_version(user_id, item_id)
+        if pending is not None:
+            dto.questions = self._questions_from_presented(pending.presented_questions)
+            dto.quiz_paraphrased = pending.paraphrased
+
         attempts_used = await self.repo.count_quiz_attempts(user_id, item_id)
         dto.max_attempts = max_attempts
         dto.attempts_used = attempts_used
@@ -732,6 +739,69 @@ class LearningService:
         await self.session.commit()
         return {"message": "Item marked as completed"}
 
+    @staticmethod
+    def _questions_from_presented(presented: list) -> list[QuizQuestionDTO]:
+        return [
+            QuizQuestionDTO(
+                id=uuid.UUID(q["id"]),
+                text=q["text"],
+                allow_multiple_answers=bool(q.get("allow_multiple_answers")),
+                multi_answer_mode=q.get("multi_answer_mode"),
+                options=[{"id": uuid.UUID(o["id"]), "text": o["text"]} for o in q.get("options", [])],
+            )
+            for q in presented or []
+        ]
+
+    async def _course_and_item_titles(self, course_id: uuid.UUID, item) -> tuple[str, str]:
+        course = await self.course_repo.get_by_id(course_id)
+        return (course.title if course else ""), (item.title if item else "")
+
+    async def start_quiz(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID) -> QuizStartDTO:
+        """The version of a standalone quiz the student is about to take. The first
+        attempt is the quiz as written; any retry is reworded by AI with the options
+        reshuffled. The version is kept until submit, so a reload shows the same one."""
+        access = await self.repo.get_user_course_access(user_id, course_id)
+        if not access:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
+        item = await self.content_repo.get_item(item_id)
+        if not item or item.item_type != CourseItemTypeEnum.ASSESSMENT:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not an assessment")
+        await self._ensure_section_unlocked(user_id, course_id, item.section_id)
+        assessment = await self.content_repo.get_assessment_by_item(item_id)
+        if not assessment or assessment.assessment_type != AssessmentTypeEnum.QUIZ:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Item is not a quiz")
+        if assessment.due_date is not None and datetime.now(timezone.utc) > assessment.due_date:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The deadline for this quiz has passed")
+
+        settings = await self.content_repo.get_quiz_settings(assessment.id)
+        max_attempts = settings.max_attempts if settings else None
+        if max_attempts is not None and await self.repo.count_quiz_attempts(user_id, item_id) >= max_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Maximum attempts ({max_attempts}) reached for this quiz",
+            )
+
+        pending = await self.repo.get_pending_quiz_version(user_id, item_id)
+        if pending is not None:
+            return QuizStartDTO(
+                questions=self._questions_from_presented(pending.presented_questions),
+                paraphrased=pending.paraphrased,
+            )
+
+        questions = await self.content_repo.list_questions_for_quizzes([assessment.id])
+        options = await self.content_repo.list_options_for_questions([q.id for q in questions])
+        presented = build_presented_questions(questions, options)
+        paraphrased, model = False, None
+        if await self.repo.has_any_quiz_attempt(user_id, item_id):
+            course_title, item_title = await self._course_and_item_titles(course_id, item)
+            presented, paraphrased, model = await reword_for_retry(
+                presented, course_title=course_title, item_title=item_title
+            )
+
+        await self.repo.save_pending_quiz_version(user_id, item_id, presented, paraphrased, model)
+        await self.session.commit()
+        return QuizStartDTO(questions=self._questions_from_presented(presented), paraphrased=paraphrased)
+
     async def submit_quiz(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, answers: dict[uuid.UUID, list[uuid.UUID]]) -> QuizResultDTO:
         access = await self.repo.get_user_course_access(user_id, course_id)
         if not access:
@@ -780,7 +850,22 @@ class LearningService:
 
         # Convert UUID keys to strings for JSONB serialization
         answers_str_keys = {str(k): [str(v) for v in val] for k, val in answers.items()}
-        await self.repo.save_quiz_attempt(user_id, item_id, score_percent, passed, answers_str_keys)
+        # Keep the version the student actually saw (reworded on a retry) with the attempt.
+        pending = await self.repo.get_pending_quiz_version(user_id, item_id)
+        await self.repo.save_quiz_attempt(
+            user_id,
+            item_id,
+            score_percent,
+            passed,
+            answers_str_keys,
+            presented_questions=(
+                pending.presented_questions if pending else build_presented_questions(questions, options)
+            ),
+            paraphrased=pending.paraphrased if pending else False,
+            paraphrase_model=pending.paraphrase_model if pending else None,
+        )
+        if pending is not None:
+            await self.repo.delete_pending_quiz_version(pending)
 
         # A regular quiz counts as "done" the moment it's attempted, same as before.
         # A *final* assessment only counts once it's actually passed - see
@@ -908,7 +993,7 @@ class LearningService:
         section_scores = []
         total_earned = 0.0
         total_questions = 0
-        for section_id_str, q_ids in attempt.selected_questions.items():
+        for section_id_str, q_ids in self._sections_in_order(attempt.selected_questions, sections):
             section = sections_by_id.get(uuid.UUID(section_id_str))
             section_earned = 0.0
             for q_id_str in q_ids:
@@ -945,6 +1030,8 @@ class LearningService:
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def _build_section_attempt_dtos(self, attempt: QuizGroupAttempt) -> list[QuizGroupSectionAttemptDTO]:
+        if attempt.presented_questions:
+            return await self._section_dtos_from_presented(attempt)
         question_ids = [uuid.UUID(qid) for qids in attempt.selected_questions.values() for qid in qids]
         questions = await self._load_questions_by_ids(question_ids)
         questions_by_id = {q.id: q for q in questions}
@@ -955,7 +1042,7 @@ class LearningService:
         sections_by_id = {s.id: s for s in sections}
 
         result = []
-        for section_id_str, q_ids in attempt.selected_questions.items():
+        for section_id_str, q_ids in self._sections_in_order(attempt.selected_questions, sections):
             section = sections_by_id.get(uuid.UUID(section_id_str))
             question_dtos = []
             for q_id_str in q_ids:
@@ -974,6 +1061,34 @@ class LearningService:
                     section_id=uuid.UUID(section_id_str),
                     title=section.title if section else "Unknown section",
                     questions=question_dtos,
+                )
+            )
+        return result
+
+    @staticmethod
+    def _sections_in_order(selected_questions: dict, sections: list) -> list[tuple[str, list]]:
+        """`selected_questions` comes back from JSONB with its keys re-sorted, so put
+        the sections back in the order the quiz group defines."""
+        rank = {str(sec.id): (sec.order_index or 0, idx) for idx, sec in enumerate(sections)}
+        return sorted(selected_questions.items(), key=lambda kv: rank.get(kv[0], (10**6, 0)))
+
+    async def _section_dtos_from_presented(self, attempt: QuizGroupAttempt) -> list[QuizGroupSectionAttemptDTO]:
+        """The attempt's stored version (reworded on retries), grouped by section in
+        the drawn order."""
+        assessment = await self.content_repo.get_assessment_by_item(attempt.item_id)
+        sections = await self.content_repo.list_sections_for_group(assessment.id)
+        sections_by_id = {str(s.id): s for s in sections}
+        presented_by_id = {q["id"]: q for q in attempt.presented_questions}
+
+        result = []
+        for section_id_str, q_ids in self._sections_in_order(attempt.selected_questions, sections):
+            section = sections_by_id.get(section_id_str)
+            chosen = [presented_by_id[q_id] for q_id in q_ids if q_id in presented_by_id]
+            result.append(
+                QuizGroupSectionAttemptDTO(
+                    section_id=uuid.UUID(section_id_str),
+                    title=section.title if section else "Unknown section",
+                    questions=self._questions_from_presented(chosen),
                 )
             )
         return result
@@ -1121,6 +1236,7 @@ class LearningService:
                 seen_by_section.setdefault(sec_id, set()).update(uuid.UUID(q) for q in q_ids)
 
         selected_questions: dict[str, list[str]] = {}
+        chosen_questions: list = []
         for sec in sections:
             pool = pool_by_section.get(sec.id, [])
             if not pool:
@@ -1128,13 +1244,27 @@ class LearningService:
             k = sec.questions_to_ask or len(pool)
             chosen = self._select_section_questions(pool, k, seen_by_section.get(sec.id, set()))
             selected_questions[str(sec.id)] = [str(q.id) for q in chosen]
+            chosen_questions.extend(chosen)
 
         if not any(selected_questions.values()):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "This quiz group has no questions yet")
 
+        # A retry is reworded by AI, options reshuffled. Done before the timer starts.
+        chosen_options = await self.content_repo.list_options_for_questions([q.id for q in chosen_questions])
+        presented = build_presented_questions(chosen_questions, chosen_options)
+        paraphrased, model = False, None
+        if await self.repo.has_any_quiz_group_attempt(user_id, item_id):
+            course_title, item_title = await self._course_and_item_titles(course_id, item)
+            presented, paraphrased, model = await reword_for_retry(
+                presented, course_title=course_title, item_title=item_title
+            )
+
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=time_limit_seconds) if time_limit_seconds else None
-        attempt = await self.repo.create_quiz_group_attempt(user_id, item_id, now, expires_at, selected_questions)
+        attempt = await self.repo.create_quiz_group_attempt(
+            user_id, item_id, now, expires_at, selected_questions,
+            presented_questions=presented, paraphrased=paraphrased, paraphrase_model=model,
+        )
         await self.session.commit()
 
         section_dtos = await self._build_section_attempt_dtos(attempt)

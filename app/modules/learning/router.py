@@ -25,6 +25,7 @@ from app.modules.learning.dto import (
     QuizGroupSaveProgressDTO,
     QuizGroupSubmitDTO,
     QuizResultDTO,
+    QuizStartDTO,
     QuizSubmitDTO,
     UserAssessmentDTO,
 )
@@ -109,6 +110,23 @@ async def mark_item_completed(
     service = LearningService(db)
     await service.mark_item_completed(current_user.id, course_id, item_id)
     return ApiResponse(message="Item marked as completed")
+
+
+@router.post(
+    "/courses/{course_id}/items/{item_id}/quiz/start",
+    response_model=ApiResponse[QuizStartDTO],
+    summary="Get the questions for the attempt being started - reworded by AI with the "
+    "options reshuffled on a retry. Kept until submit, so calling it again returns the same version",
+)
+async def start_quiz(
+    course_id: uuid.UUID,
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[QuizStartDTO]:
+    service = LearningService(db)
+    data = await service.start_quiz(current_user.id, course_id, item_id)
+    return ApiResponse(message="Quiz ready", data=data)
 
 
 @router.post(
