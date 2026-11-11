@@ -79,7 +79,7 @@ async def test_first_attempt_uses_the_written_quiz(client, make_user, state, fak
     ok(await client.post(f"/learning/courses/{cid}/enroll", headers=learner_h))
 
     started = ok(await client.post(f"/learning/courses/{cid}/items/{quiz['id']}/quiz/start", headers=learner_h))
-    assert started["paraphrased"] is False
+    assert "paraphrased" not in started
     assert [q["text"] for q in started["questions"]] == ["Question 0", "Question 1", "Question 2"]
     assert fake_deepseek == []
 
@@ -104,7 +104,8 @@ async def test_retry_is_reworded_and_stable_until_submit(client, state, fake_dee
     cid, quiz_id, lh = state["cid"], state["quiz_id"], state["learner_h"]
 
     started = ok(await client.post(f"/learning/courses/{cid}/items/{quiz_id}/quiz/start", headers=lh))
-    assert started["paraphrased"] is True
+    # Students aren't told: no flag, just the new wording.
+    assert "paraphrased" not in started
     assert fake_deepseek == [3]
     assert all(q["text"].startswith("Reworded: ") for q in started["questions"])
     assert all(o["text"].startswith("Reworded: ") for q in started["questions"] for o in q["options"])
@@ -114,7 +115,7 @@ async def test_retry_is_reworded_and_stable_until_submit(client, state, fake_dee
     again = ok(await client.post(f"/learning/courses/{cid}/items/{quiz_id}/quiz/start", headers=lh))
     assert again["questions"] == started["questions"]
     content = ok(await client.get(f"/learning/courses/{cid}/items/{quiz_id}", headers=lh))
-    assert content["quiz_paraphrased"] is True
+    assert "quiz_paraphrased" not in content
     assert [q["text"] for q in content["questions"]] == [q["text"] for q in started["questions"]]
     assert fake_deepseek == [3]
 
@@ -159,7 +160,6 @@ async def test_ai_failure_still_gives_a_shuffled_quiz(client, state, monkeypatch
     started = ok(await client.post(
         f"/learning/courses/{state['cid']}/items/{state['quiz_id']}/quiz/start", headers=state["learner_h"]
     ))
-    assert started["paraphrased"] is False
     assert sorted(q["text"] for q in started["questions"]) == ["Question 0", "Question 1", "Question 2"]
 
 
@@ -197,7 +197,7 @@ async def test_quiz_group_retry_is_reworded_and_reviewable(client, make_user, fa
     assert fake_deepseek == []
 
     retry = ok(await client.post(f"{base}/start", headers=lh))
-    assert retry["paraphrased"] is True
+    assert "paraphrased" not in retry
     texts = [q["text"] for s in retry["sections"] for q in s["questions"]]
     assert texts == ["Reworded: Ethics question", "Reworded: Practice question"]
     # A reload keeps the same reworded version.

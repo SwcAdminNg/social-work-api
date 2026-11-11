@@ -661,7 +661,6 @@ class LearningService:
         pending = await self.repo.get_pending_quiz_version(user_id, item_id)
         if pending is not None:
             dto.questions = self._questions_from_presented(pending.presented_questions)
-            dto.quiz_paraphrased = pending.paraphrased
 
         attempts_used = await self.repo.count_quiz_attempts(user_id, item_id)
         dto.max_attempts = max_attempts
@@ -783,10 +782,7 @@ class LearningService:
 
         pending = await self.repo.get_pending_quiz_version(user_id, item_id)
         if pending is not None:
-            return QuizStartDTO(
-                questions=self._questions_from_presented(pending.presented_questions),
-                paraphrased=pending.paraphrased,
-            )
+            return QuizStartDTO(questions=self._questions_from_presented(pending.presented_questions))
 
         questions = await self.content_repo.list_questions_for_quizzes([assessment.id])
         options = await self.content_repo.list_options_for_questions([q.id for q in questions])
@@ -800,7 +796,7 @@ class LearningService:
 
         await self.repo.save_pending_quiz_version(user_id, item_id, presented, paraphrased, model)
         await self.session.commit()
-        return QuizStartDTO(questions=self._questions_from_presented(presented), paraphrased=paraphrased)
+        return QuizStartDTO(questions=self._questions_from_presented(presented))
 
     async def submit_quiz(self, user_id: uuid.UUID, course_id: uuid.UUID, item_id: uuid.UUID, answers: dict[uuid.UUID, list[uuid.UUID]]) -> QuizResultDTO:
         access = await self.repo.get_user_course_access(user_id, course_id)
@@ -1104,7 +1100,6 @@ class LearningService:
             expires_at=attempt.expires_at,
             sections=section_dtos,
             saved_answers=saved_answers,
-            paraphrased=bool(attempt.paraphrased),
         )
 
     def _build_group_result_dto(self, attempt: QuizGroupAttempt, show_result_to_student: bool) -> QuizGroupResultDTO:

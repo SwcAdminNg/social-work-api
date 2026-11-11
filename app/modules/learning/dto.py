@@ -67,10 +67,10 @@ class QuizQuestionDTO(BaseDTO):
 class QuizStartDTO(BaseDTO):
     """The questions for the attempt the student is starting. On a retry they're
     reworded by AI and the options reshuffled; ids stay the same, so answers are
-    submitted exactly as before."""
+    submitted exactly as before. Deliberately carries no flag saying so - students
+    aren't told a retry is reworded; staff see it on the attempt."""
 
     questions: list[QuizQuestionDTO]
-    paraphrased: bool
 
 
 class QuizAttemptDTO(BaseDTO):
@@ -135,8 +135,6 @@ class QuizGroupActiveAttemptDTO(BaseDTO):
     expires_at: datetime | None
     sections: list[QuizGroupSectionAttemptDTO]
     saved_answers: dict[uuid.UUID, list[uuid.UUID]]
-    # True when this attempt is a retry reworded by AI.
-    paraphrased: bool = False
 
 
 class QuizGroupSectionResultDTO(BaseDTO):
@@ -236,8 +234,6 @@ class LearningItemContentDTO(BaseDTO):
     pass_mark_percentage: int | None = None
     show_result_to_student: bool | None = None
     previous_attempt: QuizAttemptDTO | None = None
-    # True when `questions` is a retry version reworded by AI (see quiz/start).
-    quiz_paraphrased: bool | None = None
 
     # Assessment - essay
     essay_question: str | None = None
