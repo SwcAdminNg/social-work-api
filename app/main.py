@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.common.responses import ApiErrorResponse
 from app.core.config import settings
+from app.core.public_url import RequestBaseURLMiddleware
 from app.modules.admin.router import router as admin_router
 from app.modules.auth.router import router as auth_router
 from app.modules.instructor_application.router import router as instructor_application_router
@@ -69,6 +70,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Lets links built for browsers/QStash fall back to this request's public URL
+# when API_BASE_URL isn't configured (see app/core/public_url.py).
+app.add_middleware(RequestBaseURLMiddleware)
 
 
 @app.exception_handler(RequestValidationError)

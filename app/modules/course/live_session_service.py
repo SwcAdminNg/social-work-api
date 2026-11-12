@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.calendar_invite import build_calendar_links, build_ics
 from app.core.config import settings
+from app.core.public_url import public_api_base_url
 from app.core.daily import get_daily_client
 from app.core.email import email_service
 from app.core.qstash import get_qstash_client
@@ -369,7 +370,7 @@ class LiveSessionService:
         try:
             client = get_qstash_client()
             await client.message.publish_json(
-                url=f"{settings.api_base_url.rstrip('/')}/courses/cron/live-session-reminder",
+                url=f"{public_api_base_url()}/courses/cron/live-session-reminder",
                 body={"live_session_id": str(live_session_id)},
                 delay=int(delay_seconds),
             )

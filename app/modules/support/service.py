@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.pagination import PaginationParams
 from app.core.config import settings
+from app.core.public_url import public_api_base_url
 from app.core.email import email_service
 from app.core.qstash import get_qstash_client
 from app.core.storage import get_r2_client
@@ -420,7 +421,7 @@ class SupportService:
         try:
             client = get_qstash_client()
             await client.message.publish_json(
-                url=f"{settings.api_base_url.rstrip('/')}/support/cron/check-escalation",
+                url=f"{public_api_base_url()}/support/cron/check-escalation",
                 body={"ticket_id": str(ticket_id)},
                 delay=settings.support_escalation_minutes * 60,
             )

@@ -33,6 +33,7 @@ from xml.etree import ElementTree
 import jwt
 
 from app.core.config import settings
+from app.core.public_url import public_api_base_url
 from app.core.storage import R2Client
 
 LAUNCH_TOKEN_TYPE = "scorm_launch"
@@ -348,11 +349,11 @@ def decode_launch_token(token: str) -> LaunchClaims | None:
 
 
 def build_launch_url(token: str, launch_path: str) -> str:
-    return f"{settings.api_base_url.rstrip('/')}/scorm/{token}/{launch_path.lstrip('/')}"
+    return f"{public_api_base_url()}/scorm/{token}/{launch_path.lstrip('/')}"
 
 
 def build_commit_url(token: str) -> str:
-    return f"{settings.api_base_url.rstrip('/')}/scorm/{token}/_lms/commit"
+    return f"{public_api_base_url()}/scorm/{token}/_lms/commit"
 
 
 # ---------------------------------------------------------------------------
