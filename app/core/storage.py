@@ -108,6 +108,16 @@ class R2Client:
             Delete={"Objects": [{"Key": key} for key in keys]},
         )
 
+    def read_bytes(self, key: str, max_bytes: int | None = None) -> bytes:
+        """Read an object server-side (used to pull lesson text for JAD AI).
+        Raises ValueError when the object is larger than `max_bytes`."""
+        obj = self._client.get_object(Bucket=settings.r2_bucket_name, Key=key)
+        size = obj.get("ContentLength") or 0
+        if max_bytes is not None and size > max_bytes:
+            obj["Body"].close()
+            raise ValueError(f"object is {size} bytes, over the {max_bytes} limit")
+        return obj["Body"].read()
+
     def get_public_url(self, key: str) -> str:
         return f"{settings.r2_public_url.rstrip('/')}/{quote(key, safe=':/')}"
 

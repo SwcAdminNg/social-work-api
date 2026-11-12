@@ -61,3 +61,4 @@ from app.modules.governance.entity import (  # noqa: F401
     StaffRoleAssignment,
 )
 from app.modules.marking.entity import EssayMark  # noqa: F401
+from app.modules.jad_ai.entity import JadCacheEntry, JadConversation, JadItemContext, JadMessage  # noqa: F401

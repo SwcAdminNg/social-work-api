@@ -157,6 +157,20 @@ class Settings(BaseSettings):
     quiz_retry_paraphrase_enabled: bool = True
     quiz_paraphrase_model: str = ""
 
+    # JAD AI, the learner's study assistant on document, SCORM and practice-quiz
+    # lessons (see app/modules/jad_ai). Answers come from DeepSeek; repeat and
+    # near-repeat questions are served from a semantic cache instead.
+    jad_ai_enabled: bool = True
+    jad_ai_model: str = ""  # empty = deepseek_model
+    jad_ai_max_message_chars: int = 1200
+    jad_ai_max_answer_tokens: int = 900
+    jad_ai_hourly_limit: int = 40
+    jad_ai_daily_limit: int = 150
+    # Neural embeddings for the semantic cache when an OpenAI key is set; otherwise
+    # a built-in lexical embedding is used (no extra service needed).
+    jad_ai_embedding_model: str = "text-embedding-3-small"
+    jad_ai_cache_days: int = 30
+
     # Learning content governance (see app/modules/governance). Off by default:
     # publishing then behaves exactly as before (owner/admin toggles is_published,
     # admins act as superusers) while versions and audit rows still accrue. Turn
