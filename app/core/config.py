@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     # on their own app, e.g. the instructor account setup link.
     instructor_frontend_url: str = "https://social-work-instructor.vercel.app"
     # Admin panel address, when it is deployed separately from frontend_url.
-    # Used to allow passkeys on the admin panel.
+    # Used for admin invite links and to allow passkeys on the admin panel.
+    # Falls back to frontend_url when empty.
     admin_frontend_url: str = ""
 
     # Resend (email)

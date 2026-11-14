@@ -15,6 +15,12 @@ from app.modules.user.entity import User, UserTypeEnum
 from app.modules.user.repository import UserRepository
 
 
+def admin_invite_link(raw_token: str) -> str:
+    """The accept page lives in the admin panel, not the student site."""
+    base = (settings.admin_frontend_url or settings.frontend_url).rstrip("/")
+    return f"{base}/accept-admin-invite?token={raw_token}"
+
+
 class AdminService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -57,7 +63,7 @@ class AdminService:
         await self.invite_tokens.create(invite_token)
         await self.session.commit()
 
-        invite_link = f"{settings.frontend_url}/accept-admin-invite?token={raw_token}"
+        invite_link = admin_invite_link(raw_token)
         await email_service.send_admin_invite_email(user.email, user.first_name, invite_link)
         await NotificationService(self.session).notify_admin_invited(user)
 
