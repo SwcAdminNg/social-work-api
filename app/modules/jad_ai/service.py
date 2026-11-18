@@ -17,6 +17,7 @@ A turn, in order:
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -37,7 +38,7 @@ from app.modules.jad_ai import guard, llm
 from app.modules.jad_ai.cache import CacheHit, Lookup, SemanticCache
 from app.modules.jad_ai.dto import JadAskDTO, JadMessageDTO, JadStateDTO
 from app.modules.jad_ai.entity import JadConversation, JadItemContext, JadMessage
-from app.modules.jad_ai.material import MAX_FILE_BYTES, extract_document_text, html_to_text, select_passages, sha
+from app.modules.jad_ai.material import MAX_FILE_BYTES, extract_document_text, scorm_to_text, select_passages, sha
 from app.modules.jad_ai.prompt import (
     DEFAULT_SUGGESTIONS,
     PROMPT_VERSION,
@@ -56,6 +57,10 @@ HISTORY_TURNS = 8
 HISTORY_CHARS = 1500
 QUIZ_SIBLING_LESSONS = 4
 UNAVAILABLE = "JAD AI isn't available for this lesson"
+# Interactive packages that are a graded assessment rather than a lesson or practice check.
+_SCORED_PACKAGE_RE = re.compile(r"\b(?:assessment|exam|examination)\b", re.IGNORECASE)
+# Bump when SCORM text extraction changes, so stored lesson text is re-read.
+SCORM_TEXT_VERSION = "v2"
 
 
 @dataclass
@@ -112,6 +117,11 @@ class JadService:
         if item.item_type == CourseItemTypeEnum.DOCUMENT:
             return LessonScope(item, course, section, "document")
         if item.item_type == CourseItemTypeEnum.SCORM:
+            # JAD reads a package's scripted feedback, so it must stay off packages
+            # that are themselves the scored assessment (e.g. "Module 2 assessment").
+            pkg = await self.content_repo.get_scorm_package_by_item(item.id)
+            if _SCORED_PACKAGE_RE.search(f"{item.title} {getattr(pkg, 'manifest_title', '') or ''}"):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "JAD AI isn't available on scored assessments")
             return LessonScope(item, course, section, "scorm")
         if item.item_type == CourseItemTypeEnum.ASSESSMENT:
             assessment = await self.content_repo.get_assessment_by_item(item.id)
@@ -132,7 +142,7 @@ class JadService:
         elif item.item_type == CourseItemTypeEnum.SCORM:
             pkg = await self.content_repo.get_scorm_package_by_item(item.id)
             if pkg is not None and pkg.status == VideoStatusEnum.READY and pkg.extracted_prefix:
-                return f"scorm:{pkg.extracted_prefix}{pkg.launch_path or 'index.html'}", pkg
+                return f"scorm:{SCORM_TEXT_VERSION}:{pkg.extracted_prefix}{pkg.launch_path or 'index.html'}", pkg
         return None
 
     async def _context(self, item) -> JadItemContext | None:
@@ -172,7 +182,7 @@ class JadService:
                 data = r2.read_bytes(row.storage_key, max_bytes=MAX_FILE_BYTES)
                 return extract_document_text(row.file_name, row.mime_type, data)
             data = r2.read_bytes(f"{row.extracted_prefix}{row.launch_path or 'index.html'}", max_bytes=5 * 1024 * 1024)
-            text = html_to_text(data.decode("utf-8", errors="ignore"))
+            text = scorm_to_text(data.decode("utf-8", errors="ignore"))
             title = row.manifest_title or ""
             return f"{title}\n{text}".strip() if title and title not in text else text
         except Exception as exc:  # noqa: BLE001 - JAD still works from the titles

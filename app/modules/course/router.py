@@ -39,6 +39,7 @@ from app.modules.course.content_dto import (
     QuizAIGenerateResponseDTO,
     QuizAIAutocompleteResponseDTO,
     ScormFinalizeDTO,
+    PublicItemPreviewDTO,
     ScormLaunchDTO,
     ScormUploadCredentialsDTO,
     QuizGroupSectionCreateDTO,
@@ -884,6 +885,22 @@ async def get_document_download_url(
 ) -> ApiResponse[dict]:
     url = await CourseContentService(db).get_document_download_url(slug, item_id, current_user)
     return ApiResponse(message="Download URL generated successfully", data={"download_url": url})
+
+
+@router.get(
+    "/{slug}/items/{item_id}/preview",
+    response_model=ApiResponse[PublicItemPreviewDTO],
+    summary="Open a free-preview item from the public course page (public). Documents get a "
+    "short-lived inline view URL; SCORM packages get a preview-mode launch URL, so nothing is saved.",
+)
+async def get_public_item_preview(
+    slug: str,
+    item_id: uuid.UUID,
+    current_user: User | None = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[PublicItemPreviewDTO]:
+    data = await CourseContentService(db).get_public_preview(slug, item_id, current_user)
+    return ApiResponse(message="Preview ready", data=data)
 
 
 # ---------------------------------------------------------------------------

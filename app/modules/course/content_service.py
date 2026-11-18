@@ -60,6 +60,7 @@ from app.modules.course.content_dto import (
     QuizQuestionCreateDTO,
     QuizQuestionUpdateDTO,
     ScormFinalizeDTO,
+    PublicItemPreviewDTO,
     ScormLaunchDTO,
     ScormUploadCredentialsDTO,
     VideoUploadCredentialsDTO,
@@ -705,6 +706,64 @@ class CourseContentService:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "This document is not available for download")
 
         return self.r2.generate_download_url(document.storage_key)
+
+    async def get_public_preview(
+        self, slug: str, item_id: uuid.UUID, current_user: User | None = None
+    ) -> PublicItemPreviewDTO:
+        """Open a free-preview item from the public course page, signed in or not.
+        Only items the instructor marked `is_preview` in a published course qualify.
+        A SCORM preview runs in preview mode, so nothing it reports is saved."""
+        course = await self.course_repo.get_by_slug(slug)
+        if course is None or not course.is_published:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+
+        from app.modules.course.service import CourseService
+
+        await CourseService(self.session).ensure_course_viewable(course, current_user)
+
+        item = await self.repo.get_item(item_id)
+        section = await self.repo.get_section(item.section_id) if item else None
+        if item is None or section is None or section.course_id != course.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        if not item.is_preview:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This item is not available as a free preview")
+
+        if item.item_type == CourseItemTypeEnum.DOCUMENT:
+            document = await self.repo.get_document_by_item(item.id)
+            if document is None or not document.is_uploaded:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not available")
+            return PublicItemPreviewDTO(
+                item_type=item.item_type,
+                view_url=self.r2.generate_view_url(document.storage_key, document.file_name, document.mime_type),
+                download_url=self.r2.generate_download_url(document.storage_key) if document.downloadable else None,
+                file_name=document.file_name,
+                mime_type=document.mime_type,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.presigned_url_expire_seconds),
+            )
+
+        if item.item_type == CourseItemTypeEnum.SCORM:
+            from app.modules.course import scorm as scorm_lib
+
+            package = await self.repo.get_scorm_package_by_item(item.id)
+            if package is None or package.status != VideoStatusEnum.READY or not package.launch_path:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Package not available")
+            token = scorm_lib.create_launch_token(
+                # Visitors have no account; the nil UUID marks an anonymous preview.
+                user_id=current_user.id if current_user is not None else uuid.UUID(int=0),
+                item_id=item.id,
+                package_id=package.id,
+                course_id=course.id,
+                mode="preview",
+            )
+            return PublicItemPreviewDTO(
+                item_type=item.item_type,
+                launch_url=scorm_lib.build_launch_url(token, package.launch_path),
+                scorm_version=package.scorm_version,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.scorm_launch_token_expire_minutes),
+            )
+
+        # Video, link and quiz previews are fully described by the public curriculum.
+        return PublicItemPreviewDTO(item_type=item.item_type)
 
     async def get_review_document(self, course_id: uuid.UUID, item_id: uuid.UUID) -> RevisionDocumentUrlDTO:
         """Document URL for a reviewer. The caller has already been authorised to

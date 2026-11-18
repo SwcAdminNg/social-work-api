@@ -156,7 +156,7 @@ async def test_answer_streams_and_is_grounded(client, state, fake_ai):
     assert "</material-x>" not in system
     fence = re.search(r"<(material-[0-9a-f]+)>", system).group(1)
     assert system.count(f"</{fence}>") == 1
-    assert "Mr. Job, Mr. Anthony and Dr. Philip" in system
+    assert "Mr. Job, Mr. Anthony and Dr. Dike" in system
 
     history = ok(await client.get(f"/jad-ai/courses/{state['cid']}/items/{state['doc']}", headers=state["learner_h"]))
     assert [m["role"] for m in history["messages"]] == ["user", "assistant"]

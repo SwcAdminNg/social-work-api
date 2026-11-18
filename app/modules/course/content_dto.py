@@ -291,6 +291,23 @@ class ScormFinalizeDTO(BaseDTO):
     file_size_bytes: int | None = Field(default=None, ge=0)
 
 
+class PublicItemPreviewDTO(BaseDTO):
+    """What a visitor needs to open a free-preview item from the course page.
+    Only the fields for the item's own type are set."""
+
+    item_type: CourseItemTypeEnum
+    # DOCUMENT: an inline view URL (for an <iframe>) and, if the document is
+    # downloadable, a download URL. Both are short-lived signed links.
+    view_url: str | None = None
+    download_url: str | None = None
+    file_name: str | None = None
+    mime_type: str | None = None
+    # SCORM: a preview-mode launch - the package runs, nothing is saved.
+    launch_url: str | None = None
+    scorm_version: str | None = None
+    expires_at: datetime | None = None
+
+
 class ScormLaunchDTO(BaseDTO):
     """A staff preview launch: nothing the package reports is saved."""
 

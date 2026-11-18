@@ -10,6 +10,7 @@ the ones closest to the question are sent.
 import hashlib
 import html
 import io
+import json
 import logging
 import re
 
@@ -70,6 +71,100 @@ def html_to_text(markup: str) -> str:
     markup = re.sub(r"(?i)<\s*(br|/p|/div|/li|/h[1-6]|/tr|/section|/article)\s*/?>", "\n", markup)
     markup = re.sub(r"(?s)<[^>]+>", " ", markup)
     return tidy(html.unescape(markup))
+
+
+# --- SCORM / interactive packages ----------------------------------------------
+#
+# Authoring tools keep most of an interactive lesson's words out of the visible
+# markup: narration scripts, captions, click-to-reveal panels, scenario branches
+# and activity feedback live in <script> blocks as JS/JSON data, e.g.
+#   {"track": "c5-1", "vo": "S. Scan. What danger ...", "html": "<h3>S · Scan</h3>..."}
+# html_to_text() drops every script, so on its own it leaves JAD with little more
+# than the button labels. scorm_to_text() adds the prose found in those scripts.
+
+_SCRIPT_RE = re.compile(r"(?is)<script\b[^>]*>(.*?)</script>")
+# A string literal, optionally preceded by the key it is assigned to.
+_LITERAL_RE = re.compile(
+    r"""(?:["']?([A-Za-z_][\w-]*)["']?\s*:\s*)?("(?:[^"\\\n]|\\.){2,}"|'(?:[^'\\\n]|\\.){2,}')"""
+)
+# Keys whose values are lesson words even when short ("Scan", "Act now").
+_TEXT_KEYS = {
+    "vo", "voiceover", "narration", "transcript", "text", "html", "title", "heading", "subtitle",
+    "label", "body", "content", "desc", "description", "summary", "prompt", "question", "q",
+    "answer", "option", "options", "choice", "feedback", "explanation", "why", "reason",
+    "correct", "incorrect", "right", "wrong", "hint", "tip", "note", "caption", "message",
+    "statement", "scenario", "outcome", "result", "takeaway", "point", "detail",
+}
+# Keys that never hold lesson words (captions repeat the narration line by line).
+_SKIP_KEYS = {
+    "src", "href", "url", "track", "col", "color", "colour", "class", "classname", "id", "style",
+    "type", "icon", "img", "image", "audio", "video", "poster", "font", "caps", "cues", "key",
+    "mode", "version", "lang", "name", "role", "event",
+}
+_CODE_HINTS = re.compile(
+    r"(=>|function\b|\breturn\b|\bvar\b|\bconst\b|\blet\b|===|!==|&&|\|\||\bnull\b|"
+    r"\bundefined\b|document\.|window\.|\.(mp3|mp4|jpg|png|svg|woff2?|css|js)\b|"
+    r"^[#.]?[a-z-]+\s*\{|\brgba?\(|\d+px\b|cmi\.|LMS[A-Z]\w+)"
+)
+# Player controls that appear on every screen and say nothing about the lesson.
+_PLAYER_CHROME = {
+    "back", "next", "pause", "play", "replay", "speed 1×", "read text", "captions", "menu",
+    "start", "start from the beginning", "review the screens", "review this chapter",
+    "check my answer", "choose…", "choose a category", "not heard yet", "open all five",
+    "open all six", "well done",
+}
+
+
+def _decode_literal(raw: str) -> str:
+    body = raw[1:-1]
+    if raw[0] == "'":
+        body = body.replace("\\'", "'").replace('"', '\\"')
+    try:
+        return json.loads(f'"{body}"')
+    except ValueError:
+        return body.replace("\\n", "\n").replace('\\"', '"').replace("\\/", "/")
+
+
+def _is_lesson_text(value: str, key: str | None) -> bool:
+    words = re.findall(r"[A-Za-z][A-Za-z'’-]*", value)
+    if not words or _CODE_HINTS.search(value):
+        return False
+    letters = sum(ch.isalpha() for ch in value)
+    if letters < 0.55 * len(value.replace(" ", "")):
+        return False
+    if key in _TEXT_KEYS:
+        return len(words) >= 1 and len(value) >= 3
+    # Unlabelled literal: only keep clear prose.
+    return len(words) >= 5 and " " in value
+
+
+def scorm_to_text(markup: str) -> str:
+    """Visible text of a package's launch page plus the narration, panel, scenario
+    and feedback text held in its scripts, without duplicates."""
+    visible = html_to_text(markup)
+    lines = [ln for ln in visible.splitlines() if ln.strip().lower() not in _PLAYER_CHROME]
+    seen = "\n".join(lines).lower()
+    extra: list[str] = []
+    for script in _SCRIPT_RE.findall(markup):
+        for key, raw in _LITERAL_RE.findall(script):
+            k = (key or "").lower() or None
+            if k in _SKIP_KEYS:
+                continue
+            value = _decode_literal(raw)
+            if "<" in value and ">" in value:
+                value = html_to_text(value)
+            value = re.sub(r"\s+", " ", html.unescape(value)).strip()
+            if not value or not _is_lesson_text(value, k):
+                continue
+            norm = value.lower()
+            if norm in _PLAYER_CHROME or norm in seen:
+                continue
+            seen += "\n" + norm
+            extra.append(value)
+    text = "\n".join(lines)
+    if extra:
+        text += "\n\nNarration, activities and feedback:\n" + "\n".join(extra)
+    return tidy(text)
 
 
 def chunk(text: str) -> list[str]:
